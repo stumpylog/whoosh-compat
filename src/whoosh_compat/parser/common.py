@@ -32,12 +32,13 @@ parser modules.
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 from typing import Any, TextIO
 
 from whoosh_compat.errors import QueryParserError
 
-__all__ = ["QueryParserError", "get_single_text", "attach", "print_debug"]
+__all__ = ["QueryParserError", "attach", "get_single_text", "print_debug"]
 
 
 def get_single_text(field: Any, text: str, **kwargs: Any) -> Any:
@@ -49,14 +50,29 @@ def get_single_text(field: Any, text: str, **kwargs: Any) -> Any:
 
 
 def attach(q: Any, stxnode: Any) -> Any:
-    if q:
-        try:
-            q.startchar = stxnode.startchar
-            q.endchar = stxnode.endchar
-        except AttributeError:
-            raise AttributeError(
-                f"Can't set attribute on {q.__class__.__name__}"
-            )
+    """Copy the ``startchar``/``endchar`` span from a syntax node onto a
+    query/AST node.
+
+    ``whoosh_compat.ast`` nodes are frozen dataclasses, so they can't be
+    mutated in place; for those, this returns a *new* instance built via
+    ``dataclasses.replace`` with the span fields set. Non-dataclass query
+    objects (if any) are still mutated in place as before.
+    """
+
+    if not q:
+        return q
+
+    if dataclasses.is_dataclass(q) and not isinstance(q, type):
+        return dataclasses.replace(q, startchar=stxnode.startchar,
+                                    endchar=stxnode.endchar)
+
+    try:
+        q.startchar = stxnode.startchar
+        q.endchar = stxnode.endchar
+    except AttributeError:
+        raise AttributeError(
+            f"Can't set attribute on {q.__class__.__name__}"
+        )
     return q
 
 
