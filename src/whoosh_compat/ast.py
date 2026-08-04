@@ -142,6 +142,117 @@ class ErrorLeaf(Node):
     diagnostic: Diagnostic
 
 
+def _dedupe(nodes: tuple[Node, ...]) -> tuple[Node, ...]:
+    """Remove duplicate nodes, preserving first-seen order."""
+    seen: set[Node] = set()
+    result: list[Node] = []
+    for n in nodes:
+        if n not in seen:
+            seen.add(n)
+            result.append(n)
+    return tuple(result)
+
+
+def normalize(node: Node) -> Node:
+    """Normalize an AST node into canonical form (pure, bottom-up).
+
+    Applies flattening of nested same-type groups, Nothing/Every
+    propagation, duplicate-sibling dedupe, empty-group collapse, single-child
+    unwrap, and boost merging/stripping. See task brief rules 1-8.
+
+    Args:
+        node: The AST node to normalize.
+
+    Returns:
+        The normalized node.
+    """
+    if isinstance(node, And):
+        children = tuple(normalize(c) for c in node.children)
+        if not children:
+            return Nothing()  # rule 7: empty group -> Nothing
+        if any(isinstance(c, Nothing) for c in children):
+            return Nothing()  # rule 3: Nothing propagates through And
+        flat: list[Node] = []
+        for child in children:
+            if isinstance(child, And):
+                flat.extend(child.children)
+            else:
+                flat.append(child)
+        had_every = any(isinstance(c, Every) and c.field is None for c in flat)
+        flat = [c for c in flat if not (isinstance(c, Every) and c.field is None)]
+        flat = list(_dedupe(tuple(flat)))
+        if not flat:
+            return Every() if had_every else Nothing()
+        if len(flat) == 1:
+            return flat[0]
+        return And(children=tuple(flat))
+
+    if isinstance(node, Or):
+        children = tuple(normalize(c) for c in node.children)
+        if not children:
+            return Nothing()  # rule 7: empty group -> Nothing
+        flat: list[Node] = []
+        for child in children:
+            if isinstance(child, Or):
+                flat.extend(child.children)
+            else:
+                flat.append(child)
+        if any(isinstance(c, Every) and c.field is None for c in flat):
+            return Every()  # rule 6: Every absorbs Or siblings
+        flat = [c for c in flat if not isinstance(c, Nothing)]
+        flat = list(_dedupe(tuple(flat)))
+        if not flat:
+            return Nothing()
+        if len(flat) == 1:
+            return flat[0]
+        return Or(children=tuple(flat))
+
+    if isinstance(node, Not):
+        child = normalize(node.child)
+        if isinstance(child, Nothing):
+            return Every()
+        return Not(child=child)
+
+    if isinstance(node, AndNot):
+        positive = normalize(node.positive)
+        negative = normalize(node.negative)
+        if isinstance(positive, Nothing):
+            return Nothing()
+        if isinstance(negative, Nothing):
+            return positive
+        return AndNot(positive=positive, negative=negative)
+
+    if isinstance(node, AndMaybe):
+        required = normalize(node.required)
+        optional = normalize(node.optional)
+        if isinstance(required, Nothing):
+            return Nothing()
+        if isinstance(optional, Nothing):
+            return required
+        return AndMaybe(required=required, optional=optional)
+
+    if isinstance(node, Require):
+        scored = normalize(node.scored)
+        filter_only = normalize(node.filter_only)
+        if isinstance(scored, Nothing) or isinstance(filter_only, Nothing):
+            return Nothing()
+        return Require(scored=scored, filter_only=filter_only)
+
+    if isinstance(node, Boosted):
+        child = normalize(node.child)
+        boost = node.boost
+        if isinstance(child, Nothing):
+            return Nothing()
+        if isinstance(child, Boosted):
+            boost = child.boost * boost
+            child = child.child
+        if boost == 1.0:
+            return child
+        return Boosted(child=child, boost=boost)
+
+    return node
+
+
 class Visitor(Generic[T]):
     """Base visitor for traversing AST nodes."""
 
