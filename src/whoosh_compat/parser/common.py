@@ -30,14 +30,17 @@ This module contains common utility objects/functions for the other query
 parser modules.
 """
 
+from __future__ import annotations
+
 import sys
+from typing import Any, TextIO
 
 from whoosh_compat.errors import QueryParserError
 
 __all__ = ["QueryParserError", "get_single_text", "attach", "print_debug"]
 
 
-def get_single_text(field, text, **kwargs):
+def get_single_text(field: Any, text: str, **kwargs: Any) -> Any:
     """Returns the first token from an analyzer's output.
     """
 
@@ -45,17 +48,18 @@ def get_single_text(field, text, **kwargs):
         return t
 
 
-def attach(q, stxnode):
+def attach(q: Any, stxnode: Any) -> Any:
     if q:
         try:
             q.startchar = stxnode.startchar
             q.endchar = stxnode.endchar
         except AttributeError:
-            raise AttributeError("Can't set attribute on %s"
-                                 % q.__class__.__name__)
+            raise AttributeError(
+                f"Can't set attribute on {q.__class__.__name__}"
+            )
     return q
 
 
-def print_debug(level, msg, out=sys.stderr):
+def print_debug(level: int, msg: str, out: TextIO = sys.stderr) -> None:
     if level:
-        out.write("%s%s\n" % (" " * (level - 1), msg))
+        out.write(f"{' ' * (level - 1)}{msg}\n")

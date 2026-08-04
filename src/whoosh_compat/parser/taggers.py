@@ -25,18 +25,23 @@
 # those of the authors and should not be interpreted as representing official
 # policies, either expressed or implied, of Matt Chaput.
 
+from __future__ import annotations
+
+import re
+from typing import Any, Callable, Pattern
+
 from whoosh_compat.parser.text import rcompile
 
 
 # Tagger objects
 
-class Tagger(object):
+class Tagger:
     """Base class for taggers, objects which match syntax in the query string
     and translate it into a :class:`whoosh_compat.parser.syntax.SyntaxNode`
     object.
     """
 
-    def match(self, parser, text, pos):
+    def match(self, parser: Any, text: str, pos: int) -> Any:
         """This method should see if this tagger matches the query string at
         the given position. If it matches, it should return
 
@@ -54,10 +59,12 @@ class RegexTagger(Tagger):
     Subclasses should override ``create()`` instead of ``match()``.
     """
 
-    def __init__(self, expr):
+    expr: Pattern[str]
+
+    def __init__(self, expr: str | Pattern[str]) -> None:
         self.expr = rcompile(expr)
 
-    def match(self, parser, text, pos):
+    def match(self, parser: Any, text: str, pos: int) -> Any:
         match = self.expr.match(text, pos)
         if match:
             node = self.create(parser, match)
@@ -65,7 +72,7 @@ class RegexTagger(Tagger):
                 node = node.set_range(match.start(), match.end())
                 return node
 
-    def create(self, parser, match):
+    def create(self, parser: Any, match: re.Match[str]) -> Any:
         """When the regular expression matches, this method is called to
         translate the regex match object into a syntax node.
 
@@ -82,13 +89,14 @@ class FnTagger(RegexTagger):
     keyword arguments.
     """
 
-    def __init__(self, expr, fn, memo=""):
-        RegexTagger.__init__(self, expr)
+    def __init__(self, expr: str | Pattern[str], fn: Callable[..., Any],
+                 memo: str = "") -> None:
+        super().__init__(expr)
         self.fn = fn
         self.memo = memo
 
-    def __repr__(self):
-        return "<%s %r (%s)>" % (self.__class__.__name__, self.expr, self.memo)
+    def __repr__(self) -> str:
+        return f"<{self.__class__.__name__} {self.expr!r} ({self.memo})>"
 
-    def create(self, parser, match):
+    def create(self, parser: Any, match: re.Match[str]) -> Any:
         return self.fn(**match.groupdict())

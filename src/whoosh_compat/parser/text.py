@@ -25,12 +25,16 @@
 # those of the authors and should not be interpreted as representing official
 # policies, either expressed or implied, of Matt Chaput.
 
+from __future__ import annotations
+
 import re
+from typing import Pattern
 
 
 # Regular expression functions
 
-def rcompile(pattern, flags=0, verbose=False):
+def rcompile(pattern: str | Pattern[str], flags: int = 0,
+             verbose: bool = False) -> Pattern[str]:
     """A wrapper for re.compile that checks whether "pattern" is a regex object
     or a string to be compiled, and automatically adds the re.UNICODE flag.
     """
