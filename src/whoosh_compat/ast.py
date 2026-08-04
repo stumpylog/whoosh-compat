@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Generic, TypeVar
 
@@ -14,9 +14,16 @@ T = TypeVar("T")
 
 @dataclass(frozen=True, kw_only=True)
 class Node:
-    """Base class for all AST nodes. startchar and endchar are keyword-only."""
-    startchar: int | None = None
-    endchar: int | None = None
+    """Base class for all AST nodes. startchar and endchar are keyword-only.
+
+    They are excluded from equality/hashing (``compare=False``): two nodes
+    that differ only in source-text position are considered equal. This
+    keeps position metadata purely informational (for diagnostics) without
+    forcing every AST comparison in tests/consumers to also track parser
+    source-offset bookkeeping.
+    """
+    startchar: int | None = field(default=None, compare=False)
+    endchar: int | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)

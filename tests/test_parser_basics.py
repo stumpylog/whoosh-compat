@@ -1,8 +1,4 @@
-# tests/test_parser_basics.py  (module-level skip removed in Task 9)
-import pytest
-
-pytest.skip("needs parse()", allow_module_level=True)
-
+# tests/test_parser_basics.py
 import whoosh_compat as wc
 from whoosh_compat import ast
 
@@ -27,9 +23,10 @@ def test_lowercase_and_is_text(reg):
 
 def test_not_group_parens(reg):
     t = parse("title:a AND (NOT title:b AND NOT title:c)", reg)
+    # parens flatten under normalize(), matching whoosh (see task-9 ruling)
     assert t == ast.And(children=(ast.Term(field="title", text="a"),
-                                  ast.And(children=(ast.Not(ast.Term(field="title", text="b")),
-                                                    ast.Not(ast.Term(field="title", text="c"))))))
+                                  ast.Not(ast.Term(field="title", text="b")),
+                                  ast.Not(ast.Term(field="title", text="c"))))
 
 def test_comma_values(reg):
     assert parse("tag:foo,bar", reg) == ast.And(children=(

@@ -82,7 +82,7 @@ class Plugin:
         return []
 
 
-class TaggingPlugin(RegexTagger):
+class TaggingPlugin(Plugin, RegexTagger):
     """A plugin that also acts as a Tagger, to avoid having an extra Tagger
     class for simple cases.
 
