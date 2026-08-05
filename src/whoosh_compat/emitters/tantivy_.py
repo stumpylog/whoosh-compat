@@ -135,10 +135,20 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     def _group_child(self, child: ast.Node) -> tantivy.Query | None:
         """Visit a direct child of an And/Or group.
 
-        Returns ``None`` when the child is a zero-token analyzed TEXT/
-        KEYWORD term -- the brief's "dropped from the group" rule. Any
-        other node is visited normally.
+        Returns ``None`` when the child -- possibly wrapped in one or more
+        transparent ``Boosted`` layers -- is a zero-token analyzed TEXT/
+        KEYWORD term. This is the brief's "dropped from the group" rule.
+        ``Boosted`` is unwrapped recursively (rather than only checking a
+        direct ``ast.Term`` child) so ``Boosted(Boosted(Term(...)))`` and
+        similar shapes are still dropped correctly instead of turning into
+        a live-but-unmatchable ``boost_query(empty_query(), ...)`` clause
+        that would wrongly restrict an enclosing And.
         """
+        if isinstance(child, ast.Boosted):
+            inner = self._group_child(child.child)
+            if inner is None:
+                return None
+            return tantivy.Query.boost_query(inner, child.boost)
         if isinstance(child, ast.Term):
             spec = self._resolve(child.field)
             if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
@@ -184,9 +194,34 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 return exists
             return _boolean_query([(tantivy.Occur.MustNot, exists)])
 
+        if spec.kind is FieldKind.JSON:
+            raise NotImplementedError(
+                "Task 14: JSON field Term emission is not implemented by this emitter"
+            )
+
         raise NotImplementedError(
             f"Task 13: Term emission for field kind {spec.kind.name} is not implemented"
         )
+
+    def visit_phrase(self, node: ast.Phrase) -> tantivy.Query:
+        raise NotImplementedError("Task 13: Phrase emission is not implemented by this emitter")
+
+    def visit_prefix(self, node: ast.Prefix) -> tantivy.Query:
+        raise NotImplementedError("Task 13: Prefix emission is not implemented by this emitter")
+
+    def visit_wildcard(self, node: ast.Wildcard) -> tantivy.Query:
+        raise NotImplementedError("Task 13: Wildcard emission is not implemented by this emitter")
+
+    def visit_termrange(self, node: ast.TermRange) -> tantivy.Query:
+        raise NotImplementedError("Task 13: TermRange emission is not implemented by this emitter")
+
+    def visit_numericrange(self, node: ast.NumericRange) -> tantivy.Query:
+        raise NotImplementedError(
+            "Task 13: NumericRange emission is not implemented by this emitter"
+        )
+
+    def visit_daterange(self, node: ast.DateRange) -> tantivy.Query:
+        raise NotImplementedError("Task 13: DateRange emission is not implemented by this emitter")
 
     # -- boolean combinators --------------------------------------------
 
