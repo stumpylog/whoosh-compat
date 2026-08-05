@@ -30,7 +30,7 @@ from __future__ import annotations
 import calendar
 import copy
 from datetime import date, datetime, timedelta
-from typing import Any, FrozenSet, Union
+from typing import Any, Union
 
 # Either a concrete datetime or an ambiguous adatetime.
 DateLike = Union[datetime, "adatetime"]
@@ -101,7 +101,7 @@ class adatetime:
     None, meaning unspecified.
     """
 
-    units: FrozenSet[str] = frozenset(
+    units: frozenset[str] = frozenset(
         ("year", "month", "day", "hour", "minute", "second", "microsecond")
     )
 
@@ -423,13 +423,25 @@ def ceil(at: DateLike) -> datetime:
 
 
 def fill_in(at: DateLike, basedate: datetime,
-            units: FrozenSet[str] = adatetime.units) -> DateLike:
+            units: frozenset[str] = adatetime.units) -> DateLike:
     """Returns a copy of ``at`` with any unspecified (None) units filled in
     with values from ``basedate``.
+
+    ``basedate`` is usually a concrete ``datetime``/``adatetime``, but a
+    handful of grammar elements (``previous week``, ``previous quarter``;
+    see ``parser.dateparse.English.setup``) resolve directly to an
+    already-fully-specified ``timespan`` instead -- a calendar week/quarter
+    doesn't align with any single ``adatetime`` unit, so it can't be
+    expressed as one. Such a result needs no further filling in (there's
+    nothing ambiguous left to resolve), so it's returned as-is rather than
+    having ``getattr(basedate, unit)`` raise on ``timespan``, which has no
+    per-unit attributes.
     """
 
     if isinstance(at, datetime):
         return at
+    if isinstance(basedate, timespan):
+        return basedate
 
     args: dict[str, Any] = {}
     for unit in units:
@@ -474,9 +486,12 @@ def is_ambiguous(at: DateLike) -> bool:
 def is_void(at: DateLike) -> bool:
     """Returns True if the given object is an ``adatetime`` with all of its
     attributes equal to None.
+
+    A ``timespan`` (see :func:`fill_in`'s docstring) is always a concrete,
+    fully-specified result, never "void".
     """
 
-    if isinstance(at, datetime):
+    if isinstance(at, (datetime, timespan)):
         return False
     return all((getattr(at, attr) is None) for attr in adatetime.units)
 

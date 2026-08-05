@@ -34,6 +34,12 @@ python_version = "3.11"
 strict = false
 check_untyped_defs = true
 
+[[tool.mypy.overrides]]
+# The real whoosh package (test-only oracle dependency for tests/differential,
+# see its pinned git ref above) ships no py.typed marker / type stubs.
+module = "whoosh.*"
+ignore_missing_imports = true
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

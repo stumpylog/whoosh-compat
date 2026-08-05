@@ -1,0 +1,112 @@
+# Extracted from paperless-ngx src/documents/tests/search/test_translate.py
+# and test_query.py (query strings passed to translate_query/parse_user_query
+# before Tantivy translation, i.e. the whoosh-syntax "raw" side of each case).
+#
+# Section markers below record which lines are expected to structurally
+# compare against the real whoosh oracle vs. which are expected to skip via
+# an allowlist.py entry (see that file's docstring for the prefix
+# convention). Skip accounting is enforced by test_differential.py, which
+# reports the *specific* matched allowlist reference for every skip (run
+# `pytest tests/differential -rs` to see the per-query breakdown) -- these
+# markers are just a human-readable map of what to expect where.
+
+# --- compared: basic terms, booleans, dashes, field/numeric coercion -----
+tag:foo,bar
+tag:foo,type:bar
+correspondent:foo,bar
+created:2020 OR foo
+(created:2020 OR invoice)
+bank statement
+type:invoice
+path:/foo/bar
+type_id:5
+path_id:7
+type:[2020 TO 2021]
+H52.1 - Kurzsichtigkeit
+bar - baz
+foo -
+invoice
+h52.1 - kurzsichtigkeit
+H52.1 - asd
+h52.1 -
+. -
+h52. -
+.12 -
+h52.1 - ku
+type:invoice
+
+# --- compared: single-word natural-date keywords (whoosh's stock English
+# grammar understands these natively, no app-level rewrite needed) --------
+created:2020
+created:202003
+created:today
+created:yesterday
+added:today
+added:yesterday
+
+# --- KNOWN DIVERGENCE (whoosh-bug, allowlist.py): bracketed date ranges --
+# real whoosh's LocalDateParser tz-reversal override never reaches range
+# bounds (a confirmed defect in DateParserPlugin.range_to_dt's wiring, not
+# an intended whoosh design choice); whoosh-compat applies tz conversion
+# uniformly instead of reproducing the bug. See allowlist.py's "whoosh-bug:"
+# entry for the bracket-range pattern.
+created:[2020 TO 2021],added:[2022 TO 2023]
+created:[20200101 TO 20201231]
+created:[2020-01-01 TO 2020-12-31]
+created:[2020 to]
+created:[to 2020]
+title:x,created:[2020 TO 2021]
+added:[-7 days to now]
+added:[-1 week to now]
+created:[-1 month to now]
+modified:[-1 year to now]
+added:[-3 hours to now]
+added:[-1 WEEK TO NOW]
+added:[now-7d TO now]
+added:[now+1h TO now-1h]
+created:[-999yrs to now]
+added:[-1y to now]
+created:[-3mos to now]
+added:[-2wks to now]
+added:[-5dys to now]
+added:[-1hrs to now]
+added:[-10mins to now]
+added:[-30secs to now]
+created:[2020 TO 2021]
+created:[2020-01-01T00:00:00Z TO 2021-01-01T00:00:00Z]
+created:[2026-01-01T00:00:00Z TO 2026-06-01T00:00:00Z]
+created:[2026-01-01T00:00:00Z TO 2026-06-01T00:00:00Z],added:[2026-05-01T00:00:00Z TO 2026-06-01T00:00:00Z]
+created:[20200101 TO 20201231]
+
+# --- KNOWN DIVERGENCE (design, allowlist.py): unquoted multi-word natural-
+# date keywords. Real paperless v2 rewrites these via an *app-level* regex
+# (rewrite_natural_date_keywords, index.py) before whoosh ever parses the
+# string -- whoosh's own grammar has no native "previous week" support at
+# all. whoosh-compat instead adds these directly to its own date grammar,
+# usable the same way any other multi-word value is (quoted:
+# created:"previous week"); the app-level rewrite hack is paperless-specific
+# host-integration behavior, out of scope for whoosh-compat's parser. The
+# oracle harness replicates the app-level rewrite (oracle.py), so the
+# *quoted* form is NOT in this section -- only unquoted forms, which the
+# static corpus below preserves faithfully as extracted from
+# TestMultiWordDateKeywords/TestKeywordDateResolution (those tests exercise
+# the *scanner* layer, not whoosh's qparser, so their unquoted strings never
+# reached real whoosh's own grammar in production either way).
+created:previous week
+created:this month
+created:previous month
+created:this year
+created:previous year
+created:previous quarter
+added:previous week
+added:this month
+added:previous month
+added:this year
+added:previous year
+added:previous quarter
+schäfersee,created:previous year
+created:previous week
+
+# --- KNOWN DIVERGENCE (DIVERGENCES #6, structural not pattern-based): bad
+# number -- test_differential.py skips on any non-empty diagnostics list.
+created:202023

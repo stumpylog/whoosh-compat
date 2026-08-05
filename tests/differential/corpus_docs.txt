@@ -1,0 +1,66 @@
+# From paperless-ngx docs/usage.md (current HEAD) search section, plus the
+# v2-era docs/usage.md (git show aed9abe48^:docs/usage.md), plus the
+# scenario list from docs/superpowers/specs/2026-08-04-whoosh-compat-design.md
+# (testing section).
+#
+# See corpus_paperless.txt's header for the section-marker convention and
+# `pytest tests/differential -rs` for the authoritative per-query skip
+# reason.
+
+# --- compared -------------------------------------------------------------
+shopname AND (product1 OR product2)
+type:invoice tag:unpaid
+correspondent:university certificate
+added:yesterday
+modified:today
+produ*name
+added:today
+modified:yesterday
+created:"previous week"
+added:"previous month"
+modified:"this year"
+tag:steuer AND (title:2020 OR (NOT title:2019 AND NOT title:2018 AND created:[2020 TO 2020]))
+shopname product1
+Entwä*
+tag:foo,bar
+has_tag:false
+
+# --- KNOWN DIVERGENCE (whoosh-bug, allowlist.py): bracketed date ranges
+# (see corpus_paperless.txt's matching section for the root cause).
+created:[2005 to 2009]
+created:[2020 to]
+added:[now-7d TO now]
+added:[-1 week to now]
+
+# --- KNOWN DIVERGENCE (design, allowlist.py): unquoted multi-word
+# natural-date keyword (see corpus_paperless.txt's matching section).
+created:previous month
+
+# --- KNOWN DIVERGENCE (design, allowlist.py): JSON dotted-path fields.
+# v3-only concept (FieldRegistry.resolve_json / a JSON FieldSpec) with
+# nothing in the v2 whoosh schema to register it against; on both sides the
+# field is "unknown", but the two parsers' fieldname taggers handle an
+# unregistered dotted name differently (whoosh-compat's tagger is
+# deliberately dot-inclusive so real JSON-configured registries *can*
+# resolve "notes.user:"). See allowlist.py's matching entry.
+custom_fields.value:policy
+custom_fields.name:"Contract Number"
+custom_fields.name:Insurance custom_fields.value:policy
+custom_fields.value:1312
+custom_fields.name:"Contract Number" custom_fields.value:1312
+notes.user:alice
+notes.note:reminder
+notes.user:alice notes.note:insurance
+
+# --- KNOWN DIVERGENCE (design, allowlist.py): comma_values quote-escape is
+# a whoosh-compat-only feature (real whoosh's KEYWORD(commas=True) analyzer
+# always splits on commas, quoted or not).
+tag:'foo,bar'
+
+# --- KNOWN DIVERGENCE (design, allowlist.py): bare field:* simplifies to
+# Every(field) in whoosh-compat vs a literal Wildcard('*') in whoosh.
+title:*
+
+# --- KNOWN DIVERGENCE (DIVERGENCES #8, allowlist.py): attached -foo
+# searches for foo in whoosh-compat vs a pure negative query in whoosh.
+-foo
