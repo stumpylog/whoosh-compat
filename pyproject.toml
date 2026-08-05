@@ -16,9 +16,14 @@ tantivy = ["tantivy>=0.24"]
 
 [dependency-groups]
 dev = [
-  "pytest>=8", "hypothesis>=6", "ruff", "mypy", "types-python-dateutil",
+  "pytest>=8",
+  "hypothesis>=6",
+  "ruff",
+  "mypy",
+  "types-python-dateutil",
   "whoosh-compat[tantivy]",
   "Whoosh @ git+https://github.com/whoosh-community/whoosh@baa4d577fdb34bfcf30547c8c6bf853fffeb7fe0",
+  "tzdata>=2026.3",
 ]
 
 [tool.pytest.ini_options]

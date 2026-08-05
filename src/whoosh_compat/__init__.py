@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime, tzinfo
+from datetime import UTC, datetime, tzinfo
 
 from whoosh_compat import ast
 from whoosh_compat.errors import (
@@ -27,6 +27,7 @@ from whoosh_compat.errors import (
     WhooshCompatError,
 )
 from whoosh_compat.fields import FieldKind, FieldRegistry, FieldSpec, Multitoken
+from whoosh_compat.parser.dateparse import DateParserPlugin
 from whoosh_compat.parser.default import MultifieldParser
 
 __version__ = "0.1.0.dev0"
@@ -86,15 +87,9 @@ def parse(
 
     parser = MultifieldParser(list(default_fields), registry, fieldboosts=field_boosts)
 
-    try:
-        from whoosh_compat.parser.dateparse import DateParserPlugin  # type: ignore[import-not-found]
-    except ImportError:
-        DateParserPlugin = None  # type: ignore[assignment,misc]
-
-    if DateParserPlugin is not None and any(
-        spec.kind in (FieldKind.DATE, FieldKind.DATETIME) for spec in registry
-    ):
-        parser.add_plugin(DateParserPlugin(basedate or datetime.now(tz), tz))
+    if any(spec.kind in (FieldKind.DATE, FieldKind.DATETIME) for spec in registry):
+        resolved_tz = tz or UTC
+        parser.add_plugin(DateParserPlugin(basedate or datetime.now(resolved_tz), resolved_tz))
 
     node = parser.parse(query)
     node = ast.normalize(node)
