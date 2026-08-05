@@ -2,8 +2,15 @@
 
 Builds ``tantivy.Query`` objects programmatically (``Query.term_query``,
 ``Query.boolean_query``, etc.) -- never via ``tantivy.parse_query`` /
-``index.parse_query`` (that shortcut is reserved for the Task 14 JSON
-carve-out, not general query emission).
+``index.parse_query`` (that shortcut is reserved for the JSON subpath
+carve-out described below, not general query emission).
+
+Installed tantivy-py's ``Query.term_query`` resolves fields by exact name, so
+it cannot address a JSON subpath (``notes.user``) even when ``notes`` is a
+JSON field -- it raises ``ValueError`` as if the field were unknown. Until
+https://github.com/quickwit-oss/tantivy-py/pull/716 lands and ships, JSON
+subpath terms are emitted via ``index.parse_query`` instead; see
+``TantivyEmitter._json_paths_supported``/``_emit_json_term``.
 
 This module imports ``tantivy`` at module scope. It is only imported by
 code that actually wants the tantivy backend; ``whoosh_compat`` itself
@@ -235,6 +242,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         # Multitoken.DEFAULT term text resolves against the enclosing
         # group's semantics; top level behaves like AND.
         self._group_stack: list[Multitoken] = [Multitoken.AND]
+        # Cache for _json_paths_supported(): None means "not probed yet".
+        self._json_paths_ok: bool | None = None
 
     def emit(self, node: ast.Node) -> tantivy.Query:
         return self.visit(node)
@@ -255,30 +264,89 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             return [text] if text else []
         return list(spec.analyzer(text))
 
-    def _text_term_query(self, spec, tokens: list[str]) -> tantivy.Query:
+    def _text_term_query(
+        self, spec, tokens: list[str], *, field_name: str | None = None
+    ) -> tantivy.Query:
         """Build the query for one already-tokenized TEXT/KEYWORD term.
 
-        Caller guarantees ``tokens`` is non-empty.
+        Caller guarantees ``tokens`` is non-empty. ``field_name`` defaults to
+        ``spec.name``; JSON subpath terms pass the dotted path (e.g.
+        ``"notes.user"``) instead, reusing this method's multitoken handling
+        without duplicating it.
         """
+        field_name = spec.name if field_name is None else field_name
+
         if len(tokens) == 1:
-            return tantivy.Query.term_query(self.schema, spec.name, tokens[0])
+            return tantivy.Query.term_query(self.schema, field_name, tokens[0])
 
         mode = spec.multitoken
         if mode is Multitoken.DEFAULT:
             mode = self._group_stack[-1]
 
         if mode is Multitoken.FIRST:
-            return tantivy.Query.term_query(self.schema, spec.name, tokens[0])
+            return tantivy.Query.term_query(self.schema, field_name, tokens[0])
         if mode is Multitoken.PHRASE:
-            return tantivy.Query.phrase_query(self.schema, spec.name, tokens)
+            return tantivy.Query.phrase_query(self.schema, field_name, tokens)
 
-        term_queries = [tantivy.Query.term_query(self.schema, spec.name, t) for t in tokens]
+        term_queries = [tantivy.Query.term_query(self.schema, field_name, t) for t in tokens]
         if mode is Multitoken.OR:
             clauses = [(tantivy.Occur.Should, q) for q in term_queries]
             return _boolean_query(clauses, minimum_number_should_match=1)
         # Multitoken.AND (and the DEFAULT-at-top-level fallback)
         clauses = [(tantivy.Occur.Must, q) for q in term_queries]
         return _boolean_query(clauses)
+
+    def _json_paths_supported(self) -> bool:
+        """Whether the installed tantivy-py's ``Query.term_query`` can address
+        a JSON subpath directly (cached once per emitter instance).
+
+        Probes with the first JSON-kind field/subpath found in the registry --
+        JSON path resolution in ``term_query`` is a schema-level capability of
+        the installed tantivy-py, not something that varies per field, so one
+        probe per emitter instance is representative for all JSON fields.
+        Retires itself once https://github.com/quickwit-oss/tantivy-py/pull/716
+        ships: the probe starts succeeding and ``_emit_json_term`` stops
+        taking the ``parse_query`` branch below.
+        """
+        if self._json_paths_ok is None:
+            probe_path = None
+            for spec in self.registry:
+                if spec.kind is FieldKind.JSON and spec.subpaths:
+                    probe_path = f"{spec.name}.{spec.subpaths[0]}"
+                    break
+            if probe_path is None:
+                # No JSON fields registered -- the probe result is moot.
+                self._json_paths_ok = False
+            else:
+                try:
+                    tantivy.Query.term_query(self.schema, probe_path, "probe")
+                    self._json_paths_ok = True
+                except ValueError:
+                    self._json_paths_ok = False
+        return self._json_paths_ok
+
+    def _emit_json_term(self, spec, subpath: str, text: object) -> tantivy.Query:
+        """Emit a term query for a JSON subpath (``spec.name + "." + subpath``).
+
+        Runs ``spec.analyzer`` over the value first, exactly like TEXT/KEYWORD
+        terms, so multi-token JSON values follow the same multitoken policy
+        (``_text_term_query`` is reused, not duplicated). When the installed
+        tantivy-py cannot address JSON subpaths via ``term_query`` (see
+        ``_json_paths_supported``), falls back to ``index.parse_query`` --
+        the only route currently able to reach a JSON subpath -- quoting the
+        value and escaping backslashes/quotes so it round-trips through the
+        query-string grammar.
+        """
+        full = f"{spec.name}.{subpath}"
+        tokens = self._tokens(spec, text)
+        if not tokens:
+            return tantivy.Query.empty_query()
+
+        if self._json_paths_supported():
+            return self._text_term_query(spec, tokens, field_name=full)
+
+        escaped = str(text).replace("\\", "\\\\").replace('"', '\\"')
+        return self.index.parse_query(f'{full}:"{escaped}"', default_field_names=[spec.name])
 
     def _group_child(self, child: ast.Node) -> tantivy.Query | None:
         """Visit a direct child of an And/Or group.
@@ -328,6 +396,12 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         )
 
     def visit_term(self, node: ast.Term) -> tantivy.Query:
+        if node.field is not None and "." in node.field:
+            resolved = self.registry.resolve_json(node.field)
+            if resolved is not None:
+                spec, subpath = resolved
+                return self._emit_json_term(spec, subpath, node.text)
+
         spec = self._resolve(node.field)
 
         if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
@@ -348,12 +422,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             return _boolean_query([(tantivy.Occur.MustNot, exists)])
 
         if spec.kind is FieldKind.JSON:
-            raise NotImplementedError(
-                "Task 14: JSON field Term emission is not implemented by this emitter"
+            raise QueryEmitError(
+                f"field {spec.name!r} is a JSON field; term queries must "
+                f"address a subpath (e.g. {spec.name}.<subpath>)"
             )
 
         raise NotImplementedError(
-            f"Task 13: Term emission for field kind {spec.kind.name} is not implemented"
+            f"Term emission for field kind {spec.kind.name} is not implemented"
         )
 
     def visit_phrase(self, node: ast.Phrase) -> tantivy.Query:

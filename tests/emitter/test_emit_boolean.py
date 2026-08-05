@@ -24,7 +24,7 @@ def test_or_min_should(tindex, ereg):
 def test_not_padded(tindex, ereg):
     node = ast.Not(child=ast.Term(field="content", text="invoice"))
     q = emit_ast(node, tindex, ereg)
-    assert search_ids(tindex[0], q) == [2, 3, 4]
+    assert search_ids(tindex[0], q) == [2, 3, 4, 5]
 
 
 def test_nested_all_negative(tindex, ereg):
@@ -70,9 +70,10 @@ def test_require_filters_not_scores(tindex, ereg):
 
 
 def test_boolean_exists_false(tindex, ereg):
+    # Docs 3 and 5 both have no tags at all.
     node = ast.Term(field="has_tag", text=False)
     q = emit_ast(node, tindex, ereg)
-    assert search_ids(tindex[0], q) == [3]
+    assert search_ids(tindex[0], q) == [3, 5]
 
 
 def test_boolean_exists_true(tindex, ereg):
@@ -88,7 +89,7 @@ def test_nothing(tindex, ereg):
 
 def test_every(tindex, ereg):
     q = emit_ast(ast.Every(), tindex, ereg)
-    assert search_ids(tindex[0], q) == [1, 2, 3, 4]
+    assert search_ids(tindex[0], q) == [1, 2, 3, 4, 5]
 
 
 def test_boosted(tindex, ereg):

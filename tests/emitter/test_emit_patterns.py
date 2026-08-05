@@ -181,12 +181,12 @@ def test_prefix_normalizes_and_escapes(tindex, ereg):
 
 def test_every_unfielded(tindex, ereg):
     q = emit_ast(ast.Every(), tindex, ereg)
-    assert search_ids(tindex[0], q) == [1, 2, 3, 4]
+    assert search_ids(tindex[0], q) == [1, 2, 3, 4, 5]
 
 
 def test_every_field_fast(tindex, ereg):
     q = emit_ast(ast.Every(field="asn"), tindex, ereg)
-    assert search_ids(tindex[0], q) == [1, 2, 3, 4]
+    assert search_ids(tindex[0], q) == [1, 2, 3, 4, 5]
 
 
 def test_every_field_text(tindex, ereg):

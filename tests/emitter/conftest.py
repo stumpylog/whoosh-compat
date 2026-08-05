@@ -14,6 +14,14 @@ DOCS = [  # (id, title, content, tags, asn, created_iso, added_iso, notes)
     (2, "Steuer 2019", "receipt shopname product1", ["steuer"], 101, "2019-06-01", "2019-06-01T09:00:00Z", None),
     (3, "Entwässerungsplan", "plan entwasserung basement", [], 102, "2018-03-23", "2018-03-23T08:00:00Z", None),
     (4, "Report 2020", "shopname product1 product2", ["report"], 103, "2020-11-30", "2020-11-30T12:00:00Z", {"note": "final", "user": "bob"}),
+    # Doc 5 exists solely to exercise JSON-subpath emission (test_emit_json.py):
+    # a "user" value containing both a double-quote and a backslash, to prove
+    # the parse_query fallback's escaping round-trips. Its other fields are
+    # deliberately chosen to fall outside every bound/pattern asserted by the
+    # rest of the emitter suite (see conftest module docstring note below) --
+    # except where a doc without tags/an "every doc" query genuinely must
+    # include it; those expectations were updated accordingly.
+    (5, "Miscellaneous Doc", "assorted filler content only", [], 99, "2019-03-01", "2019-03-01T00:00:00Z", {"user": 'a"b\\c'}),
 ]
 
 
