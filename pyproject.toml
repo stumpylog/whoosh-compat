@@ -17,6 +17,7 @@ tantivy = ["tantivy>=0.24"]
 [dependency-groups]
 dev = [
   "pytest>=8",
+  "pytest-cov",
   "hypothesis>=6",
   "ruff",
   "mypy",
@@ -39,6 +40,17 @@ check_untyped_defs = true
 # see its pinned git ref above) ships no py.typed marker / type stubs.
 module = "whoosh.*"
 ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["whoosh_compat"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+]
 
 [tool.ruff]
 line-length = 100
