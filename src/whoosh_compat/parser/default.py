@@ -56,9 +56,21 @@ from whoosh_compat.parser import syntax
 from whoosh_compat.parser.common import print_debug
 from whoosh_compat.parser.plugins import MultifieldPlugin, Plugin
 
-# Matches wildcard text that is plain text followed by exactly one trailing
-# "*" (no other wildcard characters anywhere) -- rewritten to a Prefix query.
-_TRAILING_STAR_RE = re.compile(r"^[^*?]+\*$")
+# Matches wildcard text that is plain *literal* text followed by exactly one
+# trailing "*" -- rewritten to a Prefix query.
+#
+# "[" is excluded alongside "*"/"?" because a bracket character class is glob
+# syntax too, and a Prefix node's text is a literal (the tantivy emitter
+# regex-escapes it). Real whoosh's ``Wildcard.normalize()`` only checks for
+# "*"/"?" here and so folds ``202[0-3]*`` down to ``Prefix('202[0-3]')``,
+# silently reinterpreting the class as literal characters -- a query that then
+# matches (essentially) nothing. That is a whoosh bug, not an intended
+# semantic: the very same class sets ``SPECIAL_CHARS = frozenset("*?[")``
+# for prefix-seeking, so "[" is known to be special everywhere *except* this
+# fold. whoosh-compat keeps such patterns tagged as Wildcard, where the
+# emitter's fnmatch-faithful glob translation handles the class properly.
+# See paperless-ngx#13568.
+_TRAILING_STAR_RE = re.compile(r"^[^*?\[]+\*$")
 
 
 class QueryParser:
@@ -429,8 +441,15 @@ class QueryParser:
 
         * No ``*``/``?`` characters at all -> plain term query.
         * The text is exactly ``"*"`` -> :class:`~whoosh_compat.ast.Every`.
-        * Plain text followed by a single trailing ``*`` -> :class:`~whoosh_compat.ast.Prefix`.
+        * Plain *literal* text (no ``*``/``?``/``[``) followed by a single
+          trailing ``*`` -> :class:`~whoosh_compat.ast.Prefix`.
         * Otherwise -> :class:`~whoosh_compat.ast.Wildcard`.
+
+        Note that this is only ever reached for text ``WildcardPlugin``
+        actually tagged as a wildcard, i.e. text containing ``*`` or a
+        question mark -- a bracket-only ``202[0-3]`` lexes as an ordinary
+        term on both sides, matching whoosh. See ``_TRAILING_STAR_RE`` for
+        why ``[`` blocks the Prefix fold.
         """
 
         if not any(ch in text for ch in "*?"):

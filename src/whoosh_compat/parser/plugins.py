@@ -216,7 +216,17 @@ class WildcardPlugin(TaggingPlugin):
             node = group[i]
             if isinstance(node, self.WildcardNode):
                 text = node.text
-                if len(text) > 1 and not any(qm in text for qm in self.qmarks):
+                # "[" blocks the fold alongside the question marks: a
+                # PrefixNode's text is a *literal*, so folding "202[0-3]*"
+                # into Prefix("202[0-3]") would silently reinterpret the
+                # bracket character class as ordinary characters (real
+                # whoosh does exactly that -- see paperless-ngx#13568 and
+                # ``QueryParser.wildcard_query``'s _TRAILING_STAR_RE).
+                if (
+                    len(text) > 1
+                    and "[" not in text
+                    and not any(qm in text for qm in self.qmarks)
+                ):
                     if text.find("*") == len(text) - 1:
                         newnode = self.PrefixNode(text[:-1])
                         newnode.startchar = node.startchar
