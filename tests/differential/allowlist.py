@@ -84,7 +84,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # match. This is an inherent consequence of the v1 JSON-subpath tagger
     # feature existing at all, not a bug on either side.
     (
-        re.compile(r"custom_fields\.(value|name)"),
+        re.compile(r"\bcustom_fields\.(value|name)\b"),
         (
             "design: dot-inclusive FieldsPlugin tagger ([\\w.]+: vs whoosh's"
             " \\w+:) tags an unregistered dotted name differently than whoosh's"
@@ -92,7 +92,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
         ),
     ),
     (
-        re.compile(r"notes\.(user|note)"),
+        re.compile(r"\bnotes\.(user|note)\b"),
         (
             "design: dot-inclusive FieldsPlugin tagger ([\\w.]+: vs whoosh's"
             " \\w+:) tags an unregistered dotted name differently than whoosh's"
@@ -100,13 +100,18 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
         ),
     ),
 
-    # #8 (from live v3, listed here because it also differs from v2/whoosh):
-    # whoosh-compat's "-foo" (bare NOT with no preceding term) still searches
-    # for foo once padded into the default-fields multifield expansion;
-    # whoosh's raw AndNot/Not tree for a leading "-foo" is a pure negative
-    # query. Deliberate design choice on whoosh-compat's side, not a whoosh
-    # bug. See DIVERGENCES #8.
-    (re.compile(r"^-foo$"), "DIVERGENCES #8: attached -foo searches for foo"),
+    # NOTE: DIVERGENCES #8 ("attached -foo searches for foo") describes a
+    # *v1-vs-live-v3* (tantivy) divergence, not v1-vs-v2/whoosh -- it does
+    # not apply here. Verified directly: a bare leading "-foo" with nothing
+    # before it never triggers either parser's NOT-prefix operator (that
+    # requires a preceding term to attach to); both whoosh and whoosh-compat
+    # treat it as an ordinary literal word, multifield-expanded like any
+    # other unfielded term (down to the same per-field analyzer quirk: "-"
+    # survives inside the KEYWORD `tag` field's token but is stripped by
+    # TEXT fields' word-boundary tokenizer, on *both* sides identically).
+    # An earlier version of this allowlist wrongly carried a "#8" entry here
+    # by analogy without verifying it against the actual v2 oracle; removed
+    # after confirming "-foo" compares and passes structurally.
 
     # whoosh-bug: real whoosh's range-bound date parsing
     # (DateParserPlugin.range_to_dt) calls

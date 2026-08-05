@@ -24,6 +24,7 @@ shopname product1
 Entwä*
 tag:foo,bar
 has_tag:false
+-foo
 
 # --- KNOWN DIVERGENCE (whoosh-bug, allowlist.py): bracketed date ranges
 # (see corpus_paperless.txt's matching section for the root cause).
@@ -60,7 +61,3 @@ tag:'foo,bar'
 # --- KNOWN DIVERGENCE (design, allowlist.py): bare field:* simplifies to
 # Every(field) in whoosh-compat vs a literal Wildcard('*') in whoosh.
 title:*
-
-# --- KNOWN DIVERGENCE (DIVERGENCES #8, allowlist.py): attached -foo
-# searches for foo in whoosh-compat vs a pure negative query in whoosh.
--foo

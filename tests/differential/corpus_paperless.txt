@@ -1,6 +1,9 @@
 # Extracted from paperless-ngx src/documents/tests/search/test_translate.py
 # and test_query.py (query strings passed to translate_query/parse_user_query
 # before Tantivy translation, i.e. the whoosh-syntax "raw" side of each case).
+# Re-extracted in full (fix round 1): every string literal reachable as a
+# translate_query()/parse_user_query() argument, including f-string/
+# parametrize-fed values, not just directly-quoted literals.
 #
 # Section markers below record which lines are expected to structurally
 # compare against the real whoosh oracle vs. which are expected to skip via
@@ -12,19 +15,30 @@
 
 # --- compared: basic terms, booleans, dashes, field/numeric coercion -----
 tag:foo,bar
+tag:foo,bar,baz
 tag:foo,type:bar
 correspondent:foo,bar
 created:2020 OR foo
 (created:2020 OR invoice)
 bank statement
+bank   statement
+bank statement today
 type:invoice
+title:invoice
 path:/foo/bar
+path:foo
 type_id:5
 path_id:7
 type:[2020 TO 2021]
 H52.1 - Kurzsichtigkeit
 bar - baz
 foo -
+foo - bar - baz
+foo + bar
+term -other
+-term
++term
+foo -bar +baz
 invoice
 h52.1 - kurzsichtigkeit
 H52.1 - asd
@@ -35,14 +49,48 @@ h52. -
 h52.1 - ku
 type:invoice
 
+# --- compared: unknown-field colon (foobar isn't a registered field; both
+# taggers demote it to text identically -- unlike the dotted-name case
+# below, there's no dot for whoosh-compat's tagger to treat specially).
+foobar:today
+
+# --- compared: NUMERIC (U64) fields must NOT be caught by date-field
+# rewriting (only created/modified/added are date fields) -- both scalar
+# values and bracket ranges.
+asn:20240101
+id:20240101
+page_count:12345678
+num_notes:20231201
+asn:[2000 TO 2024]
+id:[2000 TO 2024]
+page_count:[2000 TO 2024]
+
 # --- compared: single-word natural-date keywords (whoosh's stock English
-# grammar understands these natively, no app-level rewrite needed) --------
+# grammar understands these natively, no app-level rewrite needed), plus
+# compact numeric date scalars (exact instants go through the *single-value*
+# date path, which -- unlike ranges below -- whoosh's LocalDateParser tz
+# override does correctly reach).
 created:2020
 created:202003
 created:today
 created:yesterday
+created:20240115120000
+created:20231201
 added:today
 added:yesterday
+added:20231201
+modified:20231201
+
+# --- compared: quoted multi-word natural-date keywords (whoosh's own
+# multi-word-value quoting mechanism; contrast with the unquoted forms
+# further below, which are a documented divergence).
+created:"previous quarter"
+added:"previous quarter"
+
+# --- KNOWN DIVERGENCE (DIVERGENCES #6, structural not pattern-based): bad
+# date -- test_differential.py skips on any non-empty diagnostics list.
+# (month=13 in the 8-digit compact form.)
+added:20231340
 
 # --- KNOWN DIVERGENCE (whoosh-bug, allowlist.py): bracketed date ranges --
 # real whoosh's LocalDateParser tz-reversal override never reaches range
@@ -66,17 +114,31 @@ added:[now-7d TO now]
 added:[now+1h TO now-1h]
 created:[-999yrs to now]
 added:[-1y to now]
+added:[-1yr to now]
 created:[-3mos to now]
+added:[-3mos to now]
+added:[-3mo to now]
 added:[-2wks to now]
+added:[-2wk to now]
 added:[-5dys to now]
+added:[-5dy to now]
 added:[-1hrs to now]
+added:[-1hr to now]
 added:[-10mins to now]
+added:[-10min to now]
 added:[-30secs to now]
+added:[-30sec to now]
 created:[2020 TO 2021]
 created:[2020-01-01T00:00:00Z TO 2021-01-01T00:00:00Z]
 created:[2026-01-01T00:00:00Z TO 2026-06-01T00:00:00Z]
 created:[2026-01-01T00:00:00Z TO 2026-06-01T00:00:00Z],added:[2026-05-01T00:00:00Z TO 2026-06-01T00:00:00Z]
 created:[20200101 TO 20201231]
+created:[2020 TO 2020]
+created:[2018 TO 2021]
+added:[2022 TO 2023]
+modified:[2021 TO 2021]
+created:[2020 to 2020]
+created:[2025 TO 2020]
 
 # --- KNOWN DIVERGENCE (design, allowlist.py): unquoted multi-word natural-
 # date keywords. Real paperless v2 rewrites these via an *app-level* regex
