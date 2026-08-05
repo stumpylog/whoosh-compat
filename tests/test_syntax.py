@@ -37,11 +37,44 @@ class StubParser:
 
 # --- Verbatim brief snippets ---------------------------------------------
 
-def test_andgroup_builds_ast_and() -> None:
-    g = syntax.AndGroup([syntax.WordNode("a"), syntax.WordNode("b")])
+@pytest.mark.parametrize("group_cls, expected", [
+    pytest.param(
+        syntax.AndGroup,
+        ast.And(children=(ast.Term(field=None, text="a"), ast.Term(field=None, text="b"))),
+        id="andgroup-builds-ast-and",
+    ),
+    pytest.param(
+        syntax.OrGroup,
+        ast.Or(children=(ast.Term(field=None, text="a"), ast.Term(field=None, text="b"))),
+        id="orgroup-builds-ast-or",
+    ),
+    pytest.param(
+        syntax.DisMaxGroup,
+        # v1 has no dedicated DisjunctionMax AST node, so DisMaxGroup
+        # degrades to a plain Or of its children (documented in syntax.py).
+        ast.Or(children=(ast.Term(field=None, text="a"), ast.Term(field=None, text="b"))),
+        id="dismaxgroup-maps-to-or",
+    ),
+    pytest.param(
+        syntax.AndNotGroup,
+        ast.AndNot(positive=ast.Term(field=None, text="a"), negative=ast.Term(field=None, text="b")),
+        id="andnotgroup-builds-ast-andnot",
+    ),
+    pytest.param(
+        syntax.AndMaybeGroup,
+        ast.AndMaybe(required=ast.Term(field=None, text="a"), optional=ast.Term(field=None, text="b")),
+        id="andmaybegroup-builds-ast-andmaybe",
+    ),
+    pytest.param(
+        syntax.RequireGroup,
+        ast.Require(scored=ast.Term(field=None, text="a"), filter_only=ast.Term(field=None, text="b")),
+        id="requiregroup-builds-ast-require",
+    ),
+])
+def test_group_builds_ast(group_cls, expected) -> None:
+    g = group_cls([syntax.WordNode("a"), syntax.WordNode("b")])
     q = g.query(StubParser())
-    assert q == ast.And(children=(ast.Term(field=None, text="a"),
-                                   ast.Term(field=None, text="b")))
+    assert q == expected
 
 
 def test_notgroup() -> None:
@@ -51,45 +84,6 @@ def test_notgroup() -> None:
 
 def test_empty_group_is_nothing() -> None:
     assert syntax.AndGroup([]).query(StubParser()) == ast.Nothing()
-
-
-# --- Analogous group coverage ---------------------------------------------
-
-def test_orgroup_builds_ast_or() -> None:
-    g = syntax.OrGroup([syntax.WordNode("a"), syntax.WordNode("b")])
-    q = g.query(StubParser())
-    assert q == ast.Or(children=(ast.Term(field=None, text="a"),
-                                  ast.Term(field=None, text="b")))
-
-
-def test_dismaxgroup_maps_to_or() -> None:
-    # v1 has no dedicated DisjunctionMax AST node, so DisMaxGroup degrades
-    # to a plain Or of its children (documented in syntax.py).
-    g = syntax.DisMaxGroup([syntax.WordNode("a"), syntax.WordNode("b")])
-    q = g.query(StubParser())
-    assert q == ast.Or(children=(ast.Term(field=None, text="a"),
-                                  ast.Term(field=None, text="b")))
-
-
-def test_andnotgroup() -> None:
-    g = syntax.AndNotGroup([syntax.WordNode("a"), syntax.WordNode("b")])
-    q = g.query(StubParser())
-    assert q == ast.AndNot(positive=ast.Term(field=None, text="a"),
-                            negative=ast.Term(field=None, text="b"))
-
-
-def test_andmaybegroup() -> None:
-    g = syntax.AndMaybeGroup([syntax.WordNode("a"), syntax.WordNode("b")])
-    q = g.query(StubParser())
-    assert q == ast.AndMaybe(required=ast.Term(field=None, text="a"),
-                              optional=ast.Term(field=None, text="b"))
-
-
-def test_requiregroup() -> None:
-    g = syntax.RequireGroup([syntax.WordNode("a"), syntax.WordNode("b")])
-    q = g.query(StubParser())
-    assert q == ast.Require(scored=ast.Term(field=None, text="a"),
-                             filter_only=ast.Term(field=None, text="b"))
 
 
 def test_group_boost_wraps_in_boosted() -> None:

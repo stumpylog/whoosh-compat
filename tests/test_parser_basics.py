@@ -63,7 +63,12 @@ def test_bracket_class_blocks_prefix_fold(reg):
     # ordinary text. whoosh-compat keeps it a Wildcard so the class survives.
     assert parse("title:202[0-3]*", reg) == ast.Wildcard(field="title", pattern="202[0-3]*")
 
-@pytest.mark.parametrize("pattern", ["*202[0-3]", "a[b]?c", "[0-9]*", "202[0-3]*"])
+@pytest.mark.parametrize("pattern", [
+    pytest.param("*202[0-3]", id="leading-star-class"),
+    pytest.param("a[b]?c", id="class-plus-question-mark"),
+    pytest.param("[0-9]*", id="leading-class-trailing-star"),
+    pytest.param("202[0-3]*", id="trailing-class-trailing-star"),
+])
 def test_bracket_class_wildcard_never_folds_to_term(reg, pattern):
     # Any wildcard-tagged text containing "[" stays a pattern node, never a
     # plain Term (and never a literal-text Prefix).

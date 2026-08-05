@@ -1,3 +1,5 @@
+import pytest
+
 from whoosh_compat import ast
 
 from .conftest import emit_ast, search_ids
@@ -69,17 +71,15 @@ def test_require_filters_not_scores(tindex, ereg):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_boolean_exists_false(tindex, ereg):
+@pytest.mark.parametrize("value, expected", [
     # Docs 3 and 5 both have no tags at all.
-    node = ast.Term(field="has_tag", text=False)
+    pytest.param(False, [3, 5], id="exists-false-matches-docs-without-tags"),
+    pytest.param(True, [1, 2, 4], id="exists-true-matches-docs-with-tags"),
+])
+def test_boolean_exists(tindex, ereg, value, expected):
+    node = ast.Term(field="has_tag", text=value)
     q = emit_ast(node, tindex, ereg)
-    assert search_ids(tindex[0], q) == [3, 5]
-
-
-def test_boolean_exists_true(tindex, ereg):
-    node = ast.Term(field="has_tag", text=True)
-    q = emit_ast(node, tindex, ereg)
-    assert search_ids(tindex[0], q) == [1, 2, 4]
+    assert search_ids(tindex[0], q) == expected
 
 
 def test_nothing(tindex, ereg):

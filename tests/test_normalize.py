@@ -1,3 +1,5 @@
+import pytest
+
 from whoosh_compat.ast import (
     Term, And, Or, Not, AndNot, AndMaybe, Require, Boosted, Every, Nothing,
     normalize,
@@ -11,15 +13,20 @@ def T(x):
 # Rule 1: normalize children first (post-order) — a nested Nothing deep in a
 # child group must be normalized before the parent applies its own rules.
 class TestRule1NormalizeChildrenFirst:
-    def test_nested_and_nothing_propagates_up(self):
+    @pytest.mark.parametrize("tree, expected", [
         # Or(And(a, Nothing)) -> Or(Nothing) -> Nothing (all dropped)
-        t = Or(children=(And(children=(T("a"), Nothing())),))
-        assert normalize(t) == Nothing()
-
-    def test_deeply_nested_not_nothing(self):
-        t = And(children=(Not(Nothing()), T("a")))
+        pytest.param(
+            Or(children=(And(children=(T("a"), Nothing())),)), Nothing(),
+            id="nested-and-nothing-propagates-up",
+        ),
         # Not(Nothing()) normalizes to Every(), then Every() dropped from And
-        assert normalize(t) == T("a")
+        pytest.param(
+            And(children=(Not(Nothing()), T("a"))), T("a"),
+            id="deeply-nested-not-nothing",
+        ),
+    ])
+    def test_children_normalized_first(self, tree, expected):
+        assert normalize(tree) == expected
 
 
 # Rule 2: flatten nested same-type groups; Boosted is a barrier except
@@ -47,47 +54,41 @@ class TestRule2Flatten:
 
 # Rule 3: Nothing propagation across all combinator types.
 class TestRule3NothingPropagation:
-    def test_nothing_in_and(self):
-        assert normalize(And(children=(T("a"), Nothing()))) == Nothing()
-
-    def test_nothing_dropped_from_or(self):
-        assert normalize(Or(children=(T("a"), Nothing()))) == T("a")
-
-    def test_or_all_nothing(self):
-        assert normalize(Or(children=(Nothing(), Nothing()))) == Nothing()
-
-    def test_not_nothing(self):
-        assert normalize(Not(Nothing())) == Every()
-
-    def test_andnot_negative_nothing(self):
-        assert normalize(AndNot(positive=T("a"), negative=Nothing())) == T("a")
-
-    def test_andnot_positive_nothing(self):
-        assert normalize(AndNot(positive=Nothing(), negative=T("b"))) == Nothing()
-
-    def test_andmaybe_required_nothing(self):
-        assert normalize(AndMaybe(required=Nothing(), optional=T("b"))) == Nothing()
-
-    def test_andmaybe_optional_nothing(self):
-        assert normalize(AndMaybe(required=T("a"), optional=Nothing())) == T("a")
-
-    def test_require_scored_nothing(self):
-        assert normalize(Require(scored=Nothing(), filter_only=T("b"))) == Nothing()
-
-    def test_require_filter_only_nothing(self):
-        assert normalize(Require(scored=T("a"), filter_only=Nothing())) == Nothing()
-
-    def test_boosted_nothing(self):
-        assert normalize(Boosted(child=Nothing(), boost=2.0)) == Nothing()
+    @pytest.mark.parametrize("tree, expected", [
+        pytest.param(And(children=(T("a"), Nothing())), Nothing(),
+                     id="and-with-nothing-child-becomes-nothing"),
+        pytest.param(Or(children=(T("a"), Nothing())), T("a"),
+                     id="or-drops-nothing-child"),
+        pytest.param(Or(children=(Nothing(), Nothing())), Nothing(),
+                     id="or-all-nothing-becomes-nothing"),
+        pytest.param(Not(Nothing()), Every(), id="not-nothing-becomes-every"),
+        pytest.param(AndNot(positive=T("a"), negative=Nothing()), T("a"),
+                     id="andnot-negative-nothing-drops-to-positive"),
+        pytest.param(AndNot(positive=Nothing(), negative=T("b")), Nothing(),
+                     id="andnot-positive-nothing-becomes-nothing"),
+        pytest.param(AndMaybe(required=Nothing(), optional=T("b")), Nothing(),
+                     id="andmaybe-required-nothing-becomes-nothing"),
+        pytest.param(AndMaybe(required=T("a"), optional=Nothing()), T("a"),
+                     id="andmaybe-optional-nothing-drops-to-required"),
+        pytest.param(Require(scored=Nothing(), filter_only=T("b")), Nothing(),
+                     id="require-scored-nothing-becomes-nothing"),
+        pytest.param(Require(scored=T("a"), filter_only=Nothing()), Nothing(),
+                     id="require-filter-only-nothing-becomes-nothing"),
+        pytest.param(Boosted(child=Nothing(), boost=2.0), Nothing(),
+                     id="boosted-nothing-becomes-nothing"),
+    ])
+    def test_nothing_propagation(self, tree, expected):
+        assert normalize(tree) == expected
 
 
 # Rule 4: single-child group unwraps (after flatten/dedupe/absorption).
 class TestRule4SingleChildUnwrap:
-    def test_and_single_child_unwraps(self):
-        assert normalize(And(children=(T("a"),))) == T("a")
-
-    def test_or_single_child_unwraps(self):
-        assert normalize(Or(children=(T("a"),))) == T("a")
+    @pytest.mark.parametrize("tree, expected", [
+        pytest.param(And(children=(T("a"),)), T("a"), id="and-single-child-unwraps"),
+        pytest.param(Or(children=(T("a"),)), T("a"), id="or-single-child-unwraps"),
+    ])
+    def test_single_child_unwrap(self, tree, expected):
+        assert normalize(tree) == expected
 
 
 # Rule 5: duplicate sibling dedupe, preserving first-seen order.
@@ -102,23 +103,26 @@ class TestRule5Dedupe:
 
 # Rule 6: Every() absorption in Or, dropping in And.
 class TestRule6EveryAbsorption:
-    def test_every_absorbs_or(self):
-        assert normalize(Or(children=(Every(), T("a")))) == Every()
-
-    def test_every_dropped_from_and_leaves_one(self):
-        assert normalize(And(children=(Every(), T("a")))) == T("a")
-
-    def test_every_dropped_from_and_leaves_zero(self):
-        assert normalize(And(children=(Every(), Every()))) == Every()
+    @pytest.mark.parametrize("tree, expected", [
+        pytest.param(Or(children=(Every(), T("a"))), Every(),
+                     id="every-absorbs-or"),
+        pytest.param(And(children=(Every(), T("a"))), T("a"),
+                     id="every-dropped-from-and-leaves-one"),
+        pytest.param(And(children=(Every(), Every())), Every(),
+                     id="every-dropped-from-and-leaves-zero"),
+    ])
+    def test_every_absorption(self, tree, expected):
+        assert normalize(tree) == expected
 
 
 # Rule 7: empty groups collapse to Nothing().
 class TestRule7EmptyGroupToNothing:
-    def test_empty_and(self):
-        assert normalize(And(children=())) == Nothing()
-
-    def test_empty_or(self):
-        assert normalize(Or(children=())) == Nothing()
+    @pytest.mark.parametrize("tree", [
+        pytest.param(And(children=()), id="empty-and"),
+        pytest.param(Or(children=()), id="empty-or"),
+    ])
+    def test_empty_group_collapses(self, tree):
+        assert normalize(tree) == Nothing()
 
 
 # Rule 8: Boosted(x, 1.0) strips to x.

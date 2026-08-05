@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+import pytest
+
 import whoosh_compat as wc
 from whoosh_compat import ast
 from whoosh_compat.errors import DiagnosticKind
@@ -13,14 +15,12 @@ def dparse(q, reg):
     return wc.parse(q, registry=reg, default_fields=["content"], tz=BERLIN, basedate=BASE)
 
 
-def test_year_precision(reg):
-    r = dparse("created:2020", reg).ast
-    assert r == ast.DateRange(field="created", lo=datetime(2020, 1, 1, tzinfo=timezone.utc),
-                              hi=datetime(2021, 1, 1, tzinfo=timezone.utc), incl_lo=True, incl_hi=False)
-
-
-def test_range_2020_to_2020(reg):
-    r = dparse("created:[2020 TO 2020]", reg).ast
+@pytest.mark.parametrize("query", [
+    pytest.param("created:2020", id="bare-year-implies-year-range"),
+    pytest.param("created:[2020 TO 2020]", id="explicit-same-year-range-is-equivalent"),
+])
+def test_year_precision(reg, query):
+    r = dparse(query, reg).ast
     assert r == ast.DateRange(field="created", lo=datetime(2020, 1, 1, tzinfo=timezone.utc),
                               hi=datetime(2021, 1, 1, tzinfo=timezone.utc), incl_lo=True, incl_hi=False)
 

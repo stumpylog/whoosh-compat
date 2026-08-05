@@ -9,15 +9,24 @@ only. These tests exercise both branches (whichever the installed tantivy-py
 actually supports) plus, explicitly, the escaping-fallback code path.
 """
 
+import pytest
+
 from whoosh_compat import ast
 
 from .conftest import emit_ast, search_ids
 
 
-def test_json_subpath_term(tindex, ereg):
-    node = ast.Term(field="notes.user", text="alice")
+@pytest.mark.parametrize("text, expected", [
+    pytest.param("alice", [1], id="matches-owning-doc"),
+    pytest.param("bob", [4], id="matches-different-doc"),
+    # Doc 5's notes.user is the raw string a"b\c -- proves the parse_query
+    # fallback's quote/backslash escaping round-trips.
+    pytest.param('a"b\\c', [5], id="quote-and-backslash-round-trip"),
+])
+def test_json_subpath_term(tindex, ereg, text, expected):
+    node = ast.Term(field="notes.user", text=text)
     q = emit_ast(node, tindex, ereg)
-    assert search_ids(tindex[0], q) == [1]
+    assert search_ids(tindex[0], q) == expected
 
 
 def test_json_subpath_term_parsed(tindex, ereg, parse):
@@ -25,18 +34,16 @@ def test_json_subpath_term_parsed(tindex, ereg, parse):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_json_subpath_term_other_doc(tindex, ereg):
-    node = ast.Term(field="notes.user", text="bob")
+def test_json_subpath_multitoken_and(tindex, ereg):
+    # A JSON subpath value that analyzes to multiple tokens must follow the
+    # same multitoken policy as TEXT fields -- emit_json's term_query path
+    # reuses _text_term_query rather than duplicating its handling (see
+    # module docstring / emitters/tantivy_.py). Doc 1's notes.note is
+    # "check this" (two tokens); AND resolution requires both, so only doc 1
+    # matches, mirroring test_emit_terms.py's test_multitoken_and.
+    node = ast.Term(field="notes.note", text="check this")
     q = emit_ast(node, tindex, ereg)
-    assert search_ids(tindex[0], q) == [4]
-
-
-def test_json_subpath_value_with_quote_and_backslash(tindex, ereg):
-    # Doc 5's notes.user is the raw string a"b\c -- proves the parse_query
-    # fallback's quote/backslash escaping round-trips.
-    node = ast.Term(field="notes.user", text='a"b\\c')
-    q = emit_ast(node, tindex, ereg)
-    assert search_ids(tindex[0], q) == [5]
+    assert search_ids(tindex[0], q) == [1]
 
 
 def test_json_subpath_matches_index_parse_query_directly(tindex, ereg):
@@ -55,5 +62,7 @@ def test_json_subpath_unknown_subpath_falls_back_to_plain_field(tindex, ereg, pa
     # FieldsPlugin/registry demote it back to an unfielded term against the
     # default field, same as whoosh treats any other unknown field.
     node = parse("notes.bogus:alice")
-    assert isinstance(node, ast.Term)
-    assert node.field != "notes.bogus"
+    # Exact demotion shape: the unrecognized "notes.bogus:" fieldname prefix
+    # is merged back onto the word as plain text and searched as an
+    # unfielded term against the parse fixture's default field ("content").
+    assert node == ast.Term(field="content", text="notes.bogus:alice")

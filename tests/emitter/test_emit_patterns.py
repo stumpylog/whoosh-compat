@@ -8,6 +8,8 @@ not by eyeballing the raw document text. See the module-level token map.
 
 import fnmatch
 
+import pytest
+
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import glob_to_regex
 
@@ -42,33 +44,24 @@ def fnmatch_ids(tokens, pattern):
 # -- glob_to_regex unit-level behavior ---------------------------------------
 
 
-def test_glob_to_regex_star_and_question():
-    assert glob_to_regex("produ*1", None) == "produ.*1"
-    assert glob_to_regex("a?b", None) == "a.b"
-
-
-def test_glob_to_regex_normalizes_literals():
-    assert glob_to_regex("Entwä*", str.lower) == "entwä.*"
-
-
-def test_glob_to_regex_escapes_literal_metachars():
+@pytest.mark.parametrize("pattern, normalizer, expected", [
+    pytest.param("produ*1", None, "produ.*1", id="star-becomes-dot-star"),
+    pytest.param("a?b", None, "a.b", id="question-mark-becomes-dot"),
+    pytest.param("Entwä*", str.lower, "entwä.*", id="normalizer-applied-to-literal-run"),
     # A literal "." must not become "any character".
-    assert glob_to_regex("a.b*", None) == "a\\.b.*"
-
-
-def test_glob_to_regex_character_class():
-    assert glob_to_regex("202[0-3]", None) == "202[0-3]"
-
-
-def test_glob_to_regex_negated_character_class():
+    pytest.param("a.b*", None, "a\\.b.*", id="literal-metachar-escaped"),
+    pytest.param("202[0-3]", None, "202[0-3]", id="character-class-passthrough"),
     # fnmatch spells negation "[!...]"; the regex dialect spells it "[^...]".
-    assert glob_to_regex("202[!0-3]", None) == "202[^0-3]"
-
-
-def test_glob_to_regex_unclosed_bracket_is_literal():
+    pytest.param("202[!0-3]", None, "202[^0-3]", id="negated-class-fnmatch-to-regex-dialect"),
     # fnmatch.translate("202[0-3") == "(?s:202\\[0\\-3)\\z" -- the unmatched
     # "[" is an ordinary character, not a class opener.
-    assert glob_to_regex("202[0-3", None) == "202\\[0\\-3"
+    pytest.param("202[0-3", None, "202\\[0\\-3", id="unclosed-bracket-is-literal"),
+    # Only literal runs go through the normalizer; the class body is passed
+    # through as class syntax.
+    pytest.param("AB[0-3]*", str.lower, "ab[0-3].*", id="class-body-not-normalized-or-escaped-away"),
+])
+def test_glob_to_regex(pattern, normalizer, expected):
+    assert glob_to_regex(pattern, normalizer) == expected
 
 
 def test_glob_to_regex_escapes_class_internal_set_operators(tindex, ereg):
@@ -83,77 +76,32 @@ def test_glob_to_regex_escapes_class_internal_set_operators(tindex, ereg):
     assert search_ids(tindex[0], q) == []
 
 
-def test_glob_to_regex_class_is_not_normalized_or_escaped_away():
-    # Only literal runs go through the normalizer; the class body is passed
-    # through as class syntax.
-    assert glob_to_regex("AB[0-3]*", str.lower) == "ab[0-3].*"
-
-
 # -- wildcard emission -------------------------------------------------------
 
 
-def test_wildcard_entwae(tindex, ereg):
-    expected = fnmatch_ids(TITLE_TOKENS, "Entwä*")
-    assert expected == [3]
-    q = emit_ast(ast.Wildcard(field="title", pattern="Entwä*"), tindex, ereg)
-    assert search_ids(tindex[0], q) == expected
-
-
-def test_wildcard_infix(tindex, ereg):
-    expected = fnmatch_ids(CONTENT_TOKENS, "produ*1")
-    assert expected == [2, 4]
-    q = emit_ast(ast.Wildcard(field="content", pattern="produ*1"), tindex, ereg)
-    assert search_ids(tindex[0], q) == expected
-
-
-def test_wildcard_question_mark(tindex, ereg):
-    expected = fnmatch_ids(CONTENT_TOKENS, "product?")
-    assert expected == [2, 4]
-    q = emit_ast(ast.Wildcard(field="content", pattern="product?"), tindex, ereg)
-    assert search_ids(tindex[0], q) == expected
-
-
-def test_wildcard_character_class(tindex, ereg):
+@pytest.mark.parametrize("field, tokens, pattern, expected", [
+    pytest.param("title", TITLE_TOKENS, "Entwä*", [3], id="diacritic-prefix-star"),
+    pytest.param("content", CONTENT_TOKENS, "produ*1", [2, 4], id="infix-star"),
+    pytest.param("content", CONTENT_TOKENS, "product?", [2, 4], id="question-mark"),
     # paperless-ngx issue #13568: saved views use "202[0-3]"-style bracket
     # classes. Constructed as a Wildcard node directly (whoosh's
     # WildcardPlugin only *tags* text containing "*"/"?", so bare
     # "202[0-3]" would lex as a Term) to exercise the emitter's raw class
     # handling.
-    expected = fnmatch_ids(TITLE_TOKENS, "202[0-3]")
-    assert expected == [1, 4]
-    q = emit_ast(ast.Wildcard(field="title", pattern="202[0-3]"), tindex, ereg)
-    assert search_ids(tindex[0], q) == expected
-
-
-def test_wildcard_negated_character_class(tindex, ereg):
-    expected = fnmatch_ids(TITLE_TOKENS, "201[!0-8]")
-    assert expected == [2]
-    q = emit_ast(ast.Wildcard(field="title", pattern="201[!0-8]"), tindex, ereg)
-    assert search_ids(tindex[0], q) == expected
-
-
-def test_wildcard_unclosed_bracket_is_literal(tindex, ereg):
+    pytest.param("title", TITLE_TOKENS, "202[0-3]", [1, 4], id="character-class-13568"),
+    pytest.param("title", TITLE_TOKENS, "201[!0-8]", [2], id="negated-character-class"),
     # An unmatched "[" is a literal character; no fixture token contains one,
     # so this matches nothing -- in contrast to the closed-class form above,
     # which matches [1, 4].
-    expected = fnmatch_ids(TITLE_TOKENS, "202[0-3")
-    assert expected == []
-    q = emit_ast(ast.Wildcard(field="title", pattern="202[0-3"), tindex, ereg)
-    assert search_ids(tindex[0], q) == expected
-
-
-def test_wildcard_13568_leading_star_class(tindex, ereg):
+    pytest.param("title", TITLE_TOKENS, "202[0-3", [], id="unclosed-bracket-is-literal"),
     # The exact wildcard shape from paperless-ngx issue #13568.
-    expected = fnmatch_ids(TITLE_TOKENS, "*202[0-3]")
-    assert expected == [1, 4]
-    q = emit_ast(ast.Wildcard(field="title", pattern="*202[0-3]"), tindex, ereg)
-    assert search_ids(tindex[0], q) == expected
-
-
-def test_wildcard_13568_negated(tindex, ereg):
-    expected = fnmatch_ids(TITLE_TOKENS, "*201[0-9]")
-    assert expected == [2]
-    q = emit_ast(ast.Wildcard(field="title", pattern="*201[0-9]"), tindex, ereg)
+    pytest.param("title", TITLE_TOKENS, "*202[0-3]", [1, 4], id="13568-leading-star-class"),
+    pytest.param("title", TITLE_TOKENS, "*201[0-9]", [2], id="13568-negated"),
+])
+def test_wildcard_emission(tindex, ereg, field, tokens, pattern, expected):
+    # Keep the fnmatch oracle result honest alongside the emitter's result.
+    assert fnmatch_ids(tokens, pattern) == expected
+    q = emit_ast(ast.Wildcard(field=field, pattern=pattern), tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
 
@@ -179,18 +127,13 @@ def test_prefix_normalizes_and_escapes(tindex, ereg):
 # -- Every(field) ------------------------------------------------------------
 
 
-def test_every_unfielded(tindex, ereg):
-    q = emit_ast(ast.Every(), tindex, ereg)
-    assert search_ids(tindex[0], q) == [1, 2, 3, 4, 5]
-
-
-def test_every_field_fast(tindex, ereg):
-    q = emit_ast(ast.Every(field="asn"), tindex, ereg)
-    assert search_ids(tindex[0], q) == [1, 2, 3, 4, 5]
-
-
-def test_every_field_text(tindex, ereg):
+@pytest.mark.parametrize("field, expected", [
+    pytest.param(None, [1, 2, 3, 4, 5], id="unfielded-matches-all-docs"),
+    pytest.param("asn", [1, 2, 3, 4, 5], id="fast-field-matches-all-docs"),
     # 'tag' is a non-fast KEYWORD field -> regex ".*" fallback; doc 3 has no
     # tags at all, so it is excluded.
-    q = emit_ast(ast.Every(field="tag"), tindex, ereg)
-    assert search_ids(tindex[0], q) == [1, 2, 4]
+    pytest.param("tag", [1, 2, 4], id="non-fast-text-field-excludes-doc-without-value"),
+])
+def test_every_field(tindex, ereg, field, expected):
+    q = emit_ast(ast.Every(field=field), tindex, ereg)
+    assert search_ids(tindex[0], q) == expected
