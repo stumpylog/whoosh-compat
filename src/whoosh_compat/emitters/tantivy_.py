@@ -13,10 +13,14 @@ dependency.
 
 from __future__ import annotations
 
+import re
+from datetime import datetime, timezone
+from typing import Callable
+
 import tantivy
 
 from whoosh_compat import ast
-from whoosh_compat.errors import QueryEmitError
+from whoosh_compat.errors import QueryEmitError, UnsupportedQueryError
 from whoosh_compat.fields import FieldKind, FieldRegistry, Multitoken
 
 _FALSY_TEXT = ("f", "false", "no", "0")
@@ -35,6 +39,150 @@ def _is_truthy(value: object) -> bool:
     if isinstance(value, str):
         return value.strip().lower() not in _FALSY_TEXT
     return bool(value)
+
+
+def _translate_class(pattern: str, i: int, n: int) -> tuple[str | None, int]:
+    """Translate the bracket expression starting just after a ``[`` at ``i-1``.
+
+    Returns ``(regex_fragment, next_index)``. ``regex_fragment`` is ``None``
+    when the ``[`` has no matching ``]`` -- in that case the caller must treat
+    the ``[`` as an ordinary literal character and resume at ``i``.
+
+    This is a direct port of CPython's ``fnmatch.translate`` bracket handling
+    (the ``elif c == '['`` branch), which is the semantics whoosh's
+    ``query.Wildcard`` inherits by compiling its pattern with
+    ``fnmatch.translate``. It is deliberately *not* simplified: the ``!``
+    negation, the leading-``]``-is-a-literal-member rule, and the
+    hyphen/backslash escaping inside the class all have to line up with
+    fnmatch exactly or globs would silently change meaning.
+    """
+    j = i
+    if j < n and pattern[j] == "!":
+        j += 1
+    if j < n and pattern[j] == "]":
+        j += 1
+    while j < n and pattern[j] != "]":
+        j += 1
+    if j >= n:
+        return None, i
+
+    stuff = pattern[i:j]
+    if "-" not in stuff:
+        stuff = stuff.replace("\\", r"\\")
+    else:
+        chunks = []
+        k = i + 2 if pattern[i] == "!" else i + 1
+        start = i
+        while True:
+            k = pattern.find("-", k, j)
+            if k < 0:
+                break
+            chunks.append(pattern[start:k])
+            start = k + 1
+            k = k + 3
+        chunk = pattern[start:j]
+        if chunk:
+            chunks.append(chunk)
+        else:
+            chunks[-1] += "-"
+        # Remove empty ranges -- invalid in a regex character class.
+        for k in range(len(chunks) - 1, 0, -1):
+            if chunks[k - 1][-1] > chunks[k][0]:
+                chunks[k - 1] = chunks[k - 1][:-1] + chunks[k][1:]
+                del chunks[k]
+        # Escape backslashes and hyphens for set difference ("--"); hyphens
+        # that create ranges must stay unescaped.
+        stuff = "-".join(s.replace("\\", r"\\").replace("-", r"\-") for s in chunks)
+
+    if not stuff:
+        # "[]" -- an empty range never matches.
+        return "(?!)", j + 1
+    if stuff == "!":
+        # "[!]" -- a negated empty range matches any single character.
+        return ".", j + 1
+    if stuff[0] == "!":
+        stuff = "^" + stuff[1:]
+    elif stuff[0] == "^":
+        stuff = "\\" + stuff
+    # Python's `re` tolerates a bare "[", "&" or "~" inside a class; Rust's
+    # regex crate (which tantivy uses) reads them as the start of a nested
+    # class / a set-operator and errors out ("unclosed character class").
+    # Escaping them is a no-op for the matched language on both engines.
+    for ch in "[&~":
+        stuff = stuff.replace(ch, "\\" + ch)
+    return f"[{stuff}]", j + 1
+
+
+def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str:
+    """Translate an fnmatch-style glob into a tantivy regex.
+
+    Whoosh's ``query.Wildcard`` compiles its pattern with
+    ``fnmatch.translate``, so fnmatch -- not a naive split on ``*``/``?`` --
+    is the ground truth for what a whoosh wildcard matches. This function
+    reproduces fnmatch's translation with two deliberate changes:
+
+    * Literal runs are passed through ``normalizer`` (``spec.pattern_normalizer``,
+      identity when ``None``) *before* being regex-escaped, so a pattern can be
+      case-folded to line up with the analyzed/indexed term text. Only literal
+      runs are normalized -- ``*``, ``?`` and bracket-class bodies are pattern
+      syntax and are passed through as such.
+    * No anchoring. ``fnmatch.translate`` emits ``(?s:...)\\z`` framing, and
+      newer CPython versions also emit atomic groups (``(?>.*?foo)``) as a
+      backtracking optimization. tantivy's regex engine (regex-automata, via
+      tantivy_fst) matches the *whole* term by construction and does not
+      support atomic groups, so the framing is dropped and ``*`` is emitted as
+      a plain ``.*``.
+    """
+    normalize: Callable[[str], str] = normalizer if normalizer is not None else (lambda s: s)
+
+    out: list[str] = []
+    literal: list[str] = []
+
+    def flush() -> None:
+        if literal:
+            out.append(re.escape(normalize("".join(literal))))
+            literal.clear()
+
+    i, n = 0, len(pattern)
+    while i < n:
+        c = pattern[i]
+        i += 1
+        if c == "*":
+            flush()
+            # Collapse runs of "*" -- "a**b" means the same as "a*b".
+            while i < n and pattern[i] == "*":
+                i += 1
+            out.append(".*")
+        elif c == "?":
+            flush()
+            out.append(".")
+        elif c == "[":
+            fragment, i = _translate_class(pattern, i, n)
+            if fragment is None:
+                # No closing "]": the "[" is an ordinary character.
+                literal.append(c)
+            else:
+                flush()
+                out.append(fragment)
+        else:
+            literal.append(c)
+    flush()
+    return "".join(out)
+
+
+def _to_naive_utc(value: datetime) -> datetime:
+    """Naive-UTC form of ``value`` for ``Query.range_query``.
+
+    ``Query.range_query`` (tantivy-py 0.26) only accepts *naive* datetimes for
+    ``FieldType.Date`` -- a tz-aware one raises ``ValueError: Expected DateTime
+    type for field ...`` (unlike ``Query.term_query``, which accepts both).
+    Parser-produced range bounds are always tz-aware UTC, so convert here.
+    Naive input is passed through unchanged (tantivy already reads naive
+    datetimes as UTC, matching how documents are indexed).
+    """
+    if value.tzinfo is None:
+        return value
+    return value.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _pad_if_all_negative(
@@ -163,11 +311,16 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         return tantivy.Query.empty_query()
 
     def visit_every(self, node: ast.Every) -> tantivy.Query:
-        if node.field is not None:
-            raise NotImplementedError(
-                "Task 13: fielded Every() is not implemented by the terms/booleans emitter"
-            )
-        return tantivy.Query.all_query()
+        if node.field is None:
+            return tantivy.Query.all_query()
+        spec = self._resolve(node.field)
+        if spec.fast:
+            # exists_query is a cheap fast-field presence check, but it only
+            # works on fast fields (tantivy errors out otherwise).
+            return tantivy.Query.exists_query(spec.name)
+        # Non-fast (TEXT/KEYWORD) fields: "has any term at all" via a regex
+        # that matches every term in the field's dictionary.
+        return tantivy.Query.regex_query(self.schema, spec.name, ".*")
 
     def visit_errorleaf(self, node: ast.ErrorLeaf) -> tantivy.Query:
         raise QueryEmitError(
@@ -204,24 +357,65 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         )
 
     def visit_phrase(self, node: ast.Phrase) -> tantivy.Query:
-        raise NotImplementedError("Task 13: Phrase emission is not implemented by this emitter")
+        spec = self._resolve(node.field)
+        tokens = self._tokens(spec, node.text)
+        if not tokens:
+            return tantivy.Query.empty_query()
+        if len(tokens) == 1:
+            # tantivy rejects a single-word phrase query; a term query is the
+            # exact equivalent anyway.
+            return tantivy.Query.term_query(self.schema, spec.name, tokens[0])
+        # whoosh's slop counts *positions spanned* (slop=1 means adjacent);
+        # tantivy's counts *gaps allowed* (slop=0 means adjacent).
+        slop = max(node.slop - 1, 0)
+        return tantivy.Query.phrase_query(self.schema, spec.name, tokens, slop=slop)
 
     def visit_prefix(self, node: ast.Prefix) -> tantivy.Query:
-        raise NotImplementedError("Task 13: Prefix emission is not implemented by this emitter")
+        spec = self._resolve(node.field)
+        text = str(node.text)
+        if spec.pattern_normalizer is not None:
+            text = spec.pattern_normalizer(text)
+        return tantivy.Query.regex_query(self.schema, spec.name, re.escape(text) + ".*")
 
     def visit_wildcard(self, node: ast.Wildcard) -> tantivy.Query:
-        raise NotImplementedError("Task 13: Wildcard emission is not implemented by this emitter")
+        spec = self._resolve(node.field)
+        regex = glob_to_regex(str(node.pattern), spec.pattern_normalizer)
+        return tantivy.Query.regex_query(self.schema, spec.name, regex)
 
     def visit_termrange(self, node: ast.TermRange) -> tantivy.Query:
-        raise NotImplementedError("Task 13: TermRange emission is not implemented by this emitter")
+        raise UnsupportedQueryError("text ranges are not supported (DIVERGENCES #5)")
 
-    def visit_numericrange(self, node: ast.NumericRange) -> tantivy.Query:
-        raise NotImplementedError(
-            "Task 13: NumericRange emission is not implemented by this emitter"
+    def _range_query(self, spec, field_type, lo, hi, node: ast.Node) -> tantivy.Query:
+        """Shared range_query construction for numeric and date ranges.
+
+        tantivy requires an unbounded side to be *inclusive* (passing
+        ``include_* = False`` alongside a ``None`` bound is an error), so the
+        node's inclusivity flag is only honored on bounds that actually exist.
+        """
+        if lo is None and hi is None:
+            raise QueryEmitError("range query needs at least one bound")
+        return tantivy.Query.range_query(
+            self.schema,
+            spec.name,
+            field_type,
+            lower_bound=lo,
+            upper_bound=hi,
+            include_lower=True if lo is None else node.incl_lo,
+            include_upper=True if hi is None else node.incl_hi,
         )
 
+    def visit_numericrange(self, node: ast.NumericRange) -> tantivy.Query:
+        spec = self._resolve(node.field)
+        lo = None if node.lo is None else int(node.lo)
+        hi = None if node.hi is None else int(node.hi)
+        # v1 scope: numeric fields are U64 only.
+        return self._range_query(spec, tantivy.FieldType.Unsigned, lo, hi, node)
+
     def visit_daterange(self, node: ast.DateRange) -> tantivy.Query:
-        raise NotImplementedError("Task 13: DateRange emission is not implemented by this emitter")
+        spec = self._resolve(node.field)
+        lo = None if node.lo is None else _to_naive_utc(node.lo)
+        hi = None if node.hi is None else _to_naive_utc(node.hi)
+        return self._range_query(spec, tantivy.FieldType.Date, lo, hi, node)
 
     # -- boolean combinators --------------------------------------------
 

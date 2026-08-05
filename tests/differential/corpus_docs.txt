@@ -61,3 +61,9 @@ tag:'foo,bar'
 # --- KNOWN DIVERGENCE (design, allowlist.py): bare field:* simplifies to
 # Every(field) in whoosh-compat vs a literal Wildcard('*') in whoosh.
 title:*
+
+# --- issue #13568: v2->v3 migration broke saved views using bracket-class
+# wildcards like "title:*202[0-3]". Both queries below are verbatim from the
+# report (the second is the 2025 variant of the first).
+tag:steuer AND tag:valentin AND (title:*2024 OR (NOT title:*202[0-3] AND NOT title:*201[0-9] AND created:2024))
+tag:steuer AND tag:valentin AND (title:*2025 OR (NOT title:*202[0-3] AND NOT title:*201[0-9] AND created:2025))

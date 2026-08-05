@@ -23,9 +23,14 @@ def lower_fold(text: str) -> list[str]:
     Applied as the ``analyzer`` for TEXT/KEYWORD fields in the emitter test
     registry so tokenization here matches what tantivy's own 'default'
     tokenizer chain (simple tokenizer + lowercase filter) does at index time.
+
+    Note: tantivy's 'default' chain does *not* ASCII-fold -- "Entwässerungsplan"
+    is indexed as the single token "entwässerungsplan", umlaut intact. This
+    analyzer must not fold either, or emitted term text would silently stop
+    matching what is in the index (verified against a live tantivy index).
     """
-    folded = unicodedata.normalize("NFKD", text.lower()).encode("ascii", "ignore").decode()
-    return [t for t in re.split(r"\W+", folded) if t]
+    lowered = unicodedata.normalize("NFC", text.lower())
+    return [t for t in re.split(r"\W+", lowered, flags=re.UNICODE) if t]
 
 
 @pytest.fixture(scope="session")
@@ -70,8 +75,8 @@ def ereg():
     emitted term text lines up with what's actually indexed.
     """
     return FieldRegistry([
-        FieldSpec("content", FieldKind.TEXT, analyzer=lower_fold),
-        FieldSpec("title", FieldKind.TEXT, analyzer=lower_fold),
+        FieldSpec("content", FieldKind.TEXT, analyzer=lower_fold, pattern_normalizer=str.lower),
+        FieldSpec("title", FieldKind.TEXT, analyzer=lower_fold, pattern_normalizer=str.lower),
         FieldSpec("tag", FieldKind.KEYWORD, analyzer=lower_fold, pattern_normalizer=lambda s: s.lower(), comma_values=True),
         FieldSpec("tag_id", FieldKind.U64, comma_values=True, fast=True),
         FieldSpec("asn", FieldKind.U64, fast=True),
