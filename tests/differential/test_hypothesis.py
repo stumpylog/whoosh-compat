@@ -65,3 +65,31 @@ def test_parse_never_raises(q):
         tz=BERLIN,
         basedate=BASE,
     )
+
+
+# A wilder crash-only input space: full unicode chunks interleaved with a
+# booster of the grammar's own metacharacters and field prefixes, so the
+# sampler spends time in syntactically interesting territory (unclosed
+# groups, dangling operators, half-formed ranges) instead of plain noise.
+# Crash-only means no oracle comparison, so broadening the alphabet cannot
+# produce divergence false positives: any raise is a real bug.
+_meta = st.sampled_from(
+    list("()[]{}\"'*?^~:,-+ ")
+    + ["AND", "OR", "NOT", "TO", "title:", "created:", "tag:", "notes.user:"]
+)
+_wild = st.lists(st.one_of(st.text(max_size=12), _meta), min_size=0, max_size=40).map("".join)
+
+
+@given(_wild)
+@settings(max_examples=300, deadline=None)
+def test_parse_never_raises_wild(q):
+    # The contract under test: bad input NEVER raises; it surfaces on the
+    # ParseResult's diagnostics channel instead.
+    result = wc.parse(
+        q,
+        registry=ORACLE_REGISTRY,
+        default_fields=V2_FIELDS,
+        tz=BERLIN,
+        basedate=BASE,
+    )
+    assert result.ast is not None or result.diagnostics
