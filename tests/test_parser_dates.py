@@ -167,6 +167,11 @@ def test_midnight_noon(reg, query, hour, minute, second):
     r = dparse(query, reg).ast
     lo_local = r.lo.astimezone(BERLIN)
     assert (lo_local.hour, lo_local.minute, lo_local.second) == (hour, minute, second)
+    # midnight/noon disambiguate to a zero-width (start == end) timespan, an
+    # exact instant, not an ambiguous period: both bounds inclusive, not a
+    # half-open range one microsecond wide (see cb3a4b1).
+    assert r.lo == r.hi
+    assert r.incl_lo and r.incl_hi
 
 
 def test_tomorrow(reg):
