@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable
+from collections.abc import Iterable
 from dataclasses import dataclass
-from enum import Enum, auto
-from typing import Callable, Iterable
+from enum import Enum
+from enum import auto
 
 
 class FieldKind(Enum):
@@ -113,13 +115,6 @@ class FieldRegistry:
                         f"existing canonical name or alias"
                     )
 
-            # Check for duplicate aliases
-            for alias in spec.aliases:
-                if alias in self._by_name:
-                    raise ValueError(
-                        f"Field '{spec.name}': duplicate alias '{alias}'"
-                    )
-
             # Register the spec by canonical name
             self._by_name[spec.name] = spec
 
@@ -132,6 +127,9 @@ class FieldRegistry:
         # Third pass: validate BOOLEAN_EXISTS targets (now all specs are registered)
         for spec in self._specs:
             if spec.kind == FieldKind.BOOLEAN_EXISTS:
+                # Second pass above already rejected BOOLEAN_EXISTS specs
+                # with exists_target=None.
+                assert spec.exists_target is not None
                 target_spec = self.resolve(spec.exists_target)
                 if target_spec is None:
                     raise ValueError(

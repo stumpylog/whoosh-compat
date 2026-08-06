@@ -7,6 +7,7 @@ plugins that drive tagging/filtering in :mod:`whoosh_compat.parser.plugins`,
 and the top-level parser classes in :mod:`whoosh_compat.parser.default`.
 """
 
-from whoosh_compat.parser.default import MultifieldParser, QueryParser
+from whoosh_compat.parser.default import MultifieldParser
+from whoosh_compat.parser.default import QueryParser
 
 __all__ = ["MultifieldParser", "QueryParser"]

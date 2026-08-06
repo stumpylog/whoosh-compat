@@ -1,7 +1,8 @@
 """Diagnostic and exception hierarchy for whoosh-compat."""
 
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import Enum
+from enum import auto
 
 
 class DiagnosticKind(Enum):
@@ -22,12 +23,10 @@ class Diagnostic:
 
 class WhooshCompatError(Exception):
     """Base exception for whoosh-compat."""
-    pass
 
 
 class UnsupportedQueryError(WhooshCompatError):
     """Raised when a query feature is not supported."""
-    pass
 
 
 class QueryEmitError(WhooshCompatError):
@@ -46,4 +45,3 @@ class QueryEmitError(WhooshCompatError):
 
 class QueryParserError(WhooshCompatError):
     """Raised when query parsing fails."""
-    pass

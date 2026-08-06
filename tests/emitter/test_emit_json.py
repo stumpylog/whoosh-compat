@@ -13,9 +13,12 @@ import pytest
 
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import TantivyEmitter
-from whoosh_compat.fields import FieldKind, FieldRegistry, FieldSpec
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
 
-from .conftest import emit_ast, search_ids
+from .conftest import emit_ast
+from .conftest import search_ids
 
 
 @pytest.mark.parametrize("text, expected", [

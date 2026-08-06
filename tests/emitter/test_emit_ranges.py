@@ -1,17 +1,20 @@
 """Date / numeric / term range emission."""
 
-from datetime import datetime, timezone
+from datetime import UTC
+from datetime import datetime
 
 import pytest
 
 from whoosh_compat import ast
-from whoosh_compat.errors import QueryEmitError, UnsupportedQueryError
+from whoosh_compat.errors import QueryEmitError
+from whoosh_compat.errors import UnsupportedQueryError
 
-from .conftest import emit_ast, search_ids
+from .conftest import emit_ast
+from .conftest import search_ids
 
 
 def utc(y, m, d):
-    return datetime(y, m, d, tzinfo=timezone.utc)
+    return datetime(y, m, d, tzinfo=UTC)
 
 
 @pytest.mark.parametrize("lo, hi, incl_lo, incl_hi, expected", [

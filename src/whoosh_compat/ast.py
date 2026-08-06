@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from dataclasses import field
 from datetime import datetime
-from typing import Generic, TypeVar
+from typing import Generic
+from typing import TypeVar
 
 from whoosh_compat.errors import Diagnostic
-
 
 T = TypeVar("T")
 
@@ -133,7 +134,6 @@ class Every(Node):
 @dataclass(frozen=True)
 class Nothing(Node):
     """Match no documents."""
-    pass
 
 
 @dataclass(frozen=True)
@@ -198,7 +198,7 @@ def normalize(node: Node) -> Node:
         children = tuple(normalize(c) for c in node.children)
         if not children:
             return Nothing()  # rule 7: empty group -> Nothing
-        flat: list[Node] = []
+        flat = []
         for child in children:
             if isinstance(child, Or):
                 flat.extend(child.children)

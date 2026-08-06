@@ -1,13 +1,12 @@
 """Tests for fields.py — FieldSpec and FieldRegistry."""
 
-import pytest
-from whoosh_compat.fields import (
-    FieldKind,
-    Multitoken,
-    FieldSpec,
-    FieldRegistry,
-)
+import dataclasses
 
+import pytest
+
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
 
 # ============================================================================
 # Test resolve() — canonical names and aliases
@@ -375,5 +374,5 @@ def test_empty_registry():
 def test_field_spec_frozen():
     """FieldSpec is frozen (immutable)."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
-    with pytest.raises(Exception):  # FrozenInstanceError
+    with pytest.raises(dataclasses.FrozenInstanceError):
         spec.name = "new_title"

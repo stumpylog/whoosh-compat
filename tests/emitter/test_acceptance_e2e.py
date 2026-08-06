@@ -42,8 +42,12 @@ from zoneinfo import ZoneInfo
 
 import pytest
 import tantivy
-from whoosh.analysis import CharsetFilter, StandardAnalyzer, StemmingAnalyzer
-from whoosh.fields import NUMERIC, TEXT, Schema
+from whoosh.analysis import CharsetFilter
+from whoosh.analysis import StandardAnalyzer
+from whoosh.analysis import StemmingAnalyzer
+from whoosh.fields import NUMERIC
+from whoosh.fields import TEXT
+from whoosh.fields import Schema
 from whoosh.filedb.filestore import RamStorage
 from whoosh.lang.porter import stem as porter_stem
 from whoosh.qparser import QueryParser
@@ -53,9 +57,13 @@ from tests.differential.oracle import oracle_schema
 from whoosh_compat import parse as wc_parse
 from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.errors import QueryEmitError
-from whoosh_compat.fields import FieldKind, FieldRegistry, FieldSpec
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
 
-from .conftest import lower_fold, search_ids, whoosh_search_ids
+from .conftest import lower_fold
+from .conftest import search_ids
+from .conftest import whoosh_search_ids
 
 BERLIN = ZoneInfo("Europe/Berlin")
 # "created:previous month"/"created:[now-7d TO now]"/etc need a fixed,

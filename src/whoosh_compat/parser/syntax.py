@@ -40,11 +40,14 @@ assembling the boolean/grouping structure of the resulting AST.
 from __future__ import annotations
 
 import weakref
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable
+from collections.abc import Iterator
+from collections.abc import Sequence
 from typing import Any
 
 from whoosh_compat import ast
-from whoosh_compat.errors import Diagnostic, DiagnosticKind
+from whoosh_compat.errors import Diagnostic
+from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.parser.common import attach
 
 

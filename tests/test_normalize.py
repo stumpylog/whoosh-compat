@@ -1,9 +1,16 @@
 import pytest
 
-from whoosh_compat.ast import (
-    Term, And, Or, Not, AndNot, AndMaybe, Require, Boosted, Every, Nothing,
-    normalize,
-)
+from whoosh_compat.ast import And
+from whoosh_compat.ast import AndMaybe
+from whoosh_compat.ast import AndNot
+from whoosh_compat.ast import Boosted
+from whoosh_compat.ast import Every
+from whoosh_compat.ast import Not
+from whoosh_compat.ast import Nothing
+from whoosh_compat.ast import Or
+from whoosh_compat.ast import Require
+from whoosh_compat.ast import Term
+from whoosh_compat.ast import normalize
 
 
 def T(x):

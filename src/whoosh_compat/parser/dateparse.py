@@ -68,26 +68,34 @@ a successful parse:
 from __future__ import annotations
 
 import re
-from datetime import UTC, date, datetime, time, timedelta, tzinfo
-from typing import Any, cast
+from datetime import UTC
+from datetime import date
+from datetime import datetime
+from datetime import time
+from datetime import timedelta
+from datetime import tzinfo
+from typing import Any
+from typing import ClassVar
+from typing import cast
 
 from dateutil.relativedelta import relativedelta
 
 from whoosh_compat import ast
-from whoosh_compat.errors import Diagnostic, DiagnosticKind
-from whoosh_compat.fields import FieldKind, FieldSpec
-from whoosh_compat.parser import priorities, syntax
+from whoosh_compat.errors import Diagnostic
+from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldSpec
+from whoosh_compat.parser import priorities
+from whoosh_compat.parser import syntax
 from whoosh_compat.parser.common import attach
 from whoosh_compat.parser.plugins import Plugin
 from whoosh_compat.parser.text import rcompile
-from whoosh_compat.parser.times import (
-    TimeError,
-    adatetime,
-    fill_in,
-    is_void,
-    relative_days,
-    timespan,
-)
+from whoosh_compat.parser.times import TimeError
+from whoosh_compat.parser.times import adatetime
+from whoosh_compat.parser.times import fill_in
+from whoosh_compat.parser.times import is_void
+from whoosh_compat.parser.times import relative_days
+from whoosh_compat.parser.times import timespan
 
 
 class DateParseError(Exception):
@@ -148,7 +156,9 @@ class ParserBase:
     def date_from(self, text: str, dt: datetime | None = None, pos: int = 0,
                   debug: int = -9999) -> Any:
         if dt is None:
-            dt = datetime.now()
+            # Naive "now", matching the grammar's naive-local-time contract
+            # (see DateParserPlugin._local_now).
+            dt = datetime.now(UTC).replace(tzinfo=None)
 
         d, _pos = self.parse(text, dt, pos, debug + 1)
         return d
@@ -547,9 +557,9 @@ class PlusMinus(Regex):
         rel_mins = f"((?P<mins>[0-9]+) *({minutes}))?"
         rel_secs = f"((?P<secs>[0-9]+) *({seconds}))?"
 
-        self.pattern = (r"(?P<dir>[+-]) *%s *%s *%s *%s *%s *%s *%s(?=(\W|$))"
-                        % (rel_years, rel_months, rel_weeks, rel_days,
-                           rel_hours, rel_mins, rel_secs))
+        self.pattern = (
+            rf"(?P<dir>[+-]) *{rel_years} *{rel_months} *{rel_weeks} *{rel_days} *{rel_hours} *{rel_mins} *{rel_secs}(?=(\W|$))"
+        )
         self.expr = rcompile(self.pattern, re.IGNORECASE)
 
     def props_to_date(self, p: Props, dt: datetime) -> datetime:
@@ -573,7 +583,7 @@ class NowCompact(Regex):
     other :class:`Regex` subclasses.
     """
 
-    _UNITS: dict[str, str] = {
+    _UNITS: ClassVar[dict[str, str]] = {
         "y": "years", "M": "months", "w": "weeks", "d": "days",
         "h": "hours", "m": "minutes", "s": "seconds",
     }
@@ -688,7 +698,7 @@ class DateParser:
     def date_from(self, text: str, basedate: datetime | None = None, pos: int = 0,
                   debug: int = -9999, toend: bool = True) -> Any:
         if basedate is None:
-            basedate = datetime.utcnow()
+            basedate = datetime.now(UTC).replace(tzinfo=None)
 
         parser = self.get_parser()
         if toend:

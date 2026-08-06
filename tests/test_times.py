@@ -2,20 +2,18 @@ from datetime import datetime
 
 import pytest
 
-from whoosh_compat.parser.times import (
-    TimeError,
-    adatetime,
-    ceil,
-    fill_in,
-    fix,
-    floor,
-    has_no_date,
-    has_no_time,
-    is_ambiguous,
-    is_void,
-    relative_days,
-    timespan,
-)
+from whoosh_compat.parser.times import TimeError
+from whoosh_compat.parser.times import adatetime
+from whoosh_compat.parser.times import ceil
+from whoosh_compat.parser.times import fill_in
+from whoosh_compat.parser.times import fix
+from whoosh_compat.parser.times import floor
+from whoosh_compat.parser.times import has_no_date
+from whoosh_compat.parser.times import has_no_time
+from whoosh_compat.parser.times import is_ambiguous
+from whoosh_compat.parser.times import is_void
+from whoosh_compat.parser.times import relative_days
+from whoosh_compat.parser.times import timespan
 
 
 def test_adatetime_floor_ceil():

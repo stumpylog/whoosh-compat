@@ -21,14 +21,18 @@ dependency.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
-from typing import Callable
+from collections.abc import Callable
+from datetime import UTC
+from datetime import datetime
 
 import tantivy
 
 from whoosh_compat import ast
-from whoosh_compat.errors import QueryEmitError, UnsupportedQueryError
-from whoosh_compat.fields import FieldKind, FieldRegistry, Multitoken
+from whoosh_compat.errors import QueryEmitError
+from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import Multitoken
 
 _FALSY_TEXT = ("f", "false", "no", "0")
 
@@ -189,7 +193,7 @@ def _to_naive_utc(value: datetime) -> datetime:
     """
     if value.tzinfo is None:
         return value
-    return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.astimezone(UTC).replace(tzinfo=None)
 
 
 def _pad_if_all_negative(
@@ -286,7 +290,12 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         if mode is Multitoken.FIRST:
             return tantivy.Query.term_query(self.schema, field_name, tokens[0])
         if mode is Multitoken.PHRASE:
-            return tantivy.Query.phrase_query(self.schema, field_name, tokens)
+            # tantivy-py's phrase_query() takes list[str | tuple[int, str]];
+            # lists are invariant so a plain list[str] doesn't satisfy that
+            # even though every element here is a bare str (no explicit
+            # positions).
+            words: list[str | tuple[int, str]] = list(tokens)
+            return tantivy.Query.phrase_query(self.schema, field_name, words)
 
         term_queries = [tantivy.Query.term_query(self.schema, field_name, t) for t in tokens]
         if mode is Multitoken.OR:
@@ -443,7 +452,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         # whoosh's slop counts *positions spanned* (slop=1 means adjacent);
         # tantivy's counts *gaps allowed* (slop=0 means adjacent).
         slop = max(node.slop - 1, 0)
-        return tantivy.Query.phrase_query(self.schema, spec.name, tokens, slop=slop)
+        words: list[str | tuple[int, str]] = list(tokens)
+        return tantivy.Query.phrase_query(self.schema, spec.name, words, slop=slop)
 
     def visit_prefix(self, node: ast.Prefix) -> tantivy.Query:
         spec = self._resolve(node.field)
@@ -460,7 +470,9 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     def visit_termrange(self, node: ast.TermRange) -> tantivy.Query:
         raise UnsupportedQueryError("text ranges are not supported (DIVERGENCES #5)")
 
-    def _range_query(self, spec, field_type, lo, hi, node: ast.Node) -> tantivy.Query:
+    def _range_query(
+        self, spec, field_type, lo, hi, node: ast.NumericRange | ast.DateRange
+    ) -> tantivy.Query:
         """Shared range_query construction for numeric and date ranges.
 
         tantivy requires an unbounded side to be *inclusive* (passing

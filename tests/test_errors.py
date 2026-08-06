@@ -1,5 +1,9 @@
-from whoosh_compat.errors import (Diagnostic, DiagnosticKind, QueryEmitError,
-                                  UnsupportedQueryError, WhooshCompatError)
+from whoosh_compat.errors import Diagnostic
+from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.errors import QueryEmitError
+from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.errors import WhooshCompatError
+
 
 def test_hierarchy():
     assert issubclass(UnsupportedQueryError, WhooshCompatError)

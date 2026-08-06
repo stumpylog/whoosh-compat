@@ -1,15 +1,19 @@
 import re
 import unicodedata
-from datetime import UTC, datetime
+from datetime import UTC
+from datetime import datetime
 
 import pytest
 import tantivy
 from whoosh.filedb.filestore import RamStorage
 
-from tests.differential.oracle import oracle_parse, oracle_schema
+from tests.differential.oracle import oracle_parse
+from tests.differential.oracle import oracle_schema
 from whoosh_compat import parse as _parse
 from whoosh_compat.emitters.tantivy_ import emit as emit_
-from whoosh_compat.fields import FieldKind, FieldRegistry, FieldSpec
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
 
 DOCS = [  # (id, title, content, tags, asn, created_iso, added_iso, notes)
     (1, "Steuer 2020", "invoice total amount", ["steuer", "wichtig"], 100, "2020-03-15", "2020-03-15T10:00:00Z", {"note": "check this", "user": "alice"}),

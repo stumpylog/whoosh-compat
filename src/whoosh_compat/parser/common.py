@@ -34,7 +34,8 @@ from __future__ import annotations
 
 import dataclasses
 import sys
-from typing import Any, TextIO
+from typing import Any
+from typing import TextIO
 
 from whoosh_compat.errors import QueryParserError
 

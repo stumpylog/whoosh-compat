@@ -2,7 +2,8 @@ import pytest
 
 from whoosh_compat import ast
 
-from .conftest import emit_ast, search_ids
+from .conftest import emit_ast
+from .conftest import search_ids
 
 
 def test_implicit_and(tindex, ereg):

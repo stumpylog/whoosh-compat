@@ -47,14 +47,19 @@ methods called by the ``syntax`` nodes: :meth:`QueryParser.term_query`,
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+from collections.abc import Sequence
 
 from whoosh_compat import ast
-from whoosh_compat.errors import Diagnostic, DiagnosticKind
-from whoosh_compat.fields import FieldKind, FieldRegistry
+from whoosh_compat.errors import Diagnostic
+from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.errors import QueryParserError
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.parser import syntax
 from whoosh_compat.parser.common import print_debug
-from whoosh_compat.parser.plugins import MultifieldPlugin, Plugin
+from whoosh_compat.parser.plugins import MultifieldPlugin
+from whoosh_compat.parser.plugins import Plugin
 
 # Matches wildcard text that is plain *literal* text followed by exactly one
 # trailing "*" -- rewritten to a Prefix query.
@@ -189,8 +194,7 @@ class QueryParser:
         for plugin in self.plugins:
             # Call either .taggers() or .filters() on the plugin
             method = getattr(plugin, methodname)
-            for item in method(self):
-                items_and_priorities.append(item)
+            items_and_priorities.extend(method(self))
         # Sort the list by priority (lower priority runs first)
         items_and_priorities.sort(key=lambda x: x[1])
         # Return the sorted list without the priorities
@@ -242,7 +246,7 @@ class QueryParser:
                 node = tagger.match(self, text, pos)
                 if node is not None:
                     if node.endchar <= pos:
-                        raise Exception(
+                        raise QueryParserError(
                             f"Token {tagger!r} did not move cursor forward. ({text!r}, {pos})"
                         )
                     if prev < pos:
@@ -286,7 +290,7 @@ class QueryParser:
             if debug:
                 print_debug(debug, f"..Result: {nodes!r}")
             if nodes is None:
-                raise Exception(f"Filter {f!r} did not return anything")
+                raise QueryParserError(f"Filter {f!r} did not return anything")
         return nodes
 
     def process(self, text: str, pos: int = 0, debug: int = 0) -> syntax.GroupNode:

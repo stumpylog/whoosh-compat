@@ -51,9 +51,12 @@ from re import Match
 from typing import Any
 
 from whoosh_compat import ast
-from whoosh_compat.parser import priorities, syntax
+from whoosh_compat.parser import priorities
+from whoosh_compat.parser import syntax
 from whoosh_compat.parser.common import attach
-from whoosh_compat.parser.taggers import FnTagger, RegexTagger, Tagger
+from whoosh_compat.parser.taggers import FnTagger
+from whoosh_compat.parser.taggers import RegexTagger
+from whoosh_compat.parser.taggers import Tagger
 from whoosh_compat.parser.text import rcompile
 
 TaggerEntry = tuple[Tagger, int]
@@ -222,7 +225,9 @@ class WildcardPlugin(TaggingPlugin):
                 # bracket character class as ordinary characters (real
                 # whoosh does exactly that -- see paperless-ngx#13568 and
                 # ``QueryParser.wildcard_query``'s _TRAILING_STAR_RE).
-                if (
+                # Nested rather than combined with `and`: mirrors whoosh's
+                # original two-step condition/action shape for this fold.
+                if (  # noqa: SIM102 -- preserves whoosh control-flow fidelity
                     len(text) > 1
                     and "[" not in text
                     and not any(qm in text for qm in self.qmarks)
@@ -274,7 +279,7 @@ class BoostPlugin(TaggingPlugin):
 
         bnode = self.BoostNode
         for i, node in enumerate(group):
-            if isinstance(node, bnode):
+            if isinstance(node, bnode):  # noqa: SIM102 -- preserves whoosh control-flow fidelity
                 if not i or not group[i - 1].has_boost:
                     group[i] = syntax.to_word(node)  # type: ignore[arg-type]
         return group

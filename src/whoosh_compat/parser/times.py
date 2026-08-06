@@ -29,8 +29,17 @@ from __future__ import annotations
 
 import calendar
 import copy
-from datetime import date, datetime, timedelta
-from typing import Any, Union
+from datetime import date
+from datetime import datetime
+from datetime import timedelta
+from typing import Any
+from typing import Union
+
+# This module works entirely in naive datetimes: ``adatetime``/``timespan``
+# represent points in the date grammar's naive-local-time model (see
+# DateParserPlugin._local_now in dateparse.py), and every ``datetime(...)``
+# constructed here deliberately carries no tzinfo. Timezone conversion to
+# UTC happens once, downstream in dateparse.py's DateParserPlugin.
 
 # Either a concrete datetime or an ambiguous adatetime.
 DateLike = Union[datetime, "adatetime"]
@@ -189,7 +198,7 @@ class adatetime:
             s = 0
         if ms is None:
             ms = 0
-        return datetime(y, m, d, h, mn, s, ms)
+        return datetime(y, m, d, h, mn, s, ms)  # noqa: DTZ001 -- naive by contract, see module docstring
 
     def ceil(self) -> datetime:
         """Returns a ``datetime`` version of this object with all unspecified
@@ -220,7 +229,7 @@ class adatetime:
             s = 59
         if ms is None:
             ms = 999999
-        return datetime(y, m, d, h, mn, s, ms)
+        return datetime(y, m, d, h, mn, s, ms)  # noqa: DTZ001 -- naive by contract, see module docstring
 
     def disambiguated(self, basedate: datetime) -> DateLike | timespan:
         """Returns either a ``datetime`` or unambiguous ``timespan`` version
@@ -471,6 +480,6 @@ def fix(at: DateLike) -> DateLike:
     if is_ambiguous(at) or isinstance(at, datetime):
         return at
     # not is_ambiguous(at) guarantees every unit on at is non-None here.
-    return datetime(year=at.year, month=at.month, day=at.day, hour=at.hour,  # type: ignore[arg-type]
+    return datetime(year=at.year, month=at.month, day=at.day, hour=at.hour,  # type: ignore[arg-type]  # noqa: DTZ001
                     minute=at.minute, second=at.second,  # type: ignore[arg-type]
                     microsecond=at.microsecond)  # type: ignore[arg-type]

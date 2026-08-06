@@ -11,14 +11,12 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from tests.differential.allowlist import allowed_reason
-from tests.differential.oracle import (
-    V2_FIELDS,
-    analyze_ast,
-    compat_raw_parse,
-    oracle_parse,
-    to_ast,
-    unmapped_reason,
-)
+from tests.differential.oracle import V2_FIELDS
+from tests.differential.oracle import analyze_ast
+from tests.differential.oracle import compat_raw_parse
+from tests.differential.oracle import oracle_parse
+from tests.differential.oracle import to_ast
+from tests.differential.oracle import unmapped_reason
 from whoosh_compat.ast import normalize
 
 BERLIN = ZoneInfo("Europe/Berlin")

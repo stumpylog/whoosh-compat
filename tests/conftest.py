@@ -1,6 +1,8 @@
 import pytest
 
-from whoosh_compat.fields import FieldKind, FieldRegistry, FieldSpec
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
 
 
 @pytest.fixture

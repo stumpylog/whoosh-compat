@@ -13,39 +13,43 @@ that used to build ``whoosh`` query objects directly:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC
+from datetime import datetime
+from datetime import tzinfo
 
 from whoosh_compat import ast
-from whoosh_compat.errors import (
-    Diagnostic,
-    DiagnosticKind,
-    QueryEmitError,
-    QueryParserError,
-    UnsupportedQueryError,
-    WhooshCompatError,
-)
-from whoosh_compat.fields import FieldKind, FieldRegistry, FieldSpec, Multitoken
+from whoosh_compat.errors import Diagnostic
+from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.errors import QueryEmitError
+from whoosh_compat.errors import QueryParserError
+from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.errors import WhooshCompatError
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
+from whoosh_compat.fields import Multitoken
 from whoosh_compat.parser.dateparse import DateParserPlugin
 from whoosh_compat.parser.default import MultifieldParser
 
 __version__ = "0.1.0.dev0"
 
 __all__ = [
-    "parse",
-    "ParseResult",
-    "FieldSpec",
-    "FieldKind",
-    "Multitoken",
-    "FieldRegistry",
-    "ast",
     "Diagnostic",
     "DiagnosticKind",
-    "WhooshCompatError",
-    "UnsupportedQueryError",
+    "FieldKind",
+    "FieldRegistry",
+    "FieldSpec",
+    "Multitoken",
+    "ParseResult",
     "QueryEmitError",
     "QueryParserError",
+    "UnsupportedQueryError",
+    "WhooshCompatError",
+    "ast",
+    "parse",
 ]
 
 

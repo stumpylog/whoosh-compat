@@ -28,10 +28,11 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Pattern
+from collections.abc import Callable
+from re import Pattern
+from typing import Any
 
 from whoosh_compat.parser.text import rcompile
-
 
 # Tagger objects
 

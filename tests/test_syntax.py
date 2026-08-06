@@ -6,7 +6,8 @@ from typing import Any
 import pytest
 
 from whoosh_compat import ast
-from whoosh_compat.errors import Diagnostic, DiagnosticKind
+from whoosh_compat.errors import Diagnostic
+from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.parser import syntax
 from whoosh_compat.parser.common import attach
 

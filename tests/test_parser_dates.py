@@ -1,4 +1,5 @@
-from datetime import datetime, timezone
+from datetime import UTC
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -21,8 +22,8 @@ def dparse(q, reg):
 ])
 def test_year_precision(reg, query):
     r = dparse(query, reg).ast
-    assert r == ast.DateRange(field="created", lo=datetime(2020, 1, 1, tzinfo=timezone.utc),
-                              hi=datetime(2021, 1, 1, tzinfo=timezone.utc), incl_lo=True, incl_hi=False)
+    assert r == ast.DateRange(field="created", lo=datetime(2020, 1, 1, tzinfo=UTC),
+                              hi=datetime(2021, 1, 1, tzinfo=UTC), incl_lo=True, incl_hi=False)
 
 
 def test_open_upper(reg):
@@ -32,19 +33,19 @@ def test_open_upper(reg):
 
 def test_yesterday_keyword(reg):
     r = dparse("added:yesterday", reg).ast
-    assert r.lo == datetime(2026, 8, 3, 0, 0, tzinfo=BERLIN).astimezone(timezone.utc)
-    assert r.hi == datetime(2026, 8, 4, 0, 0, tzinfo=BERLIN).astimezone(timezone.utc) and not r.incl_hi
+    assert r.lo == datetime(2026, 8, 3, 0, 0, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == datetime(2026, 8, 4, 0, 0, tzinfo=BERLIN).astimezone(UTC) and not r.incl_hi
 
 
 def test_previous_month(reg):
     r = dparse("added:'previous month'", reg).ast
-    assert r.lo == datetime(2026, 7, 1, tzinfo=BERLIN).astimezone(timezone.utc)
-    assert r.hi == datetime(2026, 8, 1, tzinfo=BERLIN).astimezone(timezone.utc) and not r.incl_hi
+    assert r.lo == datetime(2026, 7, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == datetime(2026, 8, 1, tzinfo=BERLIN).astimezone(UTC) and not r.incl_hi
 
 
 def test_now_compact(reg):
     r = dparse("added:[now-7d TO now]", reg).ast
-    assert (BASE.astimezone(timezone.utc) - r.lo).days == 7
+    assert (BASE.astimezone(UTC) - r.lo).days == 7
 
 
 def test_whoosh_plusminus(reg):
@@ -74,7 +75,7 @@ def test_datetime_boost_preserved(reg):
 def test_dayname_keywords(reg, query, expected_date):
     r = dparse(query, reg).ast
     assert r.lo == datetime(expected_date.year, expected_date.month, expected_date.day,
-                            tzinfo=BERLIN).astimezone(timezone.utc)
+                            tzinfo=BERLIN).astimezone(UTC)
 
 
 # --- Time12 grammar (parser/dateparse.py:647-657) ---------------------------
@@ -96,43 +97,43 @@ def test_time12_keywords(reg, query, hour, minute, second):
 
 def test_previous_year(reg):
     r = dparse("added:'previous year'", reg).ast
-    assert r.lo == datetime(2025, 1, 1, tzinfo=BERLIN).astimezone(timezone.utc)
-    assert r.hi == datetime(2026, 1, 1, tzinfo=BERLIN).astimezone(timezone.utc) and not r.incl_hi
+    assert r.lo == datetime(2025, 1, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == datetime(2026, 1, 1, tzinfo=BERLIN).astimezone(UTC) and not r.incl_hi
 
 
 def test_previous_week(reg):
     # BASE 2026-08-04 is a Tuesday; this week's Monday is 2026-08-03, so
     # "previous week" is 2026-07-27 through (excl) 2026-08-03.
     r = dparse("added:'previous week'", reg).ast
-    assert r.lo == datetime(2026, 7, 27, tzinfo=BERLIN).astimezone(timezone.utc)
-    assert r.hi == datetime(2026, 8, 3, tzinfo=BERLIN).astimezone(timezone.utc) and not r.incl_hi
+    assert r.lo == datetime(2026, 7, 27, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == datetime(2026, 8, 3, tzinfo=BERLIN).astimezone(UTC) and not r.incl_hi
 
 
 def test_previous_quarter(reg):
     # BASE month is August (Q3), so the previous quarter is Q2: Apr-Jun.
     r = dparse("added:'previous quarter'", reg).ast
-    assert r.lo == datetime(2026, 4, 1, tzinfo=BERLIN).astimezone(timezone.utc)
-    assert r.hi == datetime(2026, 7, 1, tzinfo=BERLIN).astimezone(timezone.utc) and not r.incl_hi
+    assert r.lo == datetime(2026, 4, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == datetime(2026, 7, 1, tzinfo=BERLIN).astimezone(UTC) and not r.incl_hi
 
 
 def test_this_year(reg):
     r = dparse("added:'this year'", reg).ast
-    assert r.lo == datetime(2026, 1, 1, tzinfo=BERLIN).astimezone(timezone.utc)
+    assert r.lo == datetime(2026, 1, 1, tzinfo=BERLIN).astimezone(UTC)
 
 
 def test_this_month(reg):
     r = dparse("added:'this month'", reg).ast
-    assert r.lo == datetime(2026, 8, 1, tzinfo=BERLIN).astimezone(timezone.utc)
+    assert r.lo == datetime(2026, 8, 1, tzinfo=BERLIN).astimezone(UTC)
 
 
 def test_today(reg):
     r = dparse("added:today", reg).ast
-    assert r.lo == datetime(2026, 8, 4, tzinfo=BERLIN).astimezone(timezone.utc)
+    assert r.lo == datetime(2026, 8, 4, tzinfo=BERLIN).astimezone(UTC)
 
 
 def test_now_keyword(reg):
     r = dparse("added:now", reg).ast
-    assert r.lo == BASE.astimezone(timezone.utc)
+    assert r.lo == BASE.astimezone(UTC)
     assert r.incl_lo and r.incl_hi  # an exact instant, not a period
 
 
@@ -148,7 +149,7 @@ def test_midnight_noon(reg, query, hour, minute, second):
 
 def test_tomorrow(reg):
     r = dparse("added:tomorrow", reg).ast
-    assert r.lo == datetime(2026, 8, 5, tzinfo=BERLIN).astimezone(timezone.utc)
+    assert r.lo == datetime(2026, 8, 5, tzinfo=BERLIN).astimezone(UTC)
 
 
 # --- dmy/mdy/ymd/ydm and month-name sequences (English.setup's self.dmy) ---
@@ -172,22 +173,22 @@ def test_month_alone(reg):
     # "august" alone with no day/year -> the whole month, in the basedate's
     # year (2026).
     r = dparse("created:august", reg).ast
-    assert r.lo == datetime(2026, 8, 1, tzinfo=timezone.utc)
-    assert r.hi == datetime(2026, 9, 1, tzinfo=timezone.utc) and not r.incl_hi
+    assert r.lo == datetime(2026, 8, 1, tzinfo=UTC)
+    assert r.hi == datetime(2026, 9, 1, tzinfo=UTC) and not r.incl_hi
 
 
 # --- Compact numeric "simple" sequence (DateParser.__init__'s self.simple) -
 
 def test_compact_numeric_datetime(reg):
     r = dparse("added:'20200304'", reg).ast
-    assert r.lo == datetime(2020, 3, 4, tzinfo=BERLIN).astimezone(timezone.utc)
+    assert r.lo == datetime(2020, 3, 4, tzinfo=BERLIN).astimezone(UTC)
 
 
 def test_compact_numeric_datetime_progressive_partial(reg):
     # progressive=True: a prefix of the simple sequence (year+month only)
     # still matches.
     r = dparse("added:'202003'", reg).ast
-    assert r.lo == datetime(2020, 3, 1, tzinfo=BERLIN).astimezone(timezone.utc)
+    assert r.lo == datetime(2020, 3, 1, tzinfo=BERLIN).astimezone(UTC)
 
 
 # --- plusdate / nowcompact (Combo/PlusMinus grammar) -----------------------
@@ -201,8 +202,8 @@ def test_plusdate_years_months_weeks_combo(reg):
 
 def test_range_both_bounds_named_dates(reg):
     r = dparse("created:[2020-01-01 TO 2020-12-31]", reg).ast
-    assert r.lo == datetime(2020, 1, 1, tzinfo=timezone.utc)
-    assert r.hi == datetime(2021, 1, 1, tzinfo=timezone.utc)
+    assert r.lo == datetime(2020, 1, 1, tzinfo=UTC)
+    assert r.hi == datetime(2021, 1, 1, tzinfo=UTC)
 
 
 def test_range_open_lower(reg):
@@ -217,7 +218,7 @@ def test_range_both_sides_are_periods_cannot_combine(reg):
     # raw_start and raw_end.
     r = dparse("added:['previous month' TO 'this month']", reg).ast
     assert isinstance(r, ast.DateRange)
-    assert r.lo == datetime(2026, 7, 1, tzinfo=BERLIN).astimezone(timezone.utc)
+    assert r.lo == datetime(2026, 7, 1, tzinfo=BERLIN).astimezone(UTC)
 
 
 def test_range_bad_start_diagnostic(reg):
@@ -274,7 +275,6 @@ def test_dateparser_parse_method_direct() -> None:
     # still a documented, non-trivial public method of the grammar classes,
     # so it's covered here directly rather than deleted.
     from whoosh_compat.parser.dateparse import English
-
     from whoosh_compat.parser.times import timespan
 
     parser = English()
@@ -297,7 +297,7 @@ def test_dateparse_internals_repr_and_debug() -> None:
     props = dp.Props(year=2020)
     assert repr(props) == repr({"year": 2020})
     with pytest.raises(AttributeError):
-        props.nope
+        _ = props.nope
 
     seq = dp.Sequence((dp.Regex("x"),), name="s")
     assert repr(seq) == "Sequence<s>[<'x'>]"
@@ -358,8 +358,10 @@ def test_dateparser_date_from_defaults_and_toend_false() -> None:
 
 
 def test_daterangesyntaxnode_and_dateerrornode_r() -> None:
-    from whoosh_compat.errors import Diagnostic, DiagnosticKind
-    from whoosh_compat.parser.dateparse import DateErrorNode, DateRangeSyntaxNode
+    from whoosh_compat.errors import Diagnostic
+    from whoosh_compat.errors import DiagnosticKind
+    from whoosh_compat.parser.dateparse import DateErrorNode
+    from whoosh_compat.parser.dateparse import DateRangeSyntaxNode
 
     node = DateRangeSyntaxNode("added", datetime(2020, 1, 1), datetime(2020, 1, 2), True, False)
     assert node.r() == f"DateRange {datetime(2020, 1, 1)!r}-{datetime(2020, 1, 2)!r}"

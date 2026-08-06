@@ -2,9 +2,13 @@ import pytest
 
 from whoosh_compat import ast
 from whoosh_compat.errors import QueryEmitError
-from whoosh_compat.fields import FieldKind, FieldRegistry, FieldSpec, Multitoken
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
+from whoosh_compat.fields import Multitoken
 
-from .conftest import emit_ast, search_ids
+from .conftest import emit_ast
+from .conftest import search_ids
 
 
 def test_term(tindex, ereg, parse):

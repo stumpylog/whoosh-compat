@@ -13,7 +13,8 @@ import pytest
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import glob_to_regex
 
-from .conftest import emit_ast, search_ids
+from .conftest import emit_ast
+from .conftest import search_ids
 
 # The analyzed (== indexed) tokens for each fixture doc, per field. Used by
 # ``fnmatch_ids`` below to keep the expected values honest.

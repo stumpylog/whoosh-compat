@@ -5,19 +5,18 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from hypothesis import given, settings
+from hypothesis import given
+from hypothesis import settings
 from hypothesis import strategies as st
 
 import whoosh_compat as wc
 from tests.differential.allowlist import allowed
-from tests.differential.oracle import (
-    ORACLE_REGISTRY,
-    V2_FIELDS,
-    analyze_ast,
-    compat_raw_parse,
-    oracle_parse,
-    to_ast,
-)
+from tests.differential.oracle import ORACLE_REGISTRY
+from tests.differential.oracle import V2_FIELDS
+from tests.differential.oracle import analyze_ast
+from tests.differential.oracle import compat_raw_parse
+from tests.differential.oracle import oracle_parse
+from tests.differential.oracle import to_ast
 from whoosh_compat.ast import normalize
 
 BERLIN = ZoneInfo("Europe/Berlin")

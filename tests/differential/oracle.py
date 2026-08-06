@@ -13,21 +13,31 @@ before the v2->v3/tantivy migration): ``get_schema()`` -> :func:`oracle_schema`,
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC
+from datetime import datetime
+from datetime import timedelta
 from datetime import tzinfo as tzinfo_t
 from typing import cast
 
 import whoosh.query as wq
 from whoosh.analysis import StandardAnalyzer
-from whoosh.fields import BOOLEAN, DATETIME, KEYWORD, NUMERIC, TEXT, Schema
+from whoosh.fields import BOOLEAN
+from whoosh.fields import DATETIME
+from whoosh.fields import KEYWORD
+from whoosh.fields import NUMERIC
+from whoosh.fields import TEXT
+from whoosh.fields import Schema
 from whoosh.qparser import MultifieldParser
-from whoosh.qparser.dateparse import DateParserPlugin, English
+from whoosh.qparser.dateparse import DateParserPlugin
+from whoosh.qparser.dateparse import English
 from whoosh.query import qcore as wq_core
 from whoosh.util.times import timespan
 
 from whoosh_compat import ast
 from whoosh_compat.errors import Diagnostic
-from whoosh_compat.fields import FieldKind, FieldRegistry, FieldSpec
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
 from whoosh_compat.parser.dateparse import DateParserPlugin as CompatDateParserPlugin
 from whoosh_compat.parser.default import MultifieldParser as CompatMultifieldParser
 
