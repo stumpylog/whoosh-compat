@@ -22,8 +22,8 @@ case-folding (DIVERGENCES.md entry 2) is the clearest example: real whoosh's own
 LowercaseFilter over an un-tokenized wildcard/prefix pattern (filters, unlike
 tokenizers, are not skipped by ``tokenize=False``: see
 ``whoosh.analysis.tokenizers.RegexTokenizer.__call__``), so a fielded
-``Entwä*`` query against real whoosh *also* ends up matching against the
-lowercased pattern ``entwä``, exactly like whoosh-compat's explicit
+``Wär*`` query against real whoosh *also* ends up matching against the
+lowercased pattern ``wär``, exactly like whoosh-compat's explicit
 ``pattern_normalizer`` does: both sides match doc 3, not just the tantivy
 side, which is easy to get wrong by assuming whoosh's own wildcard matching
 is raw/case-sensitive. This module's expectations are the ones actually
@@ -74,7 +74,7 @@ BASE = datetime(2020, 4, 15, 10, 30, tzinfo=BERLIN)
 # tag/type/notes/custom_fields), narrowed to the TEXT/KEYWORD fields `ereg`
 # actually registers. Using a single-field default (as the shared `parse`
 # fixture in conftest.py does, fine for that file's single-field checks)
-# would make unfielded multi-field scenarios like "Entwä*" (which only
+# would make unfielded multi-field scenarios like "Wär*" (which only
 # doc 3's *title* (not content) contains, see DOCS) incomparable to the
 # oracle's genuinely-multifield V2_FIELDS search.
 DEFAULT_FIELDS = ["content", "title", "tag"]
@@ -102,9 +102,9 @@ def tantivy_search_ids(tindex, ereg, q, basedate=BASE, tz=BERLIN):
 # ---------------------------------------------------------------------------
 
 _SCENARIO_WORDS = [
-    "shopname", "product1", "product2", "steuer", "wichtig", "Steuer",
-    "Entwässerungsplan", "invoice", "total", "amount", "receipt", "plan",
-    "entwasserung", "basement", "report", "alice", "bob", "foo", "2020",
+    "shopname", "product1", "product2", "billing", "urgent", "Billing",
+    "Wärrantyplan", "invoice", "total", "amount", "receipt", "plan",
+    "warranty", "basement", "report", "alice", "bob", "foo", "2020",
 ]
 
 
@@ -128,13 +128,13 @@ def test_00_analyzer_parity_precondition(ereg):
 
 SCENARIOS_EQUAL = [
     pytest.param(
-        "tag:steuer AND (title:2020 OR (NOT title:2019 AND NOT title:2018 AND created:[2020 TO 2020]))",
+        "tag:billing AND (title:2020 OR (NOT title:2019 AND NOT title:2018 AND created:[2020 TO 2020]))",
         [1],
         id="tag-and-title-or-date-range",
     ),
     pytest.param("shopname product1", [2, 4], id="implicit-and-two-terms"),
     pytest.param(
-        "Entwä*", [3],
+        "Wär*", [3],
         id="capitalized-wildcard-diacritic",
         # NOT a whoosh-vs-whoosh-compat divergence at the search-result
         # level (see module docstring): real whoosh's own field analyzer
@@ -156,9 +156,9 @@ SCENARIOS_EQUAL = [
         # all; see test_created_previous_month_unquoted_is_a_documented_divergence
         # for the unquoted form.
     ),
-    pytest.param("tag:steuer,wichtig", [1], id="keyword-comma-list-unquoted"),
+    pytest.param("tag:billing,urgent", [1], id="keyword-comma-list-unquoted"),
     pytest.param(
-        "tag:'steuer,wichtig'", [1],
+        "tag:'billing,urgent'", [1],
         id="keyword-comma-list-quoted",
         # NOT a search-result divergence, despite allowlist.py documenting
         # a real *parse-time* one here (design: whoosh-compat's
@@ -168,7 +168,7 @@ SCENARIOS_EQUAL = [
         # field's own analyzer (`lower_fold`, which also splits on commas)
         # over that single Term's text (see TantivyEmitter._text_term_query),
         # so the quote-vs-split distinction doesn't survive to search time
-        # either: both sides end up querying tag:steuer AND tag:wichtig
+        # either: both sides end up querying tag:billing AND tag:urgent
         # and match doc 1.
     ),
     pytest.param(
@@ -252,13 +252,20 @@ def test_notes_user_json_subpath_has_no_v2_analogue(windex, tindex, ereg):
 # (DIVERGENCES.md entry 13) never triggers: parity should hold, and does.
 # ---------------------------------------------------------------------------
 
+# Quoted verbatim from the report, including its tag names ("steuer",
+# "valentin"): this is a citation of the real-world issue, not a fixture
+# invention, so it is intentionally not genericized like the rest of this
+# suite's German test vocabulary.
 ISSUE_13568_QUERY = (
     "tag:steuer AND tag:valentin AND "
     "(title:*2024 OR (NOT title:*202[0-3] AND NOT title:*201[0-9] AND created:2024))"
 )
 
 # (id, title, tags, created): designed so every clause of the query is
-# exercised by at least one doc:
+# exercised by at least one doc. The tags match the citation above verbatim
+# (required for the query to mean anything); the titles are this suite's
+# own invented fixture data and carry no such constraint, so they're
+# ordinary generic English:
 #   1: tag match + title:*2024              -> included (first OR branch)
 #   2: tag match, title *ends* 202[0-3]      -> excluded (char-class NOT fails)
 #   3: tag match, no matching title suffix,
@@ -266,11 +273,11 @@ ISSUE_13568_QUERY = (
 #   4: title:*2024 but missing "valentin"    -> excluded (tag AND fails)
 #   5: tag match, title *ends* 201[0-9]      -> excluded (char-class NOT fails)
 DOCS_13568 = [
-    (1, "Steuer 2024", ["steuer", "valentin"], "2024-03-01"),
-    (2, "Steuer 2022", ["steuer", "valentin"], "2022-03-01"),
-    (3, "Steuer Referenz", ["steuer", "valentin"], "2024-05-01"),
-    (4, "Steuer 2024", ["steuer"], "2024-01-01"),
-    (5, "Steuer 2015", ["steuer", "valentin"], "2015-01-01"),
+    (1, "Report 2024", ["steuer", "valentin"], "2024-03-01"),
+    (2, "Report 2022", ["steuer", "valentin"], "2022-03-01"),
+    (3, "Report Reference", ["steuer", "valentin"], "2024-05-01"),
+    (4, "Report 2024", ["steuer"], "2024-01-01"),
+    (5, "Report 2015", ["steuer", "valentin"], "2015-01-01"),
 ]
 
 
@@ -382,7 +389,7 @@ DOCS_STEM = [
     (1, "The system is jumping between states"),
     (2, "It jumps rapidly"),
     (3, "The dog runs and running fast"),
-    (4, "Entwässerung des Kellers ist abgeschlossen"),
+    (4, "Wärranty of the engine is completed"),
 ]
 
 
@@ -453,10 +460,10 @@ def test_stemming_term_query_matches_other_inflected_forms(windex_stem, tindex_s
 
 
 def test_folded_wildcard_matches_diacritic_variant(windex_stem, tindex_stem, ereg_stem):
-    # pattern_normalizer folds "Entwä" -> "entwa" (character-level only, no
+    # pattern_normalizer folds "Wär" -> "war" (character-level only, no
     # stemming attempted on a wildcard fragment): proof point 2: folded
     # wildcard matches.
-    q = "content:Entwä*"
+    q = "content:Wär*"
     expected = [4]
     assert _windex_stem_ids(windex_stem, q) == expected
     assert _tindex_stem_ids(tindex_stem, ereg_stem, q) == expected

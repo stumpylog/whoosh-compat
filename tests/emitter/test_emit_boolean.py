@@ -53,7 +53,7 @@ def test_nested_all_negative(tindex, ereg):
     # MustNot must still be padded so it behaves as "all docs except...",
     # both at the inner And and if it ever bubbles up unpadded.
     node = ast.And(children=(
-        ast.Term(field="tag", text="steuer"),
+        ast.Term(field="tag", text="billing"),
         ast.And(children=(
             ast.Not(child=ast.Term(field="title", text="2019")),
             ast.Not(child=ast.Term(field="title", text="2018")),
@@ -74,7 +74,7 @@ def test_andnot(tindex, ereg):
 
 def test_andmaybe(tindex, ereg):
     node = ast.AndMaybe(
-        required=ast.Term(field="tag", text="steuer"),
+        required=ast.Term(field="tag", text="billing"),
         optional=ast.Term(field="content", text="invoice"),
     )
     q = emit_ast(node, tindex, ereg)
@@ -83,7 +83,7 @@ def test_andmaybe(tindex, ereg):
 
 def test_require_filters_not_scores(tindex, ereg):
     node = ast.Require(
-        scored=ast.Term(field="tag", text="steuer"),
+        scored=ast.Term(field="tag", text="billing"),
         filter_only=ast.Term(field="title", text="2020"),
     )
     q = emit_ast(node, tindex, ereg)

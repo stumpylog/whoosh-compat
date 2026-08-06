@@ -18,9 +18,9 @@ modified:yesterday
 created:"previous week"
 added:"previous month"
 modified:"this year"
-tag:steuer AND (title:2020 OR (NOT title:2019 AND NOT title:2018 AND created:[2020 TO 2020]))
+tag:billing AND (title:2020 OR (NOT title:2019 AND NOT title:2018 AND created:[2020 TO 2020]))
 shopname product1
-Entwä*
+Wär*
 tag:foo,bar
 has_tag:false
 -foo

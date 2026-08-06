@@ -49,11 +49,11 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # hypothesis-fuzzed invalid dates/numbers).
 
     # #2: wildcard/prefix patterns are case-folded via pattern_normalizer in
-    # whoosh-compat (Entwä* matches Entwässerungsplan); whoosh matched raw
+    # whoosh-compat (Wär* matches Wärrantyplan); whoosh matched raw
     # (already-lowercased-at-index-time) terms, so a capitalized wildcard
-    # pattern like "Entwä*" never matched in v2 either: this is a fix, not
+    # pattern like "Wär*" never matched in v2 either: this is a fix, not
     # parity.
-    (re.compile(r"Entwä\*"), "DIVERGENCES.md entry 2: wildcard pattern normalization"),
+    (re.compile(r"Wär\*"), "DIVERGENCES.md entry 2: wildcard pattern normalization"),
 
     # design: whoosh-compat's CommaValuesPlugin treats a *quoted* comma-values
     # field value as a literal (SingleQuotePlugin marks it is_quoted); real

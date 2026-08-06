@@ -19,15 +19,15 @@ from .conftest import search_ids
 # The analyzed (== indexed) tokens for each fixture doc, per field. Used by
 # ``fnmatch_ids`` below to keep the expected values honest.
 TITLE_TOKENS = {
-    1: ["steuer", "2020"],
-    2: ["steuer", "2019"],
-    3: ["entwässerungsplan"],
+    1: ["billing", "2020"],
+    2: ["billing", "2019"],
+    3: ["wärrantyplan"],
     4: ["report", "2020"],
 }
 CONTENT_TOKENS = {
     1: ["invoice", "total", "amount"],
     2: ["receipt", "shopname", "product1"],
-    3: ["plan", "entwasserung", "basement"],
+    3: ["plan", "warranty", "basement"],
     4: ["shopname", "product1", "product2"],
 }
 
@@ -48,7 +48,7 @@ def fnmatch_ids(tokens, pattern):
 @pytest.mark.parametrize("pattern, normalizer, expected", [
     pytest.param("produ*1", None, "produ.*1", id="star-becomes-dot-star"),
     pytest.param("a?b", None, "a.b", id="question-mark-becomes-dot"),
-    pytest.param("Entwä*", str.lower, "entwä.*", id="normalizer-applied-to-literal-run"),
+    pytest.param("Wär*", str.lower, "wär.*", id="normalizer-applied-to-literal-run"),
     # A literal "." must not become "any character".
     pytest.param("a.b*", None, "a\\.b.*", id="literal-metachar-escaped"),
     pytest.param("202[0-3]", None, "202[0-3]", id="character-class-passthrough"),
@@ -98,7 +98,7 @@ def test_glob_to_regex_escapes_class_internal_set_operators(tindex, ereg):
 
 
 @pytest.mark.parametrize("field, tokens, pattern, expected", [
-    pytest.param("title", TITLE_TOKENS, "Entwä*", [3], id="diacritic-prefix-star"),
+    pytest.param("title", TITLE_TOKENS, "Wär*", [3], id="diacritic-prefix-star"),
     pytest.param("content", CONTENT_TOKENS, "produ*1", [2, 4], id="infix-star"),
     pytest.param("content", CONTENT_TOKENS, "product?", [2, 4], id="question-mark"),
     # paperless-ngx issue #13568: saved views use "202[0-3]"-style bracket
@@ -136,7 +136,7 @@ def test_prefix(tindex, ereg):
 def test_prefix_normalizes_and_escapes(tindex, ereg):
     # Prefix text is a *literal*: it is normalized then regex-escaped, so a
     # "[" in it matches only a real "[" (nothing in the fixture).
-    q = emit_ast(ast.Prefix(field="title", text="Entwä"), tindex, ereg)
+    q = emit_ast(ast.Prefix(field="title", text="Wär"), tindex, ereg)
     assert search_ids(tindex[0], q) == [3]
     q = emit_ast(ast.Prefix(field="title", text="202[0-3]"), tindex, ereg)
     assert search_ids(tindex[0], q) == []

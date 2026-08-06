@@ -78,6 +78,5 @@ force-single-line = true
 #   priorized     - whoosh's own original spelling (see whoosh/qparser/
 #                   default.py's _priorized), forked verbatim
 #   ot            - a local variable (`ot = self.OpTagger`), not a word
-#   referenz, ist - German test fixture data, not English prose
 #   runn          - the Porter-stemmed form of "running" used as test data
-ignore-words-list = "unparseable,nd,thur,febuary,priorized,ot,referenz,ist,runn"
+ignore-words-list = "unparseable,nd,thur,febuary,priorized,ot,runn"
