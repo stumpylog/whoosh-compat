@@ -36,7 +36,7 @@ class StubParser:
         self.reports.append(diagnostic)
 
 
-# --- Verbatim brief snippets ---------------------------------------------
+# --- Group-node -> AST construction ---------------------------------------
 
 @pytest.mark.parametrize("group_cls, expected", [
     pytest.param(

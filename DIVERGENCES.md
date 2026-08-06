@@ -6,11 +6,11 @@ reproduce it. Where whoosh-compat (v1) makes a deliberate design choice with
 no v2 equivalent, or restores behavior that the v2->v3 (tantivy) migration
 silently dropped, that's recorded here too rather than left implicit.
 
-Entries 1-11 are the original list from the design spec
-(`docs/superpowers/specs/2026-08-04-whoosh-compat-design.md`, "Initial
-DIVERGENCES entries"), reproduced verbatim. Entries 12+ were added during
-Tasks 11 and 15's triage of the differential (AST-comparison) and
-end-to-end acceptance (full parse -> emit -> search) test suites.
+Entries 1-11 were identified while designing the library, before any code
+existed. Entries 12+ were found later, during triage of the differential
+(AST-comparison, `tests/differential/`) and end-to-end acceptance (full
+parse -> emit -> search, `tests/emitter/test_acceptance_e2e.py`) test
+suites.
 
 ## From v2/Whoosh
 
@@ -177,9 +177,9 @@ end-to-end acceptance (full parse -> emit -> search) test suites.
       whoosh-compat side happens not to matter for any query this
       project's corpus currently exercises.
 
-    See `tests/emitter/test_acceptance_e2e.py`'s module docstring and the
-    Task 15 report for the specific evidence (each case was verified by
-    actually running both pipelines, not by inspection). This does **not**
+    See `tests/emitter/test_acceptance_e2e.py`'s module docstring for the
+    specific evidence (each case was verified by actually running both
+    pipelines, not by inspection). This does **not**
     mean entries 2/12/the comma-quote entry are wrong or should be
     removed — they are still real, reproducible AST-level divergences that
     a different fixture (e.g. dates near a local-midnight boundary) could

@@ -1,7 +1,7 @@
 # Extracted from paperless-ngx src/documents/tests/search/test_translate.py
 # and test_query.py (query strings passed to translate_query/parse_user_query
 # before Tantivy translation, i.e. the whoosh-syntax "raw" side of each case).
-# Re-extracted in full (fix round 1): every string literal reachable as a
+# Extracted in full: every string literal reachable as a
 # translate_query()/parse_user_query() argument, including f-string/
 # parametrize-fed values, not just directly-quoted literals.
 #
@@ -87,7 +87,7 @@ modified:20231201
 created:"previous quarter"
 added:"previous quarter"
 
-# --- KNOWN DIVERGENCE (DIVERGENCES #6, structural not pattern-based): bad
+# --- KNOWN DIVERGENCE (DIVERGENCES.md entry 6, structural not pattern-based): bad
 # date -- test_differential.py skips on any non-empty diagnostics list.
 # (month=13 in the 8-digit compact form.)
 added:20231340
@@ -169,6 +169,6 @@ added:previous quarter
 schäfersee,created:previous year
 created:previous week
 
-# --- KNOWN DIVERGENCE (DIVERGENCES #6, structural not pattern-based): bad
+# --- KNOWN DIVERGENCE (DIVERGENCES.md entry 6, structural not pattern-based): bad
 # number -- test_differential.py skips on any non-empty diagnostics list.
 created:202023

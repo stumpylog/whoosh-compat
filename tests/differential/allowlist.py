@@ -1,15 +1,12 @@
 """Intended divergences between whoosh-compat and the real whoosh (v2)
 oracle. Each entry documents a query pattern that is *expected* to fail the
-structural parity comparison, with a reference to the corresponding entry in
-DIVERGENCES.md (the "Initial DIVERGENCES entries" list in
-``docs/superpowers/specs/2026-08-04-whoosh-compat-design.md``, "From
-v2/Whoosh", entries 1-6) plus new entries this task's triage surfaced (not
-yet numbered -- to be folded into Task 15's DIVERGENCES.md).
+structural parity comparison, with a reference to the corresponding numbered
+entry in DIVERGENCES.md.
 
-Reference-string prefix convention (per standing triage rule: never bake a
-clear whoosh bug into whoosh-compat for parity's sake):
+Reference-string prefix convention (never bake a clear whoosh bug into
+whoosh-compat for parity's sake):
 
-* ``DIVERGENCES #N`` -- already-numbered entries from the design doc.
+* ``DIVERGENCES #N`` -- see DIVERGENCES.md entry N.
 * ``whoosh-bug:`` -- the oracle's behavior is a confirmed defect in real
   whoosh/paperless-v2 (broken parsing, dropped data, wiring that silently
   no-ops); whoosh-compat keeps its own correct behavior and does NOT
@@ -39,7 +36,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             r"(?:\[[^\]]*\]|\S+)"
             r"\^\d"
         ),
-        "DIVERGENCES #3: date-node boost preservation",
+        "DIVERGENCES.md entry 3: date-node boost preservation",
     ),
 
     # #6: unparseable dates/numbers become a structured ErrorLeaf(diagnostic)
@@ -55,7 +52,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # (already-lowercased-at-index-time) terms, so a capitalized wildcard
     # pattern like "Entwä*" never matched in v2 either -- this is a fix, not
     # parity.
-    (re.compile(r"Entwä\*"), "DIVERGENCES #2: wildcard pattern normalization"),
+    (re.compile(r"Entwä\*"), "DIVERGENCES.md entry 2: wildcard pattern normalization"),
 
     # design: whoosh-compat's CommaValuesPlugin treats a *quoted* comma-values
     # field value as a literal (SingleQuotePlugin marks it is_quoted); real
@@ -100,7 +97,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
         ),
     ),
 
-    # NOTE: DIVERGENCES #8 ("attached -foo searches for foo") describes a
+    # NOTE: DIVERGENCES.md entry 8 ("attached -foo searches for foo") describes a
     # *v1-vs-live-v3* (tantivy) divergence, not v1-vs-v2/whoosh -- it does
     # not apply here. Verified directly: a bare leading "-foo" with nothing
     # before it never triggers either parser's NOT-prefix operator (that
@@ -113,7 +110,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # by analogy without verifying it against the actual v2 oracle; removed
     # after confirming "-foo" compares and passes structurally.
 
-    # whoosh-bug (DIVERGENCES #12): real whoosh's range-bound date parsing
+    # whoosh-bug (DIVERGENCES.md entry 12): real whoosh's range-bound date parsing
     # (DateParserPlugin.range_to_dt) calls
     # `self.dateparser.get_parser().date_from(...)` -- the *grammar object's*
     # date_from, not `LocalDateParser.date_from` -- so LocalDateParser's
@@ -185,7 +182,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
         ),
     ),
 
-    # whoosh-bug (DIVERGENCES #13): real whoosh's WildcardPlugin.do_wildcards
+    # whoosh-bug (DIVERGENCES.md entry 13): real whoosh's WildcardPlugin.do_wildcards
     # (and query.terms.Wildcard.normalize(), same root cause) only tests a
     # trailing-star pattern for "*"/"?" before folding it to a Prefix --
     # despite SPECIAL_CHARS = "*?[" including "[" -- so a pattern like
@@ -199,7 +196,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # matched against the (buggy) oracle tree.
     (
         re.compile(r"\btitle:202\[0-3\]\*"),
-        "whoosh-bug (DIVERGENCES #13): Wildcard.normalize() bracket fold drops the character class on a trailing-star pattern",
+        "whoosh-bug (DIVERGENCES.md entry 13): Wildcard.normalize() bracket fold drops the character class on a trailing-star pattern",
     ),
 ]
 

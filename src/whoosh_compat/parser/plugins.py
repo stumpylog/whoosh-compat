@@ -25,12 +25,12 @@
 # those of the authors and should not be interpreted as representing official
 # policies, either expressed or implied, of Matt Chaput.
 
-"""Forked from whoosh's ``qparser/plugins.py``, trimmed to the v1 plugin
-subset (see the task brief for the exact list of deletions) and adapted so
-node ``query()`` methods build :class:`whoosh_compat.ast.Node` trees -- either
-directly (:class:`EveryPlugin`) or by calling hooks on the ``parser`` object
-(``term_query``, ``wildcard_query``, ``prefix_query``, ``range_query``,
-implemented in :mod:`whoosh_compat.parser.default`, Task 9).
+"""Forked from whoosh's ``qparser/plugins.py``, trimmed to the plugin subset
+this library supports (see the README's syntax table for what's in and out)
+and adapted so node ``query()`` methods build :class:`whoosh_compat.ast.Node`
+trees -- either directly (:class:`EveryPlugin`) or by calling hooks on the
+``parser`` object (``term_query``, ``wildcard_query``, ``prefix_query``,
+``range_query``, implemented in :mod:`whoosh_compat.parser.default`).
 
 Two extensions beyond stock whoosh live here:
 
@@ -163,7 +163,9 @@ class WildcardPlugin(TaggingPlugin):
     class PrefixNode(syntax.TextNode):
         """Produced by rewriting a trailing-star-only wildcard. Its
         ``query()`` calls ``parser.prefix_query`` rather than the inherited
-        ``term_query`` (Task 9 turns this into :class:`whoosh_compat.ast.Prefix`).
+        ``term_query`` -- ``QueryParser.prefix_query``
+        (:mod:`whoosh_compat.parser.default`) turns this into
+        :class:`whoosh_compat.ast.Prefix`.
         """
 
         def r(self) -> str:
@@ -179,7 +181,8 @@ class WildcardPlugin(TaggingPlugin):
         # so the text in this node will not be analyzed... just passed
         # straight to the query.
         #
-        # ``query()`` calls ``parser.wildcard_query`` (Task 9), which is
+        # ``query()`` calls ``parser.wildcard_query``
+        # (``QueryParser.wildcard_query``, ``parser/default.py``), which is
         # responsible for the no-wildcard-chars -> Term, "*" alone ->
         # Every, and else -> Wildcard rewrites.
 

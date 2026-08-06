@@ -2,9 +2,9 @@
 results vs full query string -> whoosh-compat parse -> emit -> tantivy search
 results.
 
-This is deliberately a *different* kind of test than ``tests/differential``
-(Task 11): the differential suite compares *parsed ASTs* between
-whoosh-compat and real whoosh, never touching an actual index. This module
+This is deliberately a *different* kind of test than ``tests/differential``:
+the differential suite compares *parsed ASTs* between whoosh-compat and real
+whoosh, never touching an actual index. This module
 instead runs each query string through *both full pipelines end to end* --
 real whoosh against an in-RAM ``windex`` (:func:`whoosh_search_ids`,
 ``tests/emitter/conftest.py``) and whoosh-compat's parser + tantivy emitter
@@ -17,7 +17,7 @@ trees, as the differential suite does) turn out NOT to change the final
 *search results* for any of this fixture's queries, because both backends'
 independent normalization paths still converge on the same effective
 query by the time something actually executes against an index. Wildcard
-case-folding (DIVERGENCES #2) is the clearest example: real whoosh's own
+case-folding (DIVERGENCES.md entry 2) is the clearest example: real whoosh's own
 ``field.process_text(..., tokenize=False)`` call still runs the field's
 LowercaseFilter over an un-tokenized wildcard/prefix pattern (filters, unlike
 tokenizers, are not skipped by ``tokenize=False`` -- see
@@ -25,13 +25,10 @@ tokenizers, are not skipped by ``tokenize=False`` -- see
 ``Entwä*`` query against real whoosh *also* ends up matching against the
 lowercased pattern ``entwä``, exactly like whoosh-compat's explicit
 ``pattern_normalizer`` does -- both sides match doc 3, not just the tantivy
-side, contradicting the assumption (baked into an earlier draft of this
-suite, and into the task brief this suite was built from) that whoosh's own
-wildcard matching was raw/case-sensitive. Where this file's expectations
-disagree with the task brief's inline comments, this module's expectations
-are the ones that were actually run against live whoosh/tantivy indexes;
-see the per-scenario comments below and the Task 15 report for the specific
-evidence.
+side, which is easy to get wrong by assuming whoosh's own wildcard matching
+is raw/case-sensitive. This module's expectations are the ones actually
+observed running against live whoosh/tantivy indexes; see the per-scenario
+comments below for the specific evidence.
 """
 
 from __future__ import annotations
@@ -125,9 +122,8 @@ def test_00_analyzer_parity_precondition(ereg):
 #
 # All ids below were derived by actually running both pipelines against the
 # `windex`/`tindex` fixtures (DOCS, tests/emitter/conftest.py) -- not by
-# eyeballing the fixture -- see the Task 15 report for the verification
-# transcript. Several diverge from the task brief's inline comments, which
-# were written speculatively; each such case is called out explicitly.
+# eyeballing the fixture. Any case where the actual result surprised a naive
+# reading of the fixture is called out explicitly in a comment.
 # ---------------------------------------------------------------------------
 
 SCENARIOS_EQUAL = [
@@ -143,7 +139,7 @@ SCENARIOS_EQUAL = [
         # NOT a whoosh-vs-whoosh-compat divergence at the search-result
         # level (see module docstring): real whoosh's own field analyzer
         # lowercases the un-tokenized wildcard pattern text too, so both
-        # sides match doc 3. DIVERGENCES #2 is real, but purely at the
+        # sides match doc 3. DIVERGENCES.md entry 2 is real, but purely at the
         # *parsed-AST* level (whoosh-compat's pattern_normalizer runs at
         # parse time; whoosh's lowercasing happens implicitly, later,
         # inside query-object construction) -- see test_differential.py's
@@ -178,9 +174,8 @@ SCENARIOS_EQUAL = [
     pytest.param(
         "has_tag:false", [3, 5],
         id="has-tag-false",
-        # Corrected from the task brief's "-> [3]": that comment predates
-        # doc 5 (added for the JSON-subpath emitter suite, Task 14). Doc 5
-        # also has no tags, so it belongs in the has_tag:false result too.
+        # Doc 5 (added for the JSON-subpath emitter suite) also has no tags,
+        # so it belongs in the has_tag:false result alongside doc 3.
     ),
     pytest.param("created:[2020 to]", [1, 4], id="lowercase-to-open-range"),
     pytest.param("added:[now-7d TO now]", [], id="basedate-relative-bracket-range"),
@@ -234,8 +229,7 @@ def test_notes_user_json_subpath_has_no_v2_analogue(windex, tindex, ereg):
     never existed; unsurprisingly, that naive representation doesn't
     happen to satisfy whoosh's own multifield-AND expansion of
     "notes.user:alice" (which requires the literal token "notes" *and* the
-    tokens "user"+"alice" together in one field -- see the Task 15 report
-    for the parsed tree), so it matches nothing.
+    tokens "user"+"alice" together in one field), so it matches nothing.
     """
 
     q = "notes.user:alice"
@@ -248,12 +242,12 @@ def test_notes_user_json_subpath_has_no_v2_analogue(windex, tindex, ereg):
 #
 # The exact real-world query from the issue, run against a small dedicated
 # corpus (not the shared DOCS/tindex fixtures, to avoid disturbing every
-# other emitter test's hardcoded "all docs" expectations -- see the Task 15
-# report). Char classes are genuine v2 fnmatch behavior (whoosh's own
+# other emitter test's hardcoded "all docs" expectations). Char classes are
+# genuine v2 fnmatch behavior (whoosh's own
 # Wildcard query type has always compiled its pattern with
 # ``fnmatch.translate``), and the query's only star is a *leading* one
 # (title:*2024), so whoosh's Wildcard.normalize() trailing-star-fold bug
-# (DIVERGENCES #13) never triggers -- parity should hold, and does.
+# (DIVERGENCES.md entry 13) never triggers -- parity should hold, and does.
 # ---------------------------------------------------------------------------
 
 ISSUE_13568_QUERY = (
@@ -363,7 +357,7 @@ def _stem_fold_analyzer(text: str) -> list[str]:
     Term/Phrase queries. Mirrors real whoosh's actual filter order for
     `StemmingAnalyzer() | CharsetFilter(accent_map)` (stemming runs on the
     lowercased surface form; accent-folding runs last) -- verified directly
-    against a live whoosh index, see the Task 15 report.
+    against a live whoosh index.
     """
     return [porter_stem(w.lower()).translate(accent_map) for w in _WORD_RE.findall(text)]
 

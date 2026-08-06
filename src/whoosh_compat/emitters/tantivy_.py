@@ -362,8 +362,10 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
         Returns ``None`` when the child -- possibly wrapped in one or more
         transparent ``Boosted`` layers -- is a zero-token analyzed TEXT/
-        KEYWORD term. This is the brief's "dropped from the group" rule.
-        ``Boosted`` is unwrapped recursively (rather than only checking a
+        KEYWORD term: such a term is dropped from its enclosing group
+        entirely (whoosh's own behavior when a field's analyzer consumes a
+        token completely, e.g. an all-stopword value). ``Boosted`` is
+        unwrapped recursively (rather than only checking a
         direct ``ast.Term`` child) so ``Boosted(Boosted(Term(...)))`` and
         similar shapes are still dropped correctly instead of turning into
         a live-but-unmatchable ``boost_query(empty_query(), ...)`` clause
@@ -468,7 +470,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         return tantivy.Query.regex_query(self.schema, spec.name, regex)
 
     def visit_termrange(self, node: ast.TermRange) -> tantivy.Query:
-        raise UnsupportedQueryError("text ranges are not supported (DIVERGENCES #5)")
+        raise UnsupportedQueryError("text ranges are not supported (DIVERGENCES.md entry 5)")
 
     def _range_query(
         self, spec, field_type, lo, hi, node: ast.NumericRange | ast.DateRange

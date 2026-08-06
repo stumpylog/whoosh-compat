@@ -1,10 +1,9 @@
-"""Unit tests for whoosh_compat.parser.plugins that don't require the full
-``parse()`` entry point (added in Task 9). These exercise plugin
+"""Unit tests for whoosh_compat.parser.plugins that don't go through the
+full ``whoosh_compat.parse()`` entry point. These exercise plugin
 construction, tagger regexes, and filter functions directly against stub
-parsers/nodes so they can run (and stay green) before Task 9 lands.
+parsers/nodes, in isolation from the rest of the parsing pipeline.
 
-Full end-to-end parsing behavior is covered by tests/test_parser_basics.py,
-which is module-skipped until Task 9 provides ``whoosh_compat.parse``.
+Full end-to-end parsing behavior is covered by tests/test_parser_basics.py.
 """
 
 from __future__ import annotations
@@ -24,7 +23,7 @@ from whoosh_compat.parser import syntax
 
 
 class StubParser:
-    """Minimal stand-in for the Task 9 parser object."""
+    """Minimal stand-in for a ``whoosh_compat.parser.default.QueryParser``."""
 
     fieldname: str | None = None
 

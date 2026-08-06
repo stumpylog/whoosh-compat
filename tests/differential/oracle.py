@@ -489,14 +489,14 @@ def to_ast(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
 
 def unmapped_reason(q: wq.Query) -> str:
     """A specific, auditable reason :func:`to_ast` returned ``None`` for
-    ``q`` -- which concrete whoosh query type had no mapping. Every type in
-    the brief's mapping table (Term/And/Or/Not/AndNot/AndMaybe/Require/
+    ``q`` -- which concrete whoosh query type had no mapping. Every
+    whoosh_compat.ast node type (Term/And/Or/Not/AndNot/AndMaybe/Require/
     Phrase/Prefix/Wildcard/TermRange/NumericRange/DateRange/Every/
     _NullQuery) *is* handled by :func:`_to_ast_node`, so in practice this
     only fires for whoosh query types genuinely outside that table (e.g.
-    ``FuzzyTerm``, ``Sequence``, ``Regex`` -- v1 plugins not implemented
-    per the design doc's "No GtLt / fuzzy-~ / r'regex' / Sequence" note) or
-    a boosted wrapper around one of those.
+    ``FuzzyTerm``, ``Sequence``, ``Regex`` -- plugins this library doesn't
+    implement; see the README's syntax table) or a boosted wrapper around
+    one of those.
     """
 
     return f"oracle-unmappable: whoosh query type {type(q).__name__!r} has no ast.Node mapping"
@@ -538,7 +538,7 @@ def compat_raw_parse(
     (the public API) applies internally.
 
     Mirrors the oracle side's ``parser.parse(text, normalize=False)`` (see
-    module docstring / brief): :func:`analyze_ast` needs to forward-analyze
+    module docstring): :func:`analyze_ast` needs to forward-analyze
     each raw ``Term`` *before* any structural normalization runs, or a
     redundant parenthesized single term that analyzes to zero tokens (e.g.
     ``(title:0)`` -- ``0`` is shorter than StandardAnalyzer's default

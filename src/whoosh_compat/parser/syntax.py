@@ -32,9 +32,9 @@ build :class:`whoosh_compat.ast.Node` trees instead. Field/kind-specific
 decisions (range kind inference, tokenization, term construction) are
 delegated to methods on the ``parser`` object passed into ``query()``
 (``term_query``, ``range_query``, ``report``, ...), implemented in
-:mod:`whoosh_compat.parser.default` (Task 9). This module only concerns
-itself with turning the parsed syntax tree into calls against that API and
-assembling the boolean/grouping structure of the resulting AST.
+:mod:`whoosh_compat.parser.default`. This module only concerns itself with
+turning the parsed syntax tree into calls against that API and assembling
+the boolean/grouping structure of the resulting AST.
 """
 
 from __future__ import annotations
@@ -520,9 +520,9 @@ class RangeNode(SyntaxNode):
     """Syntax node for range queries.
 
     Kind-specific conversion (term/numeric/date range) is not decided here;
-    it's delegated to ``parser.range_query()`` (implemented in Task 9's
-    ``default.py``), which has access to the schema/field spec needed to
-    pick the right :class:`whoosh_compat.ast.Node` subclass.
+    it's delegated to ``parser.range_query()`` (``QueryParser.range_query``,
+    :mod:`whoosh_compat.parser.default`), which has access to the schema/field
+    spec needed to pick the right :class:`whoosh_compat.ast.Node` subclass.
     """
 
     has_fieldname = True

@@ -34,7 +34,7 @@ a successful parse:
 
 * Whoosh's ``DateParserPlugin`` built ``whoosh.query.Term``/``DateRange``
   objects directly against a ``schema``, dropping boost in the process
-  (DIVERGENCES #3). Here, :class:`DateParserPlugin` converts Text/Range
+  (DIVERGENCES.md entry 3). Here, :class:`DateParserPlugin` converts Text/Range
   syntax nodes on DATE/DATETIME fields into a single
   :class:`whoosh_compat.ast.DateRange` -- an exact instant becomes
   ``DateRange(dt, dt, True, True)`` -- and preserves boost via
@@ -829,8 +829,9 @@ class DateParserPlugin(Plugin):
 
     Unlike whoosh's ``DateParserPlugin``, this class does not support the
     "free" undelimited-date tagging mode (``date:last tuesday`` without
-    quotes) -- it wasn't part of the brief and the ambiguity/complexity it
-    adds isn't worth carrying for a feature nothing exercises.
+    quotes) -- paperless v2 never used it (``free=False``), and the
+    ambiguity/complexity it adds isn't worth carrying for a feature nothing
+    exercises.
     """
 
     def __init__(self, basedate: datetime, tz: tzinfo, dateparser: DateParser | None = None) -> None:
@@ -996,7 +997,7 @@ class DateRangeSyntaxNode(syntax.SyntaxNode):
     a DATE/DATETIME field. Always builds a single
     :class:`whoosh_compat.ast.DateRange` -- an exact instant is represented
     as ``DateRange(dt, dt, True, True)`` rather than a term, per
-    DIVERGENCES #3 (whoosh emits ``query.Term`` for exact instants and drops
+    DIVERGENCES.md entry 3 (whoosh emits ``query.Term`` for exact instants and drops
     boost; this fork keeps both a uniform range shape and the boost).
     """
 

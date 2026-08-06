@@ -41,13 +41,13 @@ def test_matches_oracle(q, oracle_reg):
         pytest.skip(reason)
     raw_ast, diagnostics = compat_raw_parse(q, oracle_reg, V2_FIELDS, BERLIN, BASE)
     if diagnostics:
-        # DIVERGENCES #6: any parse producing a diagnostic yields a
+        # DIVERGENCES.md entry 6: any parse producing a diagnostic yields a
         # structured ErrorLeaf on the whoosh-compat side vs whoosh's
         # untyped error_query()/NullQuery-with-.error -- these never
         # compare structurally equal, by construction, for *any* invalid
         # date/number, not just the specific strings the static corpus
         # happens to exercise (see test_hypothesis.py, which discovers
         # many more via fuzzing).
-        pytest.skip("DIVERGENCES #6: ErrorLeaf vs error_query (parse diagnostic present)")
+        pytest.skip("DIVERGENCES.md entry 6: ErrorLeaf vs error_query (parse diagnostic present)")
     got = normalize(analyze_ast(raw_ast, oracle_reg))
     assert got == normalize(expected), f"query: {q!r}"

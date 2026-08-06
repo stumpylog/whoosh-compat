@@ -1,7 +1,6 @@
 # From paperless-ngx docs/usage.md (current HEAD) search section, plus the
 # v2-era docs/usage.md (git show aed9abe48^:docs/usage.md), plus the
-# scenario list from docs/superpowers/specs/2026-08-04-whoosh-compat-design.md
-# (testing section).
+# end-to-end acceptance scenarios in tests/emitter/test_acceptance_e2e.py.
 #
 # See corpus_paperless.txt's header for the section-marker convention and
 # `pytest tests/differential -rs` for the authoritative per-query skip
@@ -69,7 +68,7 @@ tag:steuer AND tag:valentin AND (title:*2024 OR (NOT title:*202[0-3] AND NOT tit
 tag:steuer AND tag:valentin AND (title:*2025 OR (NOT title:*202[0-3] AND NOT title:*201[0-9] AND created:2025))
 
 # --- KNOWN DIVERGENCE (whoosh-bug, allowlist.py): trailing-star bracket
-# fold (DIVERGENCES #13). Real whoosh's Wildcard.normalize() only checks for
+# fold (DIVERGENCES.md entry 13). Real whoosh's Wildcard.normalize() only checks for
 # "*"/"?" (despite SPECIAL_CHARS = "*?["), so a trailing-star pattern
 # containing a character class folds to a Prefix that silently drops the
 # class body -- Prefix('title', '202[0-3]') instead of keeping the class.

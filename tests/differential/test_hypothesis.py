@@ -41,7 +41,7 @@ def test_fuzz_matches_oracle(q):
         return
     raw_ast, diagnostics = compat_raw_parse(q, ORACLE_REGISTRY, V2_FIELDS, BERLIN, BASE)
     if diagnostics:
-        # DIVERGENCES #6: see test_differential.py's identical skip -- any
+        # DIVERGENCES.md entry 6: see test_differential.py's identical skip -- any
         # parse producing a diagnostic (e.g. "asn:A", a bad number) yields a
         # structured ErrorLeaf vs whoosh's untyped error_query()/NullQuery.
         return

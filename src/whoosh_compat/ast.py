@@ -165,7 +165,7 @@ def normalize(node: Node) -> Node:
 
     Applies flattening of nested same-type groups, Nothing/Every
     propagation, duplicate-sibling dedupe, empty-group collapse, single-child
-    unwrap, and boost merging/stripping. See task brief rules 1-8.
+    unwrap, and boost merging/stripping.
 
     Args:
         node: The AST node to normalize.
