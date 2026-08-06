@@ -3,11 +3,11 @@
 The public surface is small and deliberately shaped like a drop-in for code
 that used to build ``whoosh`` query objects directly:
 
-* :func:`parse` -- turn a query string into a :class:`ParseResult` (a
+* :func:`parse`: turn a query string into a :class:`ParseResult` (a
   normalized :class:`whoosh_compat.ast.Node` tree plus any diagnostics
   collected while parsing).
-* :mod:`whoosh_compat.ast` -- the backend-neutral query AST.
-* :mod:`whoosh_compat.fields` -- :class:`FieldSpec`/:class:`FieldRegistry`,
+* :mod:`whoosh_compat.ast`: the backend-neutral query AST.
+* :mod:`whoosh_compat.fields`: :class:`FieldSpec`/:class:`FieldRegistry`,
   used to describe the schema the parser should parse queries against.
 """
 
@@ -53,7 +53,7 @@ __all__ = [
 ]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ParseResult:
     """The result of parsing a query string."""
 

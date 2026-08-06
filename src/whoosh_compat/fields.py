@@ -30,7 +30,7 @@ class Multitoken(Enum):
     FIRST = auto()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class FieldSpec:
     """Specification for a single field in the schema."""
     name: str

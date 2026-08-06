@@ -12,7 +12,7 @@ class DiagnosticKind(Enum):
     UNKNOWN = auto()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Diagnostic:
     """A diagnostic message with optional location information."""
     message: str

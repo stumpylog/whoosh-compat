@@ -13,7 +13,7 @@ from whoosh_compat.errors import Diagnostic
 T = TypeVar("T")
 
 
-@dataclass(frozen=True, kw_only=True)
+@dataclass(frozen=True, kw_only=True, slots=True)
 class Node:
     """Base class for all AST nodes. startchar and endchar are keyword-only.
 
@@ -27,53 +27,53 @@ class Node:
     endchar: int | None = field(default=None, compare=False)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Term(Node):
     """A single term query."""
     field: str | None
     text: str | int | bool
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class And(Node):
     """Intersection (AND) of child nodes."""
     children: tuple[Node, ...]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Or(Node):
     """Union (OR) of child nodes."""
     children: tuple[Node, ...]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Not(Node):
     """Negation (NOT) of a child node."""
     child: Node
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AndNot(Node):
     """Require positive, exclude negative."""
     positive: Node
     negative: Node
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class AndMaybe(Node):
     """Require required, optionally include optional."""
     required: Node
     optional: Node
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Require(Node):
     """Score with scored, filter with filter_only."""
     scored: Node
     filter_only: Node
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Phrase(Node):
     """Phrase query with optional slop."""
     field: str | None
@@ -81,21 +81,21 @@ class Phrase(Node):
     slop: int = 1
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Prefix(Node):
     """Prefix query."""
     field: str | None
     text: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Wildcard(Node):
     """Wildcard pattern query."""
     field: str | None
     pattern: str
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class TermRange(Node):
     """Range query on term values."""
     field: str | None
@@ -105,7 +105,7 @@ class TermRange(Node):
     incl_hi: bool
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class NumericRange(Node):
     """Range query on numeric values."""
     field: str
@@ -115,7 +115,7 @@ class NumericRange(Node):
     incl_hi: bool
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DateRange(Node):
     """Range query on date values."""
     field: str
@@ -125,25 +125,25 @@ class DateRange(Node):
     incl_hi: bool
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Every(Node):
     """Match all documents (optionally in a field)."""
     field: str | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Nothing(Node):
     """Match no documents."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Boosted(Node):
     """Apply a boost factor to a child node."""
     child: Node
     boost: float
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ErrorLeaf(Node):
     """Represent a parse error in the tree."""
     diagnostic: Diagnostic
