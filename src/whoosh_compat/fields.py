@@ -12,6 +12,7 @@ from enum import auto
 
 class FieldKind(Enum):
     """Kinds of fields in the schema."""
+
     TEXT = auto()
     KEYWORD = auto()
     U64 = auto()
@@ -23,6 +24,7 @@ class FieldKind(Enum):
 
 class Multitoken(Enum):
     """How to handle multi-token field values."""
+
     DEFAULT = auto()
     AND = auto()
     OR = auto()
@@ -33,6 +35,7 @@ class Multitoken(Enum):
 @dataclass(frozen=True, slots=True)
 class FieldSpec:
     """Specification for a single field in the schema."""
+
     name: str
     kind: FieldKind
     aliases: tuple[str, ...] = ()
@@ -74,15 +77,11 @@ class FieldRegistry:
         for spec in normalized_specs:
             # Validate: date_only only on DATE
             if spec.date_only and spec.kind != FieldKind.DATE:
-                raise ValueError(
-                    f"Field '{spec.name}': date_only=True only valid on DATE kind"
-                )
+                raise ValueError(f"Field '{spec.name}': date_only=True only valid on DATE kind")
 
             # Validate: JSON requires non-empty subpaths
             if spec.kind == FieldKind.JSON and not spec.subpaths:
-                raise ValueError(
-                    f"Field '{spec.name}': JSON kind requires non-empty subpaths"
-                )
+                raise ValueError(f"Field '{spec.name}': JSON kind requires non-empty subpaths")
 
             # Validate: comma_values only on KEYWORD, U64, TEXT
             if spec.comma_values and spec.kind not in (
@@ -97,15 +96,11 @@ class FieldRegistry:
 
             # Validate: BOOLEAN_EXISTS requires exists_target
             if spec.kind == FieldKind.BOOLEAN_EXISTS and spec.exists_target is None:
-                raise ValueError(
-                    f"Field '{spec.name}': BOOLEAN_EXISTS requires exists_target"
-                )
+                raise ValueError(f"Field '{spec.name}': BOOLEAN_EXISTS requires exists_target")
 
             # Check for duplicate canonical names
             if spec.name in self._by_name:
-                raise ValueError(
-                    f"Field '{spec.name}': duplicate canonical name"
-                )
+                raise ValueError(f"Field '{spec.name}': duplicate canonical name")
 
             # Check for alias collision with canonical names
             for alias in spec.aliases:

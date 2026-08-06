@@ -38,11 +38,13 @@ import whoosh_compat as wc
 from whoosh_compat.emitters.tantivy_ import emit
 
 # 1. Describe the fields the parser and emitter need to know about.
-registry = wc.FieldRegistry([
-    wc.FieldSpec("content", wc.FieldKind.TEXT, analyzer=str.split),
-    wc.FieldSpec("tag", wc.FieldKind.KEYWORD, comma_values=True, analyzer=str.split),
-    wc.FieldSpec("created", wc.FieldKind.DATE, date_only=True, fast=True),
-])
+registry = wc.FieldRegistry(
+    [
+        wc.FieldSpec("content", wc.FieldKind.TEXT, analyzer=str.split),
+        wc.FieldSpec("tag", wc.FieldKind.KEYWORD, comma_values=True, analyzer=str.split),
+        wc.FieldSpec("created", wc.FieldKind.DATE, date_only=True, fast=True),
+    ]
+)
 
 # 2. Parse a whoosh-style query string into a backend-neutral AST.
 result = wc.parse(
@@ -50,7 +52,7 @@ result = wc.parse(
     registry=registry,
     default_fields=["content"],
 )
-result.ast          # normalized AST root
+result.ast  # normalized AST root
 result.diagnostics  # tuple[Diagnostic, ...], e.g. invalid dates
 
 # 3. Emit a tantivy.Query against a real index/schema and search it.

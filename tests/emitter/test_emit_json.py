@@ -21,13 +21,16 @@ from .conftest import emit_ast
 from .conftest import search_ids
 
 
-@pytest.mark.parametrize("text, expected", [
-    pytest.param("alice", [1], id="matches-owning-doc"),
-    pytest.param("bob", [4], id="matches-different-doc"),
-    # Doc 5's notes.user is the raw string a"b\c: proves the parse_query
-    # fallback's quote/backslash escaping round-trips.
-    pytest.param('a"b\\c', [5], id="quote-and-backslash-round-trip"),
-])
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        pytest.param("alice", [1], id="matches-owning-doc"),
+        pytest.param("bob", [4], id="matches-different-doc"),
+        # Doc 5's notes.user is the raw string a"b\c: proves the parse_query
+        # fallback's quote/backslash escaping round-trips.
+        pytest.param('a"b\\c', [5], id="quote-and-backslash-round-trip"),
+    ],
+)
 def test_json_subpath_term(tindex, ereg, text, expected):
     node = ast.Term(field="notes.user", text=text)
     q = emit_ast(node, tindex, ereg)

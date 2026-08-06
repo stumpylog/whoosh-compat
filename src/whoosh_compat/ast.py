@@ -23,6 +23,7 @@ class Node:
     forcing every AST comparison in tests/consumers to also track parser
     source-offset bookkeeping.
     """
+
     startchar: int | None = field(default=None, compare=False)
     endchar: int | None = field(default=None, compare=False)
 
@@ -30,6 +31,7 @@ class Node:
 @dataclass(frozen=True, slots=True)
 class Term(Node):
     """A single term query."""
+
     field: str | None
     text: str | int | bool
 
@@ -37,24 +39,28 @@ class Term(Node):
 @dataclass(frozen=True, slots=True)
 class And(Node):
     """Intersection (AND) of child nodes."""
+
     children: tuple[Node, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class Or(Node):
     """Union (OR) of child nodes."""
+
     children: tuple[Node, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class Not(Node):
     """Negation (NOT) of a child node."""
+
     child: Node
 
 
 @dataclass(frozen=True, slots=True)
 class AndNot(Node):
     """Require positive, exclude negative."""
+
     positive: Node
     negative: Node
 
@@ -62,6 +68,7 @@ class AndNot(Node):
 @dataclass(frozen=True, slots=True)
 class AndMaybe(Node):
     """Require required, optionally include optional."""
+
     required: Node
     optional: Node
 
@@ -69,6 +76,7 @@ class AndMaybe(Node):
 @dataclass(frozen=True, slots=True)
 class Require(Node):
     """Score with scored, filter with filter_only."""
+
     scored: Node
     filter_only: Node
 
@@ -76,6 +84,7 @@ class Require(Node):
 @dataclass(frozen=True, slots=True)
 class Phrase(Node):
     """Phrase query with optional slop."""
+
     field: str | None
     text: str
     slop: int = 1
@@ -84,6 +93,7 @@ class Phrase(Node):
 @dataclass(frozen=True, slots=True)
 class Prefix(Node):
     """Prefix query."""
+
     field: str | None
     text: str
 
@@ -91,6 +101,7 @@ class Prefix(Node):
 @dataclass(frozen=True, slots=True)
 class Wildcard(Node):
     """Wildcard pattern query."""
+
     field: str | None
     pattern: str
 
@@ -98,6 +109,7 @@ class Wildcard(Node):
 @dataclass(frozen=True, slots=True)
 class TermRange(Node):
     """Range query on term values."""
+
     field: str | None
     lo: str | None
     hi: str | None
@@ -108,6 +120,7 @@ class TermRange(Node):
 @dataclass(frozen=True, slots=True)
 class NumericRange(Node):
     """Range query on numeric values."""
+
     field: str
     lo: int | None
     hi: int | None
@@ -118,6 +131,7 @@ class NumericRange(Node):
 @dataclass(frozen=True, slots=True)
 class DateRange(Node):
     """Range query on date values."""
+
     field: str
     lo: datetime | None
     hi: datetime | None
@@ -128,6 +142,7 @@ class DateRange(Node):
 @dataclass(frozen=True, slots=True)
 class Every(Node):
     """Match all documents (optionally in a field)."""
+
     field: str | None = None
 
 
@@ -139,6 +154,7 @@ class Nothing(Node):
 @dataclass(frozen=True, slots=True)
 class Boosted(Node):
     """Apply a boost factor to a child node."""
+
     child: Node
     boost: float
 
@@ -146,6 +162,7 @@ class Boosted(Node):
 @dataclass(frozen=True, slots=True)
 class ErrorLeaf(Node):
     """Represent a parse error in the tree."""
+
     diagnostic: Diagnostic
 
 

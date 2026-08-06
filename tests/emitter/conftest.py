@@ -16,10 +16,46 @@ from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 
 DOCS = [  # (id, title, content, tags, asn, created_iso, added_iso, notes)
-    (1, "Billing 2020", "invoice total amount", ["billing", "urgent"], 100, "2020-03-15", "2020-03-15T10:00:00Z", {"note": "check this", "user": "alice"}),
-    (2, "Billing 2019", "receipt shopname product1", ["billing"], 101, "2019-06-01", "2019-06-01T09:00:00Z", None),
-    (3, "Wärrantyplan", "plan warranty basement", [], 102, "2018-03-23", "2018-03-23T08:00:00Z", None),
-    (4, "Report 2020", "shopname product1 product2", ["report"], 103, "2020-11-30", "2020-11-30T12:00:00Z", {"note": "final", "user": "bob"}),
+    (
+        1,
+        "Billing 2020",
+        "invoice total amount",
+        ["billing", "urgent"],
+        100,
+        "2020-03-15",
+        "2020-03-15T10:00:00Z",
+        {"note": "check this", "user": "alice"},
+    ),
+    (
+        2,
+        "Billing 2019",
+        "receipt shopname product1",
+        ["billing"],
+        101,
+        "2019-06-01",
+        "2019-06-01T09:00:00Z",
+        None,
+    ),
+    (
+        3,
+        "Wärrantyplan",
+        "plan warranty basement",
+        [],
+        102,
+        "2018-03-23",
+        "2018-03-23T08:00:00Z",
+        None,
+    ),
+    (
+        4,
+        "Report 2020",
+        "shopname product1 product2",
+        ["report"],
+        103,
+        "2020-11-30",
+        "2020-11-30T12:00:00Z",
+        {"note": "final", "user": "bob"},
+    ),
     # Doc 5 exists solely to exercise JSON-subpath emission (test_emit_json.py):
     # a "user" value containing both a double-quote and a backslash, to prove
     # the parse_query fallback's escaping round-trips. Its other fields are
@@ -27,7 +63,16 @@ DOCS = [  # (id, title, content, tags, asn, created_iso, added_iso, notes)
     # rest of the emitter suite (see conftest module docstring note below):
     # except where a doc without tags/an "every doc" query genuinely must
     # include it; those expectations were updated accordingly.
-    (5, "Miscellaneous Doc", "assorted filler content only", [], 99, "2019-03-01", "2019-03-01T00:00:00Z", {"user": 'a"b\\c'}),
+    (
+        5,
+        "Miscellaneous Doc",
+        "assorted filler content only",
+        [],
+        99,
+        "2019-03-01",
+        "2019-03-01T00:00:00Z",
+        {"user": 'a"b\\c'},
+    ),
 ]
 
 
@@ -88,17 +133,25 @@ def ereg():
     Analyzer/pattern_normalizer match tantivy's 'default' tokenizer so
     emitted term text lines up with what's actually indexed.
     """
-    return FieldRegistry([
-        FieldSpec("content", FieldKind.TEXT, analyzer=lower_fold, pattern_normalizer=str.lower),
-        FieldSpec("title", FieldKind.TEXT, analyzer=lower_fold, pattern_normalizer=str.lower),
-        FieldSpec("tag", FieldKind.KEYWORD, analyzer=lower_fold, pattern_normalizer=lambda s: s.lower(), comma_values=True),
-        FieldSpec("tag_id", FieldKind.U64, comma_values=True, fast=True),
-        FieldSpec("asn", FieldKind.U64, fast=True),
-        FieldSpec("created", FieldKind.DATE, date_only=True, fast=True),
-        FieldSpec("added", FieldKind.DATETIME, fast=True),
-        FieldSpec("has_tag", FieldKind.BOOLEAN_EXISTS, exists_target="tag_id"),
-        FieldSpec("notes", FieldKind.JSON, subpaths=("note", "user")),
-    ])
+    return FieldRegistry(
+        [
+            FieldSpec("content", FieldKind.TEXT, analyzer=lower_fold, pattern_normalizer=str.lower),
+            FieldSpec("title", FieldKind.TEXT, analyzer=lower_fold, pattern_normalizer=str.lower),
+            FieldSpec(
+                "tag",
+                FieldKind.KEYWORD,
+                analyzer=lower_fold,
+                pattern_normalizer=lambda s: s.lower(),
+                comma_values=True,
+            ),
+            FieldSpec("tag_id", FieldKind.U64, comma_values=True, fast=True),
+            FieldSpec("asn", FieldKind.U64, fast=True),
+            FieldSpec("created", FieldKind.DATE, date_only=True, fast=True),
+            FieldSpec("added", FieldKind.DATETIME, fast=True),
+            FieldSpec("has_tag", FieldKind.BOOLEAN_EXISTS, exists_target="tag_id"),
+            FieldSpec("notes", FieldKind.JSON, subpaths=("note", "user")),
+        ]
+    )
 
 
 @pytest.fixture

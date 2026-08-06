@@ -16,14 +16,22 @@ def dparse(q, reg):
     return wc.parse(q, registry=reg, default_fields=["content"], tz=BERLIN, basedate=BASE)
 
 
-@pytest.mark.parametrize("query", [
-    pytest.param("created:2020", id="bare-year-implies-year-range"),
-    pytest.param("created:[2020 TO 2020]", id="explicit-same-year-range-is-equivalent"),
-])
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("created:2020", id="bare-year-implies-year-range"),
+        pytest.param("created:[2020 TO 2020]", id="explicit-same-year-range-is-equivalent"),
+    ],
+)
 def test_year_precision(reg, query):
     r = dparse(query, reg).ast
-    assert r == ast.DateRange(field="created", lo=datetime(2020, 1, 1, tzinfo=UTC),
-                              hi=datetime(2021, 1, 1, tzinfo=UTC), incl_lo=True, incl_hi=False)
+    assert r == ast.DateRange(
+        field="created",
+        lo=datetime(2020, 1, 1, tzinfo=UTC),
+        hi=datetime(2021, 1, 1, tzinfo=UTC),
+        incl_lo=True,
+        incl_hi=False,
+    )
 
 
 def test_open_upper(reg):
@@ -65,28 +73,38 @@ def test_datetime_boost_preserved(reg):
 
 # --- Daynames grammar (parser/dateparse.py:625-637) ------------------------
 
-@pytest.mark.parametrize("query, expected_date", [
-    # BASE is 2026-08-04, a Tuesday.
-    pytest.param("added:'next monday'", datetime(2026, 8, 10), id="next-monday"),
-    pytest.param("added:'last friday'", datetime(2026, 7, 31), id="last-friday"),
-    pytest.param("added:'next tuesday'", datetime(2026, 8, 11),
-                 id="next-same-weekday-wraps-a-week"),
-])
+
+@pytest.mark.parametrize(
+    "query, expected_date",
+    [
+        # BASE is 2026-08-04, a Tuesday.
+        pytest.param("added:'next monday'", datetime(2026, 8, 10), id="next-monday"),
+        pytest.param("added:'last friday'", datetime(2026, 7, 31), id="last-friday"),
+        pytest.param(
+            "added:'next tuesday'", datetime(2026, 8, 11), id="next-same-weekday-wraps-a-week"
+        ),
+    ],
+)
 def test_dayname_keywords(reg, query, expected_date):
     r = dparse(query, reg).ast
-    assert r.lo == datetime(expected_date.year, expected_date.month, expected_date.day,
-                            tzinfo=BERLIN).astimezone(UTC)
+    assert r.lo == datetime(
+        expected_date.year, expected_date.month, expected_date.day, tzinfo=BERLIN
+    ).astimezone(UTC)
 
 
 # --- Time12 grammar (parser/dateparse.py:647-657) ---------------------------
 
-@pytest.mark.parametrize("query, hour, minute, second", [
-    pytest.param("added:'3pm'", 15, 0, 0, id="3pm-bare-hour"),
-    pytest.param("added:'12am'", 0, 0, 0, id="12am-is-midnight-hour"),
-    pytest.param("added:'12pm'", 12, 0, 0, id="12pm-is-noon-hour"),
-    pytest.param("added:'5:30am'", 5, 30, 0, id="5-30am-with-minutes"),
-    pytest.param("added:'5:30:15pm'", 17, 30, 15, id="5-30-15pm-with-seconds"),
-])
+
+@pytest.mark.parametrize(
+    "query, hour, minute, second",
+    [
+        pytest.param("added:'3pm'", 15, 0, 0, id="3pm-bare-hour"),
+        pytest.param("added:'12am'", 0, 0, 0, id="12am-is-midnight-hour"),
+        pytest.param("added:'12pm'", 12, 0, 0, id="12pm-is-noon-hour"),
+        pytest.param("added:'5:30am'", 5, 30, 0, id="5-30am-with-minutes"),
+        pytest.param("added:'5:30:15pm'", 17, 30, 15, id="5-30-15pm-with-seconds"),
+    ],
+)
 def test_time12_keywords(reg, query, hour, minute, second):
     r = dparse(query, reg).ast
     lo_local = r.lo.astimezone(BERLIN)
@@ -94,6 +112,7 @@ def test_time12_keywords(reg, query, hour, minute, second):
 
 
 # --- Other relative-calendar keywords ---------------------------------------
+
 
 def test_previous_year(reg):
     r = dparse("added:'previous year'", reg).ast
@@ -137,10 +156,13 @@ def test_now_keyword(reg):
     assert r.incl_lo and r.incl_hi  # an exact instant, not a period
 
 
-@pytest.mark.parametrize("query, hour, minute, second", [
-    pytest.param("added:midnight", 0, 0, 0, id="midnight"),
-    pytest.param("added:noon", 12, 0, 0, id="noon"),
-])
+@pytest.mark.parametrize(
+    "query, hour, minute, second",
+    [
+        pytest.param("added:midnight", 0, 0, 0, id="midnight"),
+        pytest.param("added:noon", 12, 0, 0, id="noon"),
+    ],
+)
 def test_midnight_noon(reg, query, hour, minute, second):
     r = dparse(query, reg).ast
     lo_local = r.lo.astimezone(BERLIN)
@@ -154,15 +176,19 @@ def test_tomorrow(reg):
 
 # --- dmy/mdy/ymd/ydm and month-name sequences (English.setup's self.dmy) ---
 
-@pytest.mark.parametrize("query", [
-    pytest.param("created:'4 august 2020'", id="day-month-year"),
-    pytest.param("created:'august 4 2020'", id="month-day-year"),
-    pytest.param("created:'2020 august 4'", id="year-month-day"),
-    pytest.param("created:'2020 4 august'", id="year-day-month"),
-    pytest.param("created:'4 august'", id="day-month-no-year-uses-basedate"),
-    pytest.param("created:'august 4'", id="month-day-no-year-uses-basedate"),
-    pytest.param("created:'august 2020'", id="month-year"),
-])
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("created:'4 august 2020'", id="day-month-year"),
+        pytest.param("created:'august 4 2020'", id="month-day-year"),
+        pytest.param("created:'2020 august 4'", id="year-month-day"),
+        pytest.param("created:'2020 4 august'", id="year-day-month"),
+        pytest.param("created:'4 august'", id="day-month-no-year-uses-basedate"),
+        pytest.param("created:'august 4'", id="month-day-no-year-uses-basedate"),
+        pytest.param("created:'august 2020'", id="month-year"),
+    ],
+)
 def test_named_month_sequences(reg, query):
     r = dparse(query, reg).ast
     assert isinstance(r, ast.DateRange)
@@ -179,6 +205,7 @@ def test_month_alone(reg):
 
 # --- Compact numeric "simple" sequence (DateParser.__init__'s self.simple) -
 
+
 def test_compact_numeric_datetime(reg):
     r = dparse("added:'20200304'", reg).ast
     assert r.lo == datetime(2020, 3, 4, tzinfo=BERLIN).astimezone(UTC)
@@ -193,12 +220,14 @@ def test_compact_numeric_datetime_progressive_partial(reg):
 
 # --- plusdate / nowcompact (Combo/PlusMinus grammar) -----------------------
 
+
 def test_plusdate_years_months_weeks_combo(reg):
     r = dparse("added:'-1y2mo3w'", reg).ast
     assert isinstance(r, ast.DateRange)
 
 
 # --- Range queries combining two date expressions (range_to_node) ---------
+
 
 def test_range_both_bounds_named_dates(reg):
     r = dparse("created:[2020-01-01 TO 2020-12-31]", reg).ast
@@ -232,6 +261,7 @@ def test_range_bad_end_diagnostic(reg):
 
 
 # --- torange Combo grammar (free "X to Y" text inside one field value) -----
+
 
 def test_torange_combo_basic(reg):
     r = dparse("added:'3pm to 5pm'", reg).ast
@@ -282,14 +312,16 @@ def test_dateparser_parse_method_direct() -> None:
     # Unlike DateParserPlugin (which turns a period into an exclusive
     # ceil+1us upper bound), DateParser.parse() returns times.py's raw
     # disambiguated() result: an inclusive floor/ceil timespan.
-    assert result == timespan(datetime(2020, 1, 1, 0, 0, 0, 0),
-                               datetime(2020, 12, 31, 23, 59, 59, 999999))
+    assert result == timespan(
+        datetime(2020, 1, 1, 0, 0, 0, 0), datetime(2020, 12, 31, 23, 59, 59, 999999)
+    )
     assert pos == 4
 
 
 # --- Low-level grammar-class internals (unreachable via whoosh_compat.parse
 # because DateParserPlugin only ever calls .date_from(), never .parse(),
 # and never triggers debug tracing or repr()) ------------------------------
+
 
 def test_dateparse_internals_repr_and_debug() -> None:
     from whoosh_compat.parser import dateparse as dp

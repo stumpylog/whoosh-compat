@@ -35,16 +35,24 @@ def test_json_unregistered_subpath_demotes(reg):
 
 
 def test_numeric_range(reg):
-    assert parse("asn:[10 TO 20]", reg) == ast.NumericRange(field="asn", lo=10, hi=20, incl_lo=True, incl_hi=True)
+    assert parse("asn:[10 TO 20]", reg) == ast.NumericRange(
+        field="asn", lo=10, hi=20, incl_lo=True, incl_hi=True
+    )
 
 
 def test_numeric_range_open(reg):
-    assert parse("asn:[10 TO]", reg) == ast.NumericRange(field="asn", lo=10, hi=None, incl_lo=True, incl_hi=True)
+    assert parse("asn:[10 TO]", reg) == ast.NumericRange(
+        field="asn", lo=10, hi=None, incl_lo=True, incl_hi=True
+    )
 
 
 def test_field_boosts(reg):
-    t = wc.parse("aaa title:bbb", registry=reg, default_fields=["content", "title"],
-                 field_boosts={"title": 2.0}).ast
+    t = wc.parse(
+        "aaa title:bbb",
+        registry=reg,
+        default_fields=["content", "title"],
+        field_boosts={"title": 2.0},
+    ).ast
     # expansion copy of 'aaa' into title is boosted; explicit title:bbb is NOT
     or_group = t.children[0]
     assert ast.Boosted(ast.Term(field="title", text="aaa"), 2.0) in or_group.children

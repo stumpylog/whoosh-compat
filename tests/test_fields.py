@@ -12,6 +12,7 @@ from whoosh_compat.fields import FieldSpec
 # Test resolve(): canonical names and aliases
 # ============================================================================
 
+
 def test_resolve_by_canonical_name():
     """resolve() finds a spec by its canonical name."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
@@ -37,6 +38,7 @@ def test_resolve_unknown_returns_none():
 # ============================================================================
 # Test resolve_json(): dotted path resolution
 # ============================================================================
+
 
 def test_resolve_json_simple_path():
     """resolve_json() splits on first dot and validates subpath."""
@@ -95,6 +97,7 @@ def test_resolve_json_no_dot():
 # Test __contains__: in operator
 # ============================================================================
 
+
 def test_contains_canonical_name():
     """in operator returns True for canonical name."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
@@ -131,6 +134,7 @@ def test_contains_invalid_path():
 # Test __iter__: iteration over specs
 # ============================================================================
 
+
 def test_iter_specs():
     """Iteration yields FieldSpec objects in insertion order."""
     spec1 = FieldSpec(name="title", kind=FieldKind.TEXT)
@@ -157,6 +161,7 @@ def test_iter_deduplicates():
 # ============================================================================
 # Validation: Duplicate Names and Aliases
 # ============================================================================
+
 
 def test_validation_duplicate_canonical_names():
     """ValueError if two specs have the same canonical name."""
@@ -185,6 +190,7 @@ def test_validation_duplicate_aliases():
 # ============================================================================
 # Validation: BOOLEAN_EXISTS
 # ============================================================================
+
 
 def test_validation_boolean_exists_requires_target():
     """ValueError if BOOLEAN_EXISTS spec lacks exists_target."""
@@ -244,6 +250,7 @@ def test_validation_boolean_exists_target_fast_is_valid():
 # Validation: JSON
 # ============================================================================
 
+
 def test_validation_json_requires_subpaths():
     """ValueError if JSON spec has empty subpaths."""
     spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=())
@@ -261,6 +268,7 @@ def test_validation_json_with_subpaths_is_valid():
 # ============================================================================
 # Validation: comma_values
 # ============================================================================
+
 
 def test_validation_comma_values_on_keyword():
     """comma_values=True is valid on KEYWORD."""
@@ -306,6 +314,7 @@ def test_validation_comma_values_on_json_invalid():
 # Validation: date_only
 # ============================================================================
 
+
 def test_validation_date_only_on_date_true():
     """date_only=True on DATE is valid."""
     spec = FieldSpec(name="created", kind=FieldKind.DATE, date_only=True)
@@ -332,6 +341,7 @@ def test_validation_date_only_on_non_date_invalid():
 # ============================================================================
 # Integration: Multiple specs with various validations
 # ============================================================================
+
 
 def test_registry_with_multiple_specs():
     """Registry handles multiple valid specs."""
@@ -362,6 +372,7 @@ def test_registry_with_multiple_specs():
 # ============================================================================
 # Edge cases
 # ============================================================================
+
 
 def test_empty_registry():
     """Empty registry works."""

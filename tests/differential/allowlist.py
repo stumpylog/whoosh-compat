@@ -39,7 +39,6 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
         ),
         "DIVERGENCES.md entry 3: date-node boost preservation",
     ),
-
     # #6: unparseable dates/numbers become a structured ErrorLeaf(diagnostic)
     # in whoosh-compat vs whoosh's untyped error_query()/NullQuery-with-.error.
     # This isn't a single-pattern allowlist entry: any parse that reports a
@@ -47,22 +46,22 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # skip whenever ``result.diagnostics`` is non-empty rather than matching
     # a query pattern here (a fixed regex here couldn't keep up with
     # hypothesis-fuzzed invalid dates/numbers).
-
     # #2: wildcard/prefix patterns are case-folded via pattern_normalizer in
     # whoosh-compat (Wär* matches Wärrantyplan); whoosh matched raw
     # (already-lowercased-at-index-time) terms, so a capitalized wildcard
     # pattern like "Wär*" never matched in v2 either: this is a fix, not
     # parity.
     (re.compile(r"Wär\*"), "DIVERGENCES.md entry 2: wildcard pattern normalization"),
-
     # design: whoosh-compat's CommaValuesPlugin treats a *quoted* comma-values
     # field value as a literal (SingleQuotePlugin marks it is_quoted); real
     # whoosh has no such plugin at all: its KEYWORD(commas=True) analyzer
     # always splits on commas at analysis time, quoted or not, so
     # "tag:'foo,bar'" still expands to tag:foo AND tag:bar upstream. Not a
     # whoosh bug: whoosh simply never had this feature to begin with.
-    (re.compile(r"tag:'foo,bar'"), "design: comma_values quote-escape is a whoosh-compat-only feature"),
-
+    (
+        re.compile(r"tag:'foo,bar'"),
+        "design: comma_values quote-escape is a whoosh-compat-only feature",
+    ),
     # design: JSON dotted-path fields (custom_fields.value, notes.user, ...)
     # aren't registered in the v2 oracle schema/registry (v2 whoosh has no
     # JSON subpath concept at all), so on *both* sides the field is
@@ -97,7 +96,6 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " tagger even though neither side has the field registered"
         ),
     ),
-
     # NOTE: DIVERGENCES.md entry 8 ("attached -foo searches for foo") describes
     # a divergence between whoosh-compat and paperless-ngx's live tantivy-based
     # search (not one between whoosh-compat and real whoosh): it does
@@ -111,7 +109,6 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # An earlier version of this allowlist wrongly carried a "#8" entry here
     # by analogy without verifying it against the actual v2 oracle; removed
     # after confirming "-foo" compares and passes structurally.
-
     # whoosh-bug (DIVERGENCES.md entry 12): real whoosh's range-bound date parsing
     # (DateParserPlugin.range_to_dt) calls
     # `self.dateparser.get_parser().date_from(...)`, the *grammar object's*
@@ -136,7 +133,6 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " instead of reproducing the bug"
         ),
     ),
-
     # design: whoosh-compat's date grammar adds new keywords (previous week/
     # month/quarter/year) directly to the English grammar (see
     # parser.dateparse module docstring), usable as a single quoted phrase
@@ -166,7 +162,6 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " whoosh-compat's parser scope"
         ),
     ),
-
     # design: a bare "*" wildcard on a field (`title:*`) whoosh-compat
     # simplifies to Every(field) (see QueryParser.wildcard_query's
     # docstring: "the text is exactly '*' -> Every"); real whoosh's
@@ -183,7 +178,6 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " a literal Wildcard('*') in whoosh"
         ),
     ),
-
     # whoosh-bug (DIVERGENCES.md entry 13): real whoosh's WildcardPlugin.do_wildcards
     # (and query.terms.Wildcard.normalize(), same root cause) only tests a
     # trailing-star pattern for "*"/"?" before folding it to a Prefix:

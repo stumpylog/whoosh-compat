@@ -159,11 +159,12 @@ def _make_oracle_registry() -> FieldRegistry:
                 FieldKind.BOOLEAN_EXISTS,
                 exists_target="correspondent_id",
             ),
+            FieldSpec("tag", FieldKind.KEYWORD, comma_values=True, analyzer=_analyze_keyword_lower),
             FieldSpec(
-                "tag", FieldKind.KEYWORD, comma_values=True, analyzer=_analyze_keyword_lower
-            ),
-            FieldSpec(
-                "tag_id", FieldKind.KEYWORD, comma_values=True, analyzer=_analyze_keyword,
+                "tag_id",
+                FieldKind.KEYWORD,
+                comma_values=True,
+                analyzer=_analyze_keyword,
                 fast=True,
             ),
             FieldSpec("has_tag", FieldKind.BOOLEAN_EXISTS, exists_target="tag_id"),
@@ -186,15 +187,15 @@ def _make_oracle_registry() -> FieldRegistry:
                 exists_target="custom_field_count",
             ),
             FieldSpec(
-                "custom_fields_id", FieldKind.KEYWORD, comma_values=True,
+                "custom_fields_id",
+                FieldKind.KEYWORD,
+                comma_values=True,
                 analyzer=_analyze_keyword,
             ),
             FieldSpec("owner", FieldKind.TEXT, analyzer=_analyze),
             FieldSpec("owner_id", FieldKind.U64, fast=True),
             FieldSpec("has_owner", FieldKind.BOOLEAN_EXISTS, exists_target="owner_id"),
-            FieldSpec(
-                "viewer_id", FieldKind.KEYWORD, comma_values=True, analyzer=_analyze_keyword
-            ),
+            FieldSpec("viewer_id", FieldKind.KEYWORD, comma_values=True, analyzer=_analyze_keyword),
             FieldSpec("checksum", FieldKind.TEXT, analyzer=_analyze),
             FieldSpec("page_count", FieldKind.U64),
             FieldSpec("original_filename", FieldKind.TEXT, analyzer=_analyze),
@@ -296,9 +297,7 @@ def _rewrite_natural_date_keywords(q: str, basedate: datetime, tz: tzinfo_t) -> 
         elif keyword == "previous quarter":
             current_quarter = (local_now.month - 1) // 3 + 1
             this_quarter_start_month = (current_quarter - 1) * 3 + 1
-            this_quarter_start = datetime(
-                local_now.year, this_quarter_start_month, 1, tzinfo=tz
-            )
+            this_quarter_start = datetime(local_now.year, this_quarter_start_month, 1, tzinfo=tz)
             start = _add_months(this_quarter_start, -3)
             end = this_quarter_start - timedelta(seconds=1)
         elif keyword == "previous year":
@@ -436,8 +435,11 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
 
     if isinstance(q, wq.TermRange):
         return ast.TermRange(
-            field=q.fieldname, lo=q.start, hi=q.end,
-            incl_lo=not q.startexcl, incl_hi=not q.endexcl,
+            field=q.fieldname,
+            lo=q.start,
+            hi=q.end,
+            incl_lo=not q.startexcl,
+            incl_hi=not q.endexcl,
         )
 
     if isinstance(q, wq.DateRange):
@@ -452,8 +454,11 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
 
     if isinstance(q, wq.NumericRange):
         return ast.NumericRange(
-            field=q.fieldname, lo=q.start, hi=q.end,
-            incl_lo=not q.startexcl, incl_hi=not q.endexcl,
+            field=q.fieldname,
+            lo=q.start,
+            hi=q.end,
+            incl_lo=not q.startexcl,
+            incl_hi=not q.endexcl,
         )
 
     if isinstance(q, wq.Every):

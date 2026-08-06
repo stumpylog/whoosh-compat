@@ -66,24 +66,19 @@ class TestNodeConstruction:
 
     def test_andnot_construction(self):
         an = AndNot(
-            positive=Term(field=None, text="include"),
-            negative=Term(field=None, text="exclude")
+            positive=Term(field=None, text="include"), negative=Term(field=None, text="exclude")
         )
         assert an.positive.text == "include"
         assert an.negative.text == "exclude"
 
     def test_andmaybe_construction(self):
-        am = AndMaybe(
-            required=Term(field=None, text="req"),
-            optional=Term(field=None, text="opt")
-        )
+        am = AndMaybe(required=Term(field=None, text="req"), optional=Term(field=None, text="opt"))
         assert am.required.text == "req"
         assert am.optional.text == "opt"
 
     def test_require_construction(self):
         r = Require(
-            scored=Term(field=None, text="score"),
-            filter_only=Term(field=None, text="filter")
+            scored=Term(field=None, text="score"), filter_only=Term(field=None, text="filter")
         )
         assert r.scored.text == "score"
         assert r.filter_only.text == "filter"
@@ -243,16 +238,17 @@ class TestVisitor:
         assert Counter().visit(tree) == 2
 
     def test_visitor_dispatch_nested(self):
-        tree = And(children=(
-            Term(field=None, text="a"),
-            Or(children=(Term(field=None, text="b"), Term(field=None, text="c")))
-        ))
+        tree = And(
+            children=(
+                Term(field=None, text="a"),
+                Or(children=(Term(field=None, text="b"), Term(field=None, text="c"))),
+            )
+        )
         assert Counter().visit(tree) == 3
 
     def test_visitor_dispatch_with_boost(self):
         tree = Boosted(
-            child=And(children=(Term(field=None, text="a"), Term(field=None, text="b"))),
-            boost=2.0
+            child=And(children=(Term(field=None, text="a"), Term(field=None, text="b"))), boost=2.0
         )
         assert Counter().visit(tree) == 2
 

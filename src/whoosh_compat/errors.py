@@ -7,6 +7,7 @@ from enum import auto
 
 class DiagnosticKind(Enum):
     """Kinds of diagnostics that can be reported during query processing."""
+
     BAD_DATE = auto()
     BAD_NUMBER = auto()
     UNKNOWN = auto()
@@ -15,6 +16,7 @@ class DiagnosticKind(Enum):
 @dataclass(frozen=True, slots=True)
 class Diagnostic:
     """A diagnostic message with optional location information."""
+
     message: str
     kind: DiagnosticKind
     startchar: int | None

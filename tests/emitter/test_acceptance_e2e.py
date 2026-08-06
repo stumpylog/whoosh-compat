@@ -102,9 +102,25 @@ def tantivy_search_ids(tindex, ereg, q, basedate=BASE, tz=BERLIN):
 # ---------------------------------------------------------------------------
 
 _SCENARIO_WORDS = [
-    "shopname", "product1", "product2", "billing", "urgent", "Billing",
-    "Wärrantyplan", "invoice", "total", "amount", "receipt", "plan",
-    "warranty", "basement", "report", "alice", "bob", "foo", "2020",
+    "shopname",
+    "product1",
+    "product2",
+    "billing",
+    "urgent",
+    "Billing",
+    "Wärrantyplan",
+    "invoice",
+    "total",
+    "amount",
+    "receipt",
+    "plan",
+    "warranty",
+    "basement",
+    "report",
+    "alice",
+    "bob",
+    "foo",
+    "2020",
 ]
 
 
@@ -134,7 +150,8 @@ SCENARIOS_EQUAL = [
     ),
     pytest.param("shopname product1", [2, 4], id="implicit-and-two-terms"),
     pytest.param(
-        "Wär*", [3],
+        "Wär*",
+        [3],
         id="capitalized-wildcard-diacritic",
         # NOT a whoosh-vs-whoosh-compat divergence at the search-result
         # level (see module docstring): real whoosh's own field analyzer
@@ -146,7 +163,8 @@ SCENARIOS_EQUAL = [
         # allowlist entry for that comparison.
     ),
     pytest.param(
-        'created:"previous month"', [1],
+        'created:"previous month"',
+        [1],
         id="quoted-natural-date-keyword",
         # basedate is 2020-04-15 (BASE); "previous month" == March 2020,
         # which is doc 1's `created` date. Quoted so whoosh-compat's own
@@ -158,7 +176,8 @@ SCENARIOS_EQUAL = [
     ),
     pytest.param("tag:billing,urgent", [1], id="keyword-comma-list-unquoted"),
     pytest.param(
-        "tag:'billing,urgent'", [1],
+        "tag:'billing,urgent'",
+        [1],
         id="keyword-comma-list-quoted",
         # NOT a search-result divergence, despite allowlist.py documenting
         # a real *parse-time* one here (design: whoosh-compat's
@@ -172,7 +191,8 @@ SCENARIOS_EQUAL = [
         # and match doc 1.
     ),
     pytest.param(
-        "has_tag:false", [3, 5],
+        "has_tag:false",
+        [3, 5],
         id="has-tag-false",
         # Doc 5 (added for the JSON-subpath emitter suite) also has no tags,
         # so it belongs in the has_tag:false result alongside doc 3.
@@ -200,12 +220,12 @@ def test_scenario_equal(windex, tindex, ereg, q, expected):
 
 def test_created_previous_month_unquoted_is_a_documented_divergence(windex, tindex, ereg):
     """design (allowlist.py): an *unquoted* multi-word natural-date keyword
-    needs paperless-ngx's app-level ``rewrite_natural_date_keywords`` string
-    rewrite (which the oracle harness replicates, ``oracle._rewrite_natural_date_keywords``)
-   : real whoosh's own grammar has no native "previous month" support at
-    all. whoosh-compat's date grammar only recognizes the multi-word
-    keywords when quoted (see test_scenario_equal's quoted counterpart);
-    unquoted, "previous" is parsed as an ordinary (invalid) date attempt.
+     needs paperless-ngx's app-level ``rewrite_natural_date_keywords`` string
+     rewrite (which the oracle harness replicates, ``oracle._rewrite_natural_date_keywords``)
+    : real whoosh's own grammar has no native "previous month" support at
+     all. whoosh-compat's date grammar only recognizes the multi-word
+     keywords when quoted (see test_scenario_equal's quoted counterpart);
+     unquoted, "previous" is parsed as an ordinary (invalid) date attempt.
     """
 
     q = "created:previous month"
@@ -288,8 +308,12 @@ def windex_13568():
     w = ix.writer()
     for id_, title, tags, created in DOCS_13568:
         w.add_document(
-            id=id_, title=title, content=title, tag=",".join(tags),
-            has_tag=bool(tags), created=datetime.fromisoformat(created),
+            id=id_,
+            title=title,
+            content=title,
+            tag=",".join(tags),
+            has_tag=bool(tags),
+            created=datetime.fromisoformat(created),
         )
     w.commit()
     return ix
@@ -322,12 +346,20 @@ def tindex_13568():
 
 @pytest.fixture
 def ereg_13568():
-    return FieldRegistry([
-        FieldSpec("title", FieldKind.TEXT, analyzer=lower_fold, pattern_normalizer=str.lower),
-        FieldSpec("tag", FieldKind.KEYWORD, analyzer=lower_fold, pattern_normalizer=str.lower, comma_values=True),
-        FieldSpec("tag_id", FieldKind.U64, comma_values=True, fast=True),
-        FieldSpec("created", FieldKind.DATE, date_only=True, fast=True),
-    ])
+    return FieldRegistry(
+        [
+            FieldSpec("title", FieldKind.TEXT, analyzer=lower_fold, pattern_normalizer=str.lower),
+            FieldSpec(
+                "tag",
+                FieldKind.KEYWORD,
+                analyzer=lower_fold,
+                pattern_normalizer=str.lower,
+                comma_values=True,
+            ),
+            FieldSpec("tag_id", FieldKind.U64, comma_values=True, fast=True),
+            FieldSpec("created", FieldKind.DATE, date_only=True, fast=True),
+        ]
+    )
 
 
 def test_issue_13568_acceptance(windex_13568, tindex_13568, ereg_13568):
@@ -335,8 +367,11 @@ def test_issue_13568_acceptance(windex_13568, tindex_13568, ereg_13568):
     assert whoosh_search_ids(windex_13568, ISSUE_13568_QUERY, BASE, BERLIN) == expected
 
     result = wc_parse(
-        ISSUE_13568_QUERY, registry=ereg_13568, default_fields=["title"],
-        basedate=BASE, tz=BERLIN,
+        ISSUE_13568_QUERY,
+        registry=ereg_13568,
+        default_fields=["title"],
+        basedate=BASE,
+        tz=BERLIN,
     )
     assert not result.diagnostics
     query = emit_(result.ast, index=tindex_13568[0], schema=tindex_13568[1], registry=ereg_13568)
@@ -438,9 +473,16 @@ def tindex_stem():
 
 @pytest.fixture
 def ereg_stem():
-    return FieldRegistry([
-        FieldSpec("content", FieldKind.TEXT, analyzer=_stem_fold_analyzer, pattern_normalizer=_fold_lower),
-    ])
+    return FieldRegistry(
+        [
+            FieldSpec(
+                "content",
+                FieldKind.TEXT,
+                analyzer=_stem_fold_analyzer,
+                pattern_normalizer=_fold_lower,
+            ),
+        ]
+    )
 
 
 def _tindex_stem_ids(tindex_stem, ereg_stem, q_str):

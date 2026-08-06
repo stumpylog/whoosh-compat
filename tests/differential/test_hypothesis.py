@@ -22,12 +22,18 @@ from whoosh_compat.ast import normalize
 BERLIN = ZoneInfo("Europe/Berlin")
 BASE = datetime(2026, 8, 4, 10, 30, tzinfo=BERLIN)
 
-words = st.text(alphabet=st.characters(whitelist_categories=("Ll", "Lu", "Nd")), min_size=1, max_size=8)
+words = st.text(
+    alphabet=st.characters(whitelist_categories=("Ll", "Lu", "Nd")), min_size=1, max_size=8
+)
 fields = st.sampled_from(["", "title:", "tag:", "asn:", "created:", "type:", "zzz:"])
 atom = st.builds(lambda f, w: f + w, fields, words)
-clause = st.recursive(atom, lambda inner: st.builds(
-    lambda a, op, b: f"({a}) {op} ({b})", inner,
-    st.sampled_from(["AND", "OR", "ANDNOT"]), inner), max_leaves=6)
+clause = st.recursive(
+    atom,
+    lambda inner: st.builds(
+        lambda a, op, b: f"({a}) {op} ({b})", inner, st.sampled_from(["AND", "OR", "ANDNOT"]), inner
+    ),
+    max_leaves=6,
+)
 query = st.builds(lambda parts: " ".join(parts), st.lists(clause, min_size=1, max_size=4))
 
 

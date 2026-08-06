@@ -232,7 +232,9 @@ def _boolean_query(
     """
     clauses = _pad_if_all_negative(clauses)
     if minimum_number_should_match is not None:
-        return tantivy.Query.boolean_query(clauses, minimum_number_should_match=minimum_number_should_match)
+        return tantivy.Query.boolean_query(
+            clauses, minimum_number_should_match=minimum_number_should_match
+        )
     return tantivy.Query.boolean_query(clauses)
 
 

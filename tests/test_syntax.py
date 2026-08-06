@@ -19,18 +19,24 @@ class StubParser:
         self.reports: list[Diagnostic] = []
         self.range_calls: list[tuple[Any, ...]] = []
 
-    def term_query(self, fieldname: Any, text: Any, boost: float = 1.0,
-                    **kw: Any) -> ast.Node:
+    def term_query(self, fieldname: Any, text: Any, boost: float = 1.0, **kw: Any) -> ast.Node:
         n = ast.Term(field=fieldname, text=text)
         return ast.Boosted(n, boost) if boost != 1.0 else n
 
-    def range_query(self, fieldname: Any, start: Any, end: Any,
-                     startexcl: bool, endexcl: bool, boost: float = 1.0,
-                     node: Any = None) -> ast.Node:
-        self.range_calls.append((fieldname, start, end, startexcl, endexcl,
-                                  boost, node))
-        return ast.TermRange(field=fieldname, lo=start, hi=end,
-                              incl_lo=not startexcl, incl_hi=not endexcl)
+    def range_query(
+        self,
+        fieldname: Any,
+        start: Any,
+        end: Any,
+        startexcl: bool,
+        endexcl: bool,
+        boost: float = 1.0,
+        node: Any = None,
+    ) -> ast.Node:
+        self.range_calls.append((fieldname, start, end, startexcl, endexcl, boost, node))
+        return ast.TermRange(
+            field=fieldname, lo=start, hi=end, incl_lo=not startexcl, incl_hi=not endexcl
+        )
 
     def report(self, diagnostic: Diagnostic) -> None:
         self.reports.append(diagnostic)
@@ -38,41 +44,51 @@ class StubParser:
 
 # --- Group-node -> AST construction ---------------------------------------
 
-@pytest.mark.parametrize("group_cls, expected", [
-    pytest.param(
-        syntax.AndGroup,
-        ast.And(children=(ast.Term(field=None, text="a"), ast.Term(field=None, text="b"))),
-        id="andgroup-builds-ast-and",
-    ),
-    pytest.param(
-        syntax.OrGroup,
-        ast.Or(children=(ast.Term(field=None, text="a"), ast.Term(field=None, text="b"))),
-        id="orgroup-builds-ast-or",
-    ),
-    pytest.param(
-        syntax.DisMaxGroup,
-        # whoosh-compat has no dedicated DisjunctionMax AST node, so
-        # DisMaxGroup degrades to a plain Or of its children (documented in
-        # syntax.py).
-        ast.Or(children=(ast.Term(field=None, text="a"), ast.Term(field=None, text="b"))),
-        id="dismaxgroup-maps-to-or",
-    ),
-    pytest.param(
-        syntax.AndNotGroup,
-        ast.AndNot(positive=ast.Term(field=None, text="a"), negative=ast.Term(field=None, text="b")),
-        id="andnotgroup-builds-ast-andnot",
-    ),
-    pytest.param(
-        syntax.AndMaybeGroup,
-        ast.AndMaybe(required=ast.Term(field=None, text="a"), optional=ast.Term(field=None, text="b")),
-        id="andmaybegroup-builds-ast-andmaybe",
-    ),
-    pytest.param(
-        syntax.RequireGroup,
-        ast.Require(scored=ast.Term(field=None, text="a"), filter_only=ast.Term(field=None, text="b")),
-        id="requiregroup-builds-ast-require",
-    ),
-])
+
+@pytest.mark.parametrize(
+    "group_cls, expected",
+    [
+        pytest.param(
+            syntax.AndGroup,
+            ast.And(children=(ast.Term(field=None, text="a"), ast.Term(field=None, text="b"))),
+            id="andgroup-builds-ast-and",
+        ),
+        pytest.param(
+            syntax.OrGroup,
+            ast.Or(children=(ast.Term(field=None, text="a"), ast.Term(field=None, text="b"))),
+            id="orgroup-builds-ast-or",
+        ),
+        pytest.param(
+            syntax.DisMaxGroup,
+            # whoosh-compat has no dedicated DisjunctionMax AST node, so
+            # DisMaxGroup degrades to a plain Or of its children (documented in
+            # syntax.py).
+            ast.Or(children=(ast.Term(field=None, text="a"), ast.Term(field=None, text="b"))),
+            id="dismaxgroup-maps-to-or",
+        ),
+        pytest.param(
+            syntax.AndNotGroup,
+            ast.AndNot(
+                positive=ast.Term(field=None, text="a"), negative=ast.Term(field=None, text="b")
+            ),
+            id="andnotgroup-builds-ast-andnot",
+        ),
+        pytest.param(
+            syntax.AndMaybeGroup,
+            ast.AndMaybe(
+                required=ast.Term(field=None, text="a"), optional=ast.Term(field=None, text="b")
+            ),
+            id="andmaybegroup-builds-ast-andmaybe",
+        ),
+        pytest.param(
+            syntax.RequireGroup,
+            ast.Require(
+                scored=ast.Term(field=None, text="a"), filter_only=ast.Term(field=None, text="b")
+            ),
+            id="requiregroup-builds-ast-require",
+        ),
+    ],
+)
 def test_group_builds_ast(group_cls, expected) -> None:
     g = group_cls([syntax.WordNode("a"), syntax.WordNode("b")])
     q = g.query(StubParser())
@@ -89,12 +105,10 @@ def test_empty_group_is_nothing() -> None:
 
 
 def test_group_boost_wraps_in_boosted() -> None:
-    g = syntax.AndGroup([syntax.WordNode("a"), syntax.WordNode("b")],
-                         boost=2.5)
+    g = syntax.AndGroup([syntax.WordNode("a"), syntax.WordNode("b")], boost=2.5)
     q = g.query(StubParser())
     assert q == ast.Boosted(
-        ast.And(children=(ast.Term(field=None, text="a"),
-                           ast.Term(field=None, text="b"))),
+        ast.And(children=(ast.Term(field=None, text="a"), ast.Term(field=None, text="b"))),
         2.5,
     )
 
@@ -106,6 +120,7 @@ def test_group_boost_of_one_does_not_wrap() -> None:
 
 
 # --- attach() ---------------------------------------------------------
+
 
 def test_attach_copies_span_onto_frozen_node() -> None:
     term = ast.Term(field=None, text="a")
@@ -132,6 +147,7 @@ def test_attach_none_passthrough() -> None:
 
 # --- RangeNode --------------------------------------------------------
 
+
 def test_rangenode_calls_parser_range_query() -> None:
     node = syntax.RangeNode("a", "z", False, True)
     node.fieldname = "content"
@@ -141,8 +157,9 @@ def test_rangenode_calls_parser_range_query() -> None:
     q = node.query(parser)
 
     assert parser.range_calls == [("content", "a", "z", False, True, 1.0, node)]
-    assert q == ast.TermRange(field="content", lo="a", hi="z", incl_lo=True,
-                               incl_hi=False, startchar=0, endchar=10)
+    assert q == ast.TermRange(
+        field="content", lo="a", hi="z", incl_lo=True, incl_hi=False, startchar=0, endchar=10
+    )
 
 
 def test_rangenode_falls_back_to_parser_fieldname() -> None:
@@ -156,6 +173,7 @@ def test_rangenode_falls_back_to_parser_fieldname() -> None:
 
 
 # --- TextNode / WordNode ------------------------------------------------
+
 
 def test_wordnode_uses_own_fieldname_over_parsers() -> None:
     node = syntax.WordNode("dog")
@@ -172,19 +190,19 @@ def test_wordnode_passes_tokenize_and_removestops_flags() -> None:
     calls: list[dict[str, Any]] = []
 
     class RecordingParser(StubParser):
-        def term_query(self, fieldname: Any, text: Any, boost: float = 1.0,
-                        **kw: Any) -> ast.Node:
-            calls.append({"fieldname": fieldname, "text": text,
-                          "boost": boost, **kw})
+        def term_query(self, fieldname: Any, text: Any, boost: float = 1.0, **kw: Any) -> ast.Node:
+            calls.append({"fieldname": fieldname, "text": text, "boost": boost, **kw})
             return ast.Term(field=fieldname, text=text)
 
     syntax.WordNode("dog").query(RecordingParser())
 
-    assert calls == [{"fieldname": None, "text": "dog", "boost": 1.0,
-                       "tokenize": True, "removestops": True}]
+    assert calls == [
+        {"fieldname": None, "text": "dog", "boost": 1.0, "tokenize": True, "removestops": True}
+    ]
 
 
 # --- ErrorNode ----------------------------------------------------------
+
 
 def test_errornode_reports_diagnostic_and_returns_errorleaf() -> None:
     inner = syntax.WordNode("a")
@@ -203,6 +221,7 @@ def test_errornode_reports_diagnostic_and_returns_errorleaf() -> None:
 
 
 # --- Operators (structural, no ast interaction) -------------------------
+
 
 def test_infix_operator_replaces_with_group() -> None:
     a = syntax.WordNode("a")
@@ -235,6 +254,7 @@ def test_postfix_operator_wraps_prev_node() -> None:
 
 
 # --- SyntaxNode base machinery -------------------------------------------
+
 
 def test_syntaxnode_repr_base_fallback() -> None:
     # SyntaxNode is concrete (not ABC); every shipped node overrides r()
@@ -344,6 +364,7 @@ def test_syntaxnode_node_before_after_base_return_none() -> None:
 
 
 # --- GroupNode ------------------------------------------------------------
+
 
 def test_groupnode_r_and_startchar_endchar() -> None:
     a = syntax.WordNode("a")
@@ -473,6 +494,7 @@ def test_groupnode_node_after_last_element_returns_none() -> None:
 
 # --- BinaryGroup / Wrapper edge branches -----------------------------------
 
+
 def test_binarygroup_both_none_is_nothing() -> None:
     class NoneNode(syntax.SyntaxNode):
         def query(self, parser: Any) -> ast.Node | None:
@@ -511,6 +533,7 @@ def test_wrapper_returns_none_when_child_is_none() -> None:
 
 # --- ErrorNode startchar/endchar without a wrapped node --------------------
 
+
 def test_errornode_startchar_endchar_without_node() -> None:
     err = syntax.ErrorNode("bad thing")
     assert err.startchar is None
@@ -518,6 +541,7 @@ def test_errornode_startchar_endchar_without_node() -> None:
 
 
 # --- OrGroup.factory() ------------------------------------------------------
+
 
 def test_orgroup_factory_scale_kwarg_survives_construction() -> None:
     scaled_cls = syntax.OrGroup.factory(scale=0.5)
@@ -530,6 +554,7 @@ def test_orgroup_factory_scale_kwarg_survives_construction() -> None:
 
 # --- TextNode / WordNode r() -------------------------------------------
 
+
 def test_textnode_r_uses_class_name_and_text() -> None:
     node = syntax.FieldnameNode("title", "title:")  # not a TextNode, sanity
     assert node.original == "title:"
@@ -541,6 +566,7 @@ def test_wordnode_r_is_bare_repr() -> None:
 
 
 # --- Operator ---------------------------------------------------------
+
 
 def test_operator_r() -> None:
     op = syntax.InfixOperator("AND", syntax.AndGroup)
@@ -591,6 +617,7 @@ def test_infix_operator_merges_into_existing_right_group_when_rightassoc() -> No
 
 
 # --- to_word() --------------------------------------------------------
+
 
 def test_markernode_r_uses_class_name() -> None:
     class SomeMarker(syntax.MarkerNode):
