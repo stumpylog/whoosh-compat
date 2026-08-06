@@ -1,0 +1,312 @@
+# Architecture
+
+This document explains how whoosh-compat turns a Whoosh-style query string
+into a `tantivy.Query`, and the design decisions behind each layer. It's
+meant to be read standalone by someone who has never seen this library
+before.
+
+## 1. Pipeline overview
+
+```
+query string
+    │
+    ▼
+forked whoosh parser (taggers + filters, run at named priorities)
+    │  (whoosh_compat.parser)
+    ▼
+typed, frozen AST
+    │  (whoosh_compat.ast)
+    ▼
+normalize()
+    │
+    ▼
+emitter visitor
+    │  (whoosh_compat.emitters)
+    ▼
+tantivy.Query
+```
+
+`whoosh_compat.parse()` (`src/whoosh_compat/__init__.py`) drives the first
+three stages and returns a `ParseResult(ast, diagnostics)`. Turning that
+`ast.Node` into something a search backend can execute is a separate,
+explicit step — `whoosh_compat.emitters.tantivy_.emit()` — so the AST stays
+usable by any future backend that doesn't exist yet.
+
+A `FieldRegistry` (`whoosh_compat.fields`) is threaded through both the
+parser and the emitter: it's the seam where the host application tells this
+library what fields exist, what kind of data each one holds, and (for the
+emitter) how to tokenize query text so it matches what's actually indexed.
+
+## 2. Why a fork
+
+Whoosh's query parser (`whoosh.qparser`) is a hand-written, plugin-driven
+tagger/filter pipeline: each plugin contributes regex-based *taggers* (which
+turn substrings of the query into syntax nodes) and *filters* (which
+restructure the resulting node list — grouping, fieldname propagation,
+operator binding), each running at a specific numeric priority relative to
+the others. The *order* these run in, and the specific regexes each tagger
+uses, together define what "lenient Whoosh syntax" actually means in
+practice — for example, why `field:` at end-of-input merges into the
+following text instead of erroring, or exactly which characters of spacing
+around `-`/`+` make them operators versus plain text.
+
+None of that leniency is written down anywhere except the code itself. It
+would be impractical (and risky) to reimplement Whoosh's parsing behavior
+from a description of it — the actual bug-for-bug (and, more usefully,
+feature-for-feature) behavior only exists in the tagger/filter priority
+interactions. So this library forks the parsing *pipeline* (the mechanism)
+and replaces only the *output* of that pipeline: instead of every syntax
+node building a `whoosh.query.Term`/`whoosh.query.And`/etc. object tied to a
+`whoosh.fields.Schema`, syntax nodes here build `whoosh_compat.ast` nodes
+against a backend-neutral `FieldRegistry`. The tagger/filter mechanics, the
+priority ordering, and the natural-language date grammar are preserved
+close to verbatim; everything downstream of "a parse succeeded" is new.
+
+## 3. Module map with provenance
+
+```
+whoosh_compat/
+  __init__.py          # parse(), ParseResult -- public API
+  fields.py             # FieldSpec, FieldKind, FieldRegistry -- host-integration seam
+  ast.py                # AST dataclasses + Visitor[T] + normalize()
+  errors.py              # Diagnostic + exception hierarchy
+  parser/
+    __init__.py
+    default.py           # QueryParser/MultifieldParser   (forked: whoosh/qparser/default.py)
+    plugins.py           # plugin set                     (forked: whoosh/qparser/plugins.py)
+    syntax.py            # syntax nodes                   (forked: whoosh/qparser/syntax.py)
+    taggers.py           # regex taggers                  (forked: whoosh/qparser/taggers.py)
+    common.py            # tagging/attach helpers          (forked: whoosh/qparser/common.py)
+    dateparse.py         # date grammar + plugin            (forked: whoosh/qparser/dateparse.py)
+    times.py             # adatetime/timespan                (forked: whoosh/util/times.py)
+    text.py              # rcompile                          (forked: whoosh/util/text.py, ~10 lines)
+    priorities.py        # named priority constants          (not forked -- see module docstring)
+  emitters/
+    base.py              # Emitter protocol
+    tantivy_.py          # TantivyEmitter -- the only module that imports tantivy
+```
+
+Forked files retain their original Whoosh BSD-2-Clause license header (see
+[NOTICE](./NOTICE)); real provenance, kept as-is, distinct from any process
+history. Within the forked pipeline:
+
+- **`parser/taggers.py`, `parser/text.py`, `parser/common.py`,
+  `parser/times.py`** — foundational pieces (regex tagging, `rcompile`,
+  tag-list manipulation helpers, the naive-local-time `adatetime`/`timespan`
+  model) ported with minimal behavioral change beyond modernization
+  (`compat.py` shims inlined, type annotations added, Python 3.11+ only).
+- **`parser/syntax.py`** — the intermediate syntax-node tree (`WordNode`,
+  `GroupNode`, `FieldnameNode`, etc.) that taggers produce and filters
+  restructure before `.query(parser)` turns each node into an
+  `whoosh_compat.ast.Node`.
+- **`parser/plugins.py`** — the `Plugin` classes (whitespace, quoting,
+  fields, wildcard, phrase, range, group, operators, boost, comma-values,
+  field-alias, every) that each contribute taggers/filters to the pipeline.
+  Only the v1-supported plugin subset ships; see the README's syntax table.
+- **`parser/default.py`** — `QueryParser`/`MultifieldParser`: the top-level
+  driver that assembles a plugin's taggers/filters, runs `tag()` then
+  `filterize()`, and holds the field-kind-specific logic (numeric/boolean
+  self-parsing, range endpoint parsing, wildcard/prefix rewriting) that
+  Whoosh used to delegate to `Schema`/`FieldType` objects — here it's methods
+  on `QueryParser` that consult a `FieldRegistry` instead.
+- **`parser/dateparse.py` + `parser/times.py`** — the natural-language date
+  grammar (`Sequence`/`Combo`/`Choice`/`Bag`/`Regex` parser-combinator
+  elements feeding `adatetime`/`timespan`) ported structurally unchanged;
+  what's downstream of a successful date parse is new (see §4).
+
+**`ast.py`** — frozen dataclasses (`Term`, `And`, `Or`, `Not`, `AndNot`,
+`AndMaybe`, `Require`, `Phrase`, `Prefix`, `Wildcard`, `TermRange`,
+`NumericRange`, `DateRange`, `Every`, `Nothing`, `Boosted`, `ErrorLeaf`), a
+`Visitor[T]` base class that dispatches `visit_<lowercase-classname>`, and a
+module-level `normalize()` that flattens nested same-type groups, propagates
+`Nothing`/`Every` through boolean combinators, dedupes siblings, and merges
+boost multipliers. This is the library's stability contract — emitters
+(present and future) depend only on `ast.py` and `fields.py`, never on
+`parser/`.
+
+**`fields.py`** — `FieldKind` (TEXT, KEYWORD, U64, DATE, DATETIME,
+BOOLEAN_EXISTS, JSON), `Multitoken` (how multi-token field values combine:
+DEFAULT/AND/OR/PHRASE/FIRST), `FieldSpec` (one field's parse/emit
+characteristics: name, kind, aliases, `comma_values`, `analyzer`,
+`pattern_normalizer`, `multitoken`, `exists_target`, `subpaths`,
+`date_only`, `fast`), and `FieldRegistry` (validates and indexes a
+collection of specs by canonical name and alias). This is the
+host-integration seam: nothing in `parser/` or `emitters/` hard-codes field
+names or behavior — it all comes from the registry a caller constructs.
+
+**`emitters/`** — `base.py` defines a minimal `Emitter` protocol; the actual
+work is `tantivy_.py`'s `TantivyEmitter(ast.Visitor[tantivy.Query])`, whose
+module docstring explains its one deliberate exception to "build everything
+programmatically" (the JSON-subpath carve-out, §5).
+
+**Errors/diagnostics flow (`errors.py`)** — `Diagnostic(message, kind,
+startchar, endchar)` is a plain data record; `DiagnosticKind` currently has
+`BAD_DATE`/`BAD_NUMBER`/`UNKNOWN`. Parsing never raises for bad input:
+`QueryParser` accumulates `Diagnostic`s onto `self.diagnostics` as it goes
+(see `default.py`'s `report()`), and bad fragments become
+`ast.ErrorLeaf(diagnostic)` nodes in the tree rather than raising — this
+mirrors Whoosh's own leniency, where an unparseable date became a null query
+rather than an exception. `whoosh_compat.parse()` surfaces the accumulated
+list as `ParseResult.diagnostics`, which a caller should check before
+emitting (paperless-ngx, for example, maps a non-empty diagnostics list to
+an HTTP 400). Emitting, by contrast, *does* raise: `QueryEmitError` when
+asked to emit an `ErrorLeaf`, `UnsupportedQueryError` for a construct that's
+parseable but genuinely inexecutable against tantivy (text-field
+`TermRange` — see §4). Both inherit `WhooshCompatError`.
+
+## 4. Key invariants
+
+**All-`MustNot` padding.** A `tantivy.Query.boolean_query` whose clauses are
+*all* `Occur.MustNot` matches zero documents instead of "every document
+except the excluded ones" — this is
+[quickwit-oss/tantivy#3025](https://github.com/quickwit-oss/tantivy/issues/3025),
+unmerged as of this writing. `_pad_if_all_negative()`
+(`emitters/tantivy_.py`) prepends a trivially-true, zero-scoring `Must`
+clause (`Query.boost_query(Query.all_query(), 0.0)`) whenever a boolean
+group's clauses would otherwise be all-negative. This is applied at *every*
+nesting level that constructs boolean clauses — a bare `NOT`, a falsy
+`BOOLEAN_EXISTS` term, and any nested group that happens to reduce to only
+negative clauses — not just the top level, so a query like
+`tag:steuer AND (title:2020 OR (NOT title:2019 AND NOT title:2018))` gets
+correct results on stock tantivy 0.26 with no upstream fix required.
+
+**The analyzer contract.** `tantivy.Query.term_query` does **not** tokenize
+its input — it builds a term against the literal string passed in. Whoosh,
+by contrast, ran the field's analyzer at parse time. This library moves that
+step to *emit* time deliberately (see §6 for why): `Term`/`Phrase` AST nodes
+carry raw, unanalyzed text, and `TantivyEmitter` calls `FieldSpec.analyzer`
+on that text before building term/phrase queries. A single-token result
+becomes a `term_query`; the multi-token case is governed by
+`FieldSpec.multitoken` (`Multitoken.DEFAULT` resolves to whatever boolean
+group the term's emission happens to be nested inside —
+`TantivyEmitter._group_stack` — see `DIVERGENCES.md` entry 15 for how this
+differs subtly from Whoosh's own fixed-default-group behavior); a
+zero-token result (the analyzer dropped everything, e.g. an all-stopword
+value) drops the term from its enclosing group rather than producing an
+unsatisfiable clause.
+
+`FieldSpec.pattern_normalizer` is a second, narrower callable used only for
+the literal segments of `Wildcard`/`Prefix` patterns: character-level only
+(lowercase, ASCII-fold), **never stemming or tokenization**. The two
+callables can't be unified: index terms on a stemmed field are themselves
+stems, but a wildcard's literal prefix has to stay literal for the
+glob-to-regex translation to mean what the user typed — running a stemmer
+over `entwä` (from `Entwä*`) before pattern-matching would corrupt it. The
+practical consequence (inherited honestly from Whoosh v2, which had the same
+property) is that a wildcard query against a stemmed field only matches
+*unstemmed* index tokens; see the README's "analyzer / pattern_normalizer
+seam" section for the concrete example.
+
+**Half-open date-range ceilings.** An ambiguous/period date match (e.g. just
+a year, or `previous month`) is represented internally as a `timespan` whose
+end is the period's last representable microsecond
+(`adatetime.ceil()`, e.g. `2020-12-31T23:59:59.999999`). Rather than keep
+that inclusive ceiling as the AST's upper bound, `DateParserPlugin` emits a
+**half-open** range: `ceiling + 1 microsecond` as an *exclusive* upper bound
+(the exact start of the next period) — `incl_hi=False`. This is exact
+because `ceil()` always lands on a period's last microsecond, and it avoids
+the sentinel-date hacks (`0001-01-01`/`9999-12-31`) that a naive
+open-ended-range implementation needs. A date the user typed as an exact
+instant (not a period) keeps `incl_hi=True` since there's no rounding
+involved.
+
+**Timezone contract.** Everywhere in the AST, `DateRange` bounds are
+timezone-aware UTC `datetime`s — parsed local/relative dates are converted
+to UTC once, inside `DateParserPlugin` (`parser/dateparse.py`'s `_to_utc`).
+The tantivy emitter then converts *back* to **naive** UTC
+(`_to_naive_utc`, `emitters/tantivy_.py`) immediately before calling
+`Query.range_query`, because `tantivy-py <= 0.26.0` only accepts naive
+datetimes there (a tz-aware one raises `ValueError`) — the fix,
+[tantivy-py#666](https://github.com/quickwit-oss/tantivy-py/pull/666), landed
+*after* 0.26.0 was tagged. This conversion is intentionally isolated to the
+one call site that needs it; nothing else in the pipeline treats naive and
+aware datetimes as interchangeable.
+
+**Diagnostics never raise mid-parse.** See §3's error-flow paragraph: this
+is worth restating as an invariant because it's load-bearing for callers.
+`whoosh_compat.parse()` always returns a `ParseResult`, never raises for bad
+*query* input (as opposed to bad *registry construction*, which does raise
+eagerly — see `FieldRegistry.__init__`). Malformed dates, numbers, or other
+field-kind-specific parse failures become `Diagnostic`s plus `ErrorLeaf`
+AST nodes. Only `emit()` on a tree containing an `ErrorLeaf` raises
+(`QueryEmitError`) — by which point the diagnostics list already told the
+caller not to do that.
+
+## 5. Extension points
+
+**A new emitter.** Implement `ast.Visitor[T]` (subclass it and provide
+`visit_<name>` methods for whichever node types matter to your backend;
+unhandled types fall through to `generic_visit`, which raises
+`NotImplementedError`) plus a small module-level `emit(node, ...)` function
+following `emitters/tantivy_.py`'s shape. The AST and `FieldRegistry` are
+the entire contract — a Meilisearch or Elasticsearch emitter needs no
+changes to `parser/` or `ast.py`.
+
+**`FieldSpec` options.** Per-field behavior — aliasing, comma-list
+expansion, which analyzer/pattern-normalizer to run, how multi-token values
+combine, JSON subpaths, boolean-exists targets, fast-field/date-only
+declarations — is entirely data on `FieldSpec`, validated at
+`FieldRegistry` construction time (e.g. `BOOLEAN_EXISTS` requires
+`exists_target`; an `exists_target` must resolve to a `fast=True` or `TEXT`
+field). Extending what the library can express for a field means adding a
+new `FieldSpec` attribute and teaching the parser/emitter to read it — no
+plugin-architecture changes required for field-level behavior.
+
+**The JSON `parse_query` carve-out.** `TantivyEmitter._json_paths_supported()`
+probes, once per emitter instance, whether the installed `tantivy-py`'s
+`Query.term_query` can resolve a JSON subpath directly. If not, JSON-subpath
+term emission falls back to a strictly escaped, single-leaf
+`index.parse_query()` call instead of the fully-programmatic construction
+used everywhere else. This carve-out is self-retiring: once
+[tantivy-py#716](https://github.com/quickwit-oss/tantivy-py/pull/716) lands
+and ships, the probe starts succeeding and the fallback branch simply stops
+being taken — no code change required in this library.
+
+## 6. Testing strategy
+
+Three layers, each answering a different question:
+
+1. **Unit tests** (`tests/`, excluding `differential/` and `emitter/`) —
+   parser, `ast.normalize()`, and `FieldSpec`/`FieldRegistry` behavior in
+   isolation, including Whoosh's own ported qparser/dateparse test suites
+   adapted to this AST.
+2. **Differential tests** (`tests/differential/`) — "does the parsed AST
+   shape agree with real Whoosh?" A pinned real-Whoosh installation (a
+   test-only dependency, git-ref pinned — see `pyproject.toml`'s `dev`
+   group — this fork carries parser fixes absent from the PyPI release) and
+   whoosh-compat parse the same corpus of query strings; oracle-side parsing
+   uses `normalize=False` to sidestep Whoosh's own tree-normalization pass
+   (this library's `normalize()` has its own dedicated unit tests). Every
+   allowed divergence must match an entry in `tests/differential/allowlist.py`,
+   and each allowlist entry cross-references a numbered entry in
+   `DIVERGENCES.md` explaining *why* the difference is intended rather than
+   a bug. The convention there is a regex keyed by a reference prefix (e.g.
+   a field-name pattern) matched against the query string, so a whole class
+   of queries can share one documented, understood divergence.
+3. **End-to-end acceptance tests** (`tests/emitter/test_acceptance_e2e.py`) —
+   "does the final search result agree?" The same fixture documents are
+   indexed twice — once in a real Whoosh index built from a v2-shaped
+   schema, once in tantivy from a v3-shaped schema — and named query
+   scenarios assert **identical matched-document ID sets** (unordered;
+   scores are out of scope). A fixture self-test verifies the precondition
+   that scenario terms tokenize identically under both analyzer chains, so
+   the comparison isn't accidentally testing analyzer drift instead of
+   query-translation correctness.
+
+**Why both 2 and 3 exist, not just one:** layer 2 catches AST-shape
+regressions early and cheaply (no index-building, no search execution), but
+an AST-level difference doesn't necessarily change what a query actually
+matches — a divergence can be fully absorbed by what happens downstream
+(analysis, tantivy's own query execution). Layer 3 is the layer that answers
+the question a user actually cares about. `DIVERGENCES.md` entry 16 and the
+`test_acceptance_e2e.py` module docstring document several concrete cases
+where a real, allowlisted AST-level divergence was verified (by actually
+running both pipelines) to produce the same search results for this
+project's fixture — which is a property of the fixture, not a guarantee that
+holds for every possible query and dataset.
+
+## See also
+
+[DIVERGENCES.md](./DIVERGENCES.md) — the full, numbered list of every
+intentional behavioral difference from real Whoosh (v2) or from paperless-ngx's
+live tantivy-based v3 search, with the reasoning and test references for each.
