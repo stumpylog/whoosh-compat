@@ -67,3 +67,17 @@ force-single-line = true
 # (see src/whoosh_compat/parser/times.py's module docstring); constructing
 # naive datetimes is the point, not an omission.
 "tests/**" = ["DTZ001", "DTZ003", "DTZ005"]
+
+[tool.codespell]
+# Each of these is a deliberate false positive, not a typo to fix:
+#   unparseable   - a legitimate, commonly used English spelling variant
+#   nd, thur      - fragments of the date grammar's own regex/abbreviation
+#                   tables (ordinal suffix "1st/2nd/3rd", "thursday|thur|thu")
+#   febuary       - an intentionally accepted common misspelling in the date
+#                   grammar's month-name matcher, not an error in this repo
+#   priorized     - whoosh's own original spelling (see whoosh/qparser/
+#                   default.py's _priorized), forked verbatim
+#   ot            - a local variable (`ot = self.OpTagger`), not a word
+#   referenz, ist - German test fixture data, not English prose
+#   runn          - the Porter-stemmed form of "running" used as test data
+ignore-words-list = "unparseable,nd,thur,febuary,priorized,ot,referenz,ist,runn"

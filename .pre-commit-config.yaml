@@ -1,0 +1,66 @@
+# This file configures pre-commit hooks.
+# See https://pre-commit.com/ for general information
+# See https://pre-commit.com/hooks.html for a listing of possible hooks
+# Works with either `pre-commit` or `prek` (a drop-in Rust reimplementation
+# that reads this same file format).
+repos:
+  # General hooks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-docstring-first
+      - id: check-yaml
+        args:
+          - "--unsafe"
+      - id: check-toml
+      - id: check-executables-have-shebangs
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args:
+          - "--fix=lf"
+      - id: trailing-whitespace
+      - id: check-case-conflict
+      - id: detect-private-key
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.4.3
+    hooks:
+      - id: codespell
+        args:
+          - "--toml"
+          - "pyproject.toml"
+  - repo: https://github.com/woodruffw/zizmor-pre-commit
+    rev: v1.29.0
+    hooks:
+      - id: zizmor
+        args:
+          - "--no-progress"
+          - "--quiet"
+          - "--min-severity=low"
+  # yamlfmt and pyproject-fmt (both present in the reference config this
+  # file is adapted from) are intentionally left out: yamlfmt's default
+  # style strips the blank lines and reindents the commented-out codecov
+  # step in ci.yml in a way that misattaches those comments to the wrong
+  # step, and pyproject-fmt's default output rewrites pyproject.toml into
+  # dotted-key style and adds classifiers (including one for a Python
+  # version this project does not support) that nobody asked for. Both
+  # were tried against this repo and reverted; revisit if either tool
+  # grows a config knob for the specific behavior wanted here.
+  # Python hooks
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: "v0.16.1"
+    hooks:
+      # Only the linter, not ruff-format: this repo's parser/ package is a
+      # deliberately close port of whoosh's own source (see
+      # ARCHITECTURE.md's "why a fork" section), and an automated
+      # reformatting pass would produce a large, unreviewed diff against
+      # that fidelity for no functional benefit.
+      - id: ruff-check
+  # mypy is intentionally not wired in here: it needs the project's own
+  # virtualenv (tantivy, whoosh, types-python-dateutil, ...) rather than
+  # pre-commit's isolated hook environments to type-check meaningfully, so
+  # it stays a `uv run mypy src` step in CI and local development instead.
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.12.2
+    hooks:
+      # Keep uv.lock in sync with pyproject.toml.
+      - id: uv-lock
