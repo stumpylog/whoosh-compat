@@ -12,6 +12,8 @@ actually supports) plus, explicitly, the escaping-fallback code path.
 import pytest
 
 from whoosh_compat import ast
+from whoosh_compat.emitters.tantivy_ import TantivyEmitter
+from whoosh_compat.fields import FieldKind, FieldRegistry, FieldSpec
 
 from .conftest import emit_ast, search_ids
 
@@ -55,6 +57,44 @@ def test_json_subpath_matches_index_parse_query_directly(tindex, ereg):
     q = emit_ast(node, tindex, ereg)
     reference = index.parse_query('notes.user:"alice"', default_field_names=["notes"])
     assert search_ids(index, q) == search_ids(index, reference)
+
+
+def test_json_subpath_zero_tokens_matches_nothing(tindex, ereg):
+    node = ast.Term(field="notes.user", text="")
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == []
+
+
+def test_dotted_field_that_is_not_a_json_subpath_falls_back_to_resolve(tindex, ereg):
+    # visit_term's `if resolved is not None` skip branch: a field name
+    # containing "." that resolve_json() doesn't recognize (unlike
+    # test_json_subpath_unknown_subpath_falls_back_to_plain_field, this
+    # constructs the AST directly so it reaches the emitter rather than
+    # being demoted by the parser first).
+    from whoosh_compat.errors import QueryEmitError
+
+    node = ast.Term(field="notes.bogus", text="x")
+    with pytest.raises(QueryEmitError, match="unknown field"):
+        emit_ast(node, tindex, ereg)
+
+
+def test_json_paths_supported_false_when_no_json_field_registered(tindex):
+    # _json_paths_supported()'s probe loop finds no JSON+subpaths field, so
+    # probe_path stays None and the result is cached as False without ever
+    # calling tantivy.Query.term_query.
+    ereg_no_json = FieldRegistry([FieldSpec("content", FieldKind.TEXT)])
+    emitter = TantivyEmitter(index=tindex[0], schema=tindex[1], registry=ereg_no_json)
+    assert emitter._json_paths_supported() is False
+
+
+def test_json_paths_supported_is_cached_across_calls(tindex, ereg):
+    # Second call on the same emitter instance hits the cached-result branch
+    # (`if self._json_paths_ok is None` is False the second time) instead of
+    # re-probing.
+    emitter = TantivyEmitter(index=tindex[0], schema=tindex[1], registry=ereg)
+    first = emitter._json_paths_supported()
+    second = emitter._json_paths_supported()
+    assert first == second
 
 
 def test_json_subpath_unknown_subpath_falls_back_to_plain_field(tindex, ereg, parse):

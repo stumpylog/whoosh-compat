@@ -59,6 +59,23 @@ def fnmatch_ids(tokens, pattern):
     # Only literal runs go through the normalizer; the class body is passed
     # through as class syntax.
     pytest.param("AB[0-3]*", str.lower, "ab[0-3].*", id="class-body-not-normalized-or-escaped-away"),
+    # A "*" immediately following a class collapses runs the same as bare
+    # "**" (the `while pattern[i]=="*"` collapse only fires after `flush()`,
+    # not right after a class -- this is really exercising the "**" collapse
+    # itself with a class in front of it).
+    pytest.param("a**b", None, "a.*b", id="collapses-runs-of-star"),
+    # fnmatch's bracket parser treats a "]" right after "[" (or "[!") as an
+    # ordinary member of the class, not the closer.
+    pytest.param("[]a]", None, "[]a]", id="leading-bracket-is-literal-member"),
+    pytest.param("[!]a]", None, "[^]a]", id="negated-leading-bracket-is-literal-member"),
+    # A trailing "-" with nothing after it inside the class is appended to
+    # the previous chunk rather than starting a new (empty) one.
+    pytest.param("[a-]", None, "[a\\-]", id="trailing-hyphen-appends-to-previous-chunk"),
+    # Multiple "-"-separated chunks where a later chunk's start sorts before
+    # the previous chunk's end collapse into one chunk (an actual [9-1]
+    # range is invalid in a regex; CPython's fnmatch treats it as a literal
+    # sequence instead by merging the empty range away).
+    pytest.param("[9-1-5-3]", None, "[\\-]", id="empty-range-chunks-are-merged-away"),
 ])
 def test_glob_to_regex(pattern, normalizer, expected):
     assert glob_to_regex(pattern, normalizer) == expected
