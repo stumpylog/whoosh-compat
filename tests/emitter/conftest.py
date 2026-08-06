@@ -1,10 +1,12 @@
 import re
 import unicodedata
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 import tantivy
+from whoosh.filedb.filestore import RamStorage
 
+from tests.differential.oracle import oracle_parse, oracle_schema
 from whoosh_compat import parse as _parse
 from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.fields import FieldKind, FieldRegistry, FieldSpec
@@ -116,3 +118,57 @@ def search_ids(index, q, limit=10):
         for _, addr in s.search(q, limit).hits
         for hit_doc in [s.doc(addr).to_dict()]
     )
+
+
+@pytest.fixture(scope="session")
+def windex():
+    """In-RAM real-whoosh index (v2 paperless schema, ``oracle.oracle_schema``)
+    holding the same ``DOCS`` fixture rows as ``tindex`` -- the oracle
+    counterpart used by the e2e acceptance suite (``test_acceptance_e2e.py``)
+    to prove whoosh-compat's parse -> emit -> tantivy-search pipeline agrees
+    with real whoosh's parse -> search pipeline on full query strings (not
+    just parsed ASTs, which is what ``tests/differential`` already covers).
+
+    Field value shaping mirrors what paperless-ngx v2's own indexing code did:
+    ``tag`` is a comma-joined string (``KEYWORD(commas=True)`` splits it back
+    apart at analysis time), ``has_tag`` is a plain boolean presence flag,
+    ``created``/``added`` are naive datetimes (v2 stored everything as
+    UTC-naive). ``notes`` -- a JSON object on the tantivy/v3 side  -- has no
+    v2 equivalent (v2's ``notes`` field was plain ``TEXT()``); it is rendered
+    here as a whitespace-joined dump of the dict's values purely so the field
+    is populated with *something* searchable, not to reproduce any particular
+    v2 behavior (see DIVERGENCES.md's JSON-subpath entry -- ``notes.user:``
+    style queries are a v1-only concept with no v2 analogue at all).
+    """
+
+    schema = oracle_schema()
+    storage = RamStorage()
+    ix = storage.create_index(schema)
+    writer = ix.writer()
+    for id_, title, content, tags, asn, created, added, notes in DOCS:
+        fields = {
+            "id": id_,
+            "title": title,
+            "content": content,
+            "tag": ",".join(tags),
+            "asn": asn,
+            "has_tag": bool(tags),
+            "created": datetime.fromisoformat(created),
+            "added": datetime.fromisoformat(added).astimezone(UTC).replace(tzinfo=None),
+        }
+        if notes:
+            fields["notes"] = " ".join(str(v) for v in notes.values())
+        writer.add_document(**fields)
+    writer.commit()
+    return ix
+
+
+def whoosh_search_ids(windex, q_str, basedate, tz):
+    """Parse ``q_str`` through the real whoosh v2 oracle parser
+    (``oracle.oracle_parse``) and return the sorted ``id`` list it matches
+    against ``windex``.
+    """
+
+    query = oracle_parse(q_str, basedate, tz)
+    with windex.searcher() as searcher:
+        return sorted(hit["id"] for hit in searcher.search(query, limit=None))

@@ -67,3 +67,15 @@ title:*
 # report (the second is the 2025 variant of the first).
 tag:steuer AND tag:valentin AND (title:*2024 OR (NOT title:*202[0-3] AND NOT title:*201[0-9] AND created:2024))
 tag:steuer AND tag:valentin AND (title:*2025 OR (NOT title:*202[0-3] AND NOT title:*201[0-9] AND created:2025))
+
+# --- KNOWN DIVERGENCE (whoosh-bug, allowlist.py): trailing-star bracket
+# fold (DIVERGENCES #13). Real whoosh's Wildcard.normalize() only checks for
+# "*"/"?" (despite SPECIAL_CHARS = "*?["), so a trailing-star pattern
+# containing a character class folds to a Prefix that silently drops the
+# class body -- Prefix('title', '202[0-3]') instead of keeping the class.
+# whoosh-compat fixed this fold in both sites (parser/default.py's
+# _TRAILING_STAR_RE and parser/plugins.py's do_wildcards) so it keeps the
+# full Wildcard('title', '202[0-3]*') pattern instead. See
+# tests/emitter/test_acceptance_e2e.py for the same bug demonstrated at the
+# search-result level.
+title:202[0-3]*

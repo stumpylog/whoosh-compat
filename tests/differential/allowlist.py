@@ -113,7 +113,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # by analogy without verifying it against the actual v2 oracle; removed
     # after confirming "-foo" compares and passes structurally.
 
-    # whoosh-bug: real whoosh's range-bound date parsing
+    # whoosh-bug (DIVERGENCES #12): real whoosh's range-bound date parsing
     # (DateParserPlugin.range_to_dt) calls
     # `self.dateparser.get_parser().date_from(...)` -- the *grammar object's*
     # date_from, not `LocalDateParser.date_from` -- so LocalDateParser's
@@ -183,6 +183,23 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             "design: bare field:* simplifies to Every(field) in whoosh-compat vs"
             " a literal Wildcard('*') in whoosh"
         ),
+    ),
+
+    # whoosh-bug (DIVERGENCES #13): real whoosh's WildcardPlugin.do_wildcards
+    # (and query.terms.Wildcard.normalize(), same root cause) only tests a
+    # trailing-star pattern for "*"/"?" before folding it to a Prefix --
+    # despite SPECIAL_CHARS = "*?[" including "[" -- so a pattern like
+    # "202[0-3]*" folds to Prefix('title', '202[0-3]') and silently loses the
+    # character class instead of staying a Wildcard. whoosh-compat fixed the
+    # fold check in both sites that perform it (parser/default.py's
+    # _TRAILING_STAR_RE and parser/plugins.py's do_wildcards) to also check
+    # for "[", so it keeps the full Wildcard pattern. Not reproduced --
+    # whoosh-compat's own trailing-star-with-bracket corpus line
+    # (title:202[0-3]*) is intentionally allowlisted here rather than
+    # matched against the (buggy) oracle tree.
+    (
+        re.compile(r"\btitle:202\[0-3\]\*"),
+        "whoosh-bug (DIVERGENCES #13): Wildcard.normalize() bracket fold drops the character class on a trailing-star pattern",
     ),
 ]
 
