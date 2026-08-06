@@ -24,7 +24,7 @@ DOCS = [  # (id, title, content, tags, asn, created_iso, added_iso, notes)
     # a "user" value containing both a double-quote and a backslash, to prove
     # the parse_query fallback's escaping round-trips. Its other fields are
     # deliberately chosen to fall outside every bound/pattern asserted by the
-    # rest of the emitter suite (see conftest module docstring note below) --
+    # rest of the emitter suite (see conftest module docstring note below):
     # except where a doc without tags/an "every doc" query genuinely must
     # include it; those expectations were updated accordingly.
     (5, "Miscellaneous Doc", "assorted filler content only", [], 99, "2019-03-01", "2019-03-01T00:00:00Z", {"user": 'a"b\\c'}),
@@ -38,7 +38,7 @@ def lower_fold(text: str) -> list[str]:
     registry so tokenization here matches what tantivy's own 'default'
     tokenizer chain (simple tokenizer + lowercase filter) does at index time.
 
-    Note: tantivy's 'default' chain does *not* ASCII-fold -- "Entwässerungsplan"
+    Note: tantivy's 'default' chain does *not* ASCII-fold: "Entwässerungsplan"
     is indexed as the single token "entwässerungsplan", umlaut intact. This
     analyzer must not fold either, or emitted term text would silently stop
     matching what is in the index (verified against a live tantivy index).
@@ -127,7 +127,7 @@ def search_ids(index, q, limit=10):
 @pytest.fixture(scope="session")
 def windex():
     """In-RAM real-whoosh index (v2 paperless schema, ``oracle.oracle_schema``)
-    holding the same ``DOCS`` fixture rows as ``tindex`` -- the oracle
+    holding the same ``DOCS`` fixture rows as ``tindex``: the oracle
     counterpart used by the e2e acceptance suite (``test_acceptance_e2e.py``)
     to prove whoosh-compat's parse -> emit -> tantivy-search pipeline agrees
     with real whoosh's parse -> search pipeline on full query strings (not
@@ -137,11 +137,11 @@ def windex():
     ``tag`` is a comma-joined string (``KEYWORD(commas=True)`` splits it back
     apart at analysis time), ``has_tag`` is a plain boolean presence flag,
     ``created``/``added`` are naive datetimes (v2 stored everything as
-    UTC-naive). ``notes`` -- a JSON object on the tantivy/v3 side  -- has no
+    UTC-naive). ``notes`` (a JSON object on the tantivy/v3 side) has no
     v2 equivalent (v2's ``notes`` field was plain ``TEXT()``); it is rendered
     here as a whitespace-joined dump of the dict's values purely so the field
     is populated with *something* searchable, not to reproduce any particular
-    v2 behavior (see DIVERGENCES.md's JSON-subpath entry -- ``notes.user:``
+    v2 behavior (see DIVERGENCES.md's JSON-subpath entry, ``notes.user:``
     style queries are a v1-only concept with no v2 analogue at all).
     """
 

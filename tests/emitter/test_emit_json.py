@@ -24,7 +24,7 @@ from .conftest import search_ids
 @pytest.mark.parametrize("text, expected", [
     pytest.param("alice", [1], id="matches-owning-doc"),
     pytest.param("bob", [4], id="matches-different-doc"),
-    # Doc 5's notes.user is the raw string a"b\c -- proves the parse_query
+    # Doc 5's notes.user is the raw string a"b\c: proves the parse_query
     # fallback's quote/backslash escaping round-trips.
     pytest.param('a"b\\c', [5], id="quote-and-backslash-round-trip"),
 ])
@@ -41,7 +41,7 @@ def test_json_subpath_term_parsed(tindex, ereg, parse):
 
 def test_json_subpath_multitoken_and(tindex, ereg):
     # A JSON subpath value that analyzes to multiple tokens must follow the
-    # same multitoken policy as TEXT fields -- emit_json's term_query path
+    # same multitoken policy as TEXT fields: emit_json's term_query path
     # reuses _text_term_query rather than duplicating its handling (see
     # module docstring / emitters/tantivy_.py). Doc 1's notes.note is
     # "check this" (two tokens); AND resolution requires both, so only doc 1
@@ -101,7 +101,7 @@ def test_json_paths_supported_is_cached_across_calls(tindex, ereg):
 
 
 def test_json_subpath_unknown_subpath_falls_back_to_plain_field(tindex, ereg, parse):
-    # "notes.bogus" isn't in the registry's subpaths for "notes" -- the
+    # "notes.bogus" isn't in the registry's subpaths for "notes": the
     # FieldsPlugin/registry demote it back to an unfielded term against the
     # default field, same as whoosh treats any other unknown field.
     node = parse("notes.bogus:alice")

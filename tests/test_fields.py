@@ -1,4 +1,4 @@
-"""Tests for fields.py — FieldSpec and FieldRegistry."""
+"""Tests for fields.py: FieldSpec and FieldRegistry."""
 
 import dataclasses
 
@@ -9,7 +9,7 @@ from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 
 # ============================================================================
-# Test resolve() — canonical names and aliases
+# Test resolve(): canonical names and aliases
 # ============================================================================
 
 def test_resolve_by_canonical_name():
@@ -35,7 +35,7 @@ def test_resolve_unknown_returns_none():
 
 
 # ============================================================================
-# Test resolve_json() — dotted path resolution
+# Test resolve_json(): dotted path resolution
 # ============================================================================
 
 def test_resolve_json_simple_path():
@@ -92,7 +92,7 @@ def test_resolve_json_no_dot():
 
 
 # ============================================================================
-# Test __contains__ — in operator
+# Test __contains__: in operator
 # ============================================================================
 
 def test_contains_canonical_name():
@@ -128,7 +128,7 @@ def test_contains_invalid_path():
 
 
 # ============================================================================
-# Test __iter__ — iteration over specs
+# Test __iter__: iteration over specs
 # ============================================================================
 
 def test_iter_specs():

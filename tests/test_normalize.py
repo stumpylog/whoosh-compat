@@ -17,7 +17,7 @@ def T(x):
     return Term(field=None, text=x)
 
 
-# Rule 1: normalize children first (post-order) — a nested Nothing deep in a
+# Rule 1: normalize children first (post-order). A nested Nothing deep in a
 # child group must be normalized before the parent applies its own rules.
 class TestRule1NormalizeChildrenFirst:
     @pytest.mark.parametrize("tree, expected", [

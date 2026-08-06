@@ -10,7 +10,7 @@
 # an allowlist.py entry (see that file's docstring for the prefix
 # convention). Skip accounting is enforced by test_differential.py, which
 # reports the *specific* matched allowlist reference for every skip (run
-# `pytest tests/differential -rs` to see the per-query breakdown) -- these
+# `pytest tests/differential -rs` to see the per-query breakdown): these
 # markers are just a human-readable map of what to expect where.
 
 # --- compared: basic terms, booleans, dashes, field/numeric coercion -----
@@ -50,12 +50,12 @@ h52.1 - ku
 type:invoice
 
 # --- compared: unknown-field colon (foobar isn't a registered field; both
-# taggers demote it to text identically -- unlike the dotted-name case
+# taggers demote it to text identically: unlike the dotted-name case
 # below, there's no dot for whoosh-compat's tagger to treat specially).
 foobar:today
 
 # --- compared: NUMERIC (U64) fields must NOT be caught by date-field
-# rewriting (only created/modified/added are date fields) -- both scalar
+# rewriting (only created/modified/added are date fields): both scalar
 # values and bracket ranges.
 asn:20240101
 id:20240101
@@ -68,7 +68,7 @@ page_count:[2000 TO 2024]
 # --- compared: single-word natural-date keywords (whoosh's stock English
 # grammar understands these natively, no app-level rewrite needed), plus
 # compact numeric date scalars (exact instants go through the *single-value*
-# date path, which -- unlike ranges below -- whoosh's LocalDateParser tz
+# date path, which, unlike ranges below, whoosh's LocalDateParser tz
 # override does correctly reach).
 created:2020
 created:202003
@@ -88,7 +88,7 @@ created:"previous quarter"
 added:"previous quarter"
 
 # --- KNOWN DIVERGENCE (DIVERGENCES.md entry 6, structural not pattern-based): bad
-# date -- test_differential.py skips on any non-empty diagnostics list.
+# date: test_differential.py skips on any non-empty diagnostics list.
 # (month=13 in the 8-digit compact form.)
 added:20231340
 
@@ -143,13 +143,13 @@ created:[2025 TO 2020]
 # --- KNOWN DIVERGENCE (design, allowlist.py): unquoted multi-word natural-
 # date keywords. Real paperless v2 rewrites these via an *app-level* regex
 # (rewrite_natural_date_keywords, index.py) before whoosh ever parses the
-# string -- whoosh's own grammar has no native "previous week" support at
+# string: whoosh's own grammar has no native "previous week" support at
 # all. whoosh-compat instead adds these directly to its own date grammar,
 # usable the same way any other multi-word value is (quoted:
 # created:"previous week"); the app-level rewrite hack is paperless-specific
 # host-integration behavior, out of scope for whoosh-compat's parser. The
 # oracle harness replicates the app-level rewrite (oracle.py), so the
-# *quoted* form is NOT in this section -- only unquoted forms, which the
+# *quoted* form is NOT in this section: only unquoted forms, which the
 # static corpus below preserves faithfully as extracted from
 # TestMultiWordDateKeywords/TestKeywordDateResolution (those tests exercise
 # the *scanner* layer, not whoosh's qparser, so their unquoted strings never
@@ -170,5 +170,5 @@ schäfersee,created:previous year
 created:previous week
 
 # --- KNOWN DIVERGENCE (DIVERGENCES.md entry 6, structural not pattern-based): bad
-# number -- test_differential.py skips on any non-empty diagnostics list.
+# number: test_differential.py skips on any non-empty diagnostics list.
 created:202023

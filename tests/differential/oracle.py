@@ -113,7 +113,7 @@ def _analyze(text: str) -> list[str]:
     return [t.text for t in _STANDARD_ANALYZER(text)]
 
 
-# KEYWORD fields do *not* use StandardAnalyzer -- whoosh.fields.KEYWORD's own
+# KEYWORD fields do *not* use StandardAnalyzer: whoosh.fields.KEYWORD's own
 # analyzer just splits on commas (when commas=True), strips whitespace, and
 # optionally lowercases; it does not tokenize on word boundaries, so
 # punctuation-only values like "-" survive as a single token (unlike a TEXT
@@ -136,12 +136,12 @@ def _analyze_keyword(text: str) -> list[str]:
 def _make_oracle_registry() -> FieldRegistry:
     """A :class:`FieldRegistry` describing the same fields/kinds as
     :func:`oracle_schema`, for use by whoosh-compat's own parser
-    (``wc.parse``) in the differential tests -- *not* consumed by
+    (``wc.parse``) in the differential tests: *not* consumed by
     ``oracle_parse``, which only touches the real whoosh ``Schema``.
 
     ``created``/``modified``/``added`` are registered as ``DATETIME`` (not
     ``DATE``/``date_only``) because that's what the real v2 whoosh schema
-    calls them (``DATETIME(sortable=True)`` for all three) -- whoosh's own
+    calls them (``DATETIME(sortable=True)`` for all three): whoosh's own
     ``LocalDateParser`` converts *all* of them uniformly through the local
     timezone, so matching that requires the same field kind on our side.
     """
@@ -248,14 +248,14 @@ def _rewrite_natural_date_keywords(q: str, basedate: datetime, tz: tzinfo_t) -> 
     """Clone of paperless-ngx v2's ``rewrite_natural_date_keywords``.
 
     ``DelayedFullTextQuery._get_query`` calls this *before* handing the query
-    to whoosh's ``MultifieldParser`` -- it rewrites e.g. ``created:"previous
+    to whoosh's ``MultifieldParser``: it rewrites e.g. ``created:"previous
     week"`` into an explicit local-tz-converted-to-UTC bracket range
     (``created:[20260316000000 TO 20260322235959]``, second precision,
     inclusive end) via plain string substitution, entirely bypassing
     whoosh's/``LocalDateParser``'s own date grammar for these particular
     keywords. Real whoosh's stock ``English`` grammar (see
     ``English.setup()``) only understands ``today``/``yesterday``/``this
-    month``/``this year`` natively -- it has no ``previous week``/``previous
+    month``/``this year`` natively: it has no ``previous week``/``previous
     month``/``previous quarter``/``previous year`` support at all, so
     without this rewrite those keywords would always fail to parse as
     dates upstream of this rewrite too.
@@ -323,7 +323,7 @@ def _add_months(d: datetime, months: int) -> datetime:
 
 def oracle_parse(q: str, basedate: datetime, tz: tzinfo_t) -> wq.Query:
     """Parse ``q`` with the real whoosh ``MultifieldParser`` configured like
-    paperless-ngx v2's ``DelayedFullTextQuery._get_query`` -- including its
+    paperless-ngx v2's ``DelayedFullTextQuery._get_query``: including its
     ``rewrite_natural_date_keywords`` preprocessing step.
     """
 
@@ -479,7 +479,7 @@ def to_ast(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
     """Map a real whoosh ``Query`` tree to a whoosh-compat ``ast.Node`` tree.
 
     Returns ``None`` for query types with no meaningful mapping (the
-    corpus test skips these -- see :func:`unmapped_reason` for *why*, used
+    corpus test skips these: see :func:`unmapped_reason` for *why*, used
     to give each such skip a distinct, auditable reason rather than a
     catch-all "unmappable").
     """
@@ -489,12 +489,12 @@ def to_ast(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
 
 def unmapped_reason(q: wq.Query) -> str:
     """A specific, auditable reason :func:`to_ast` returned ``None`` for
-    ``q`` -- which concrete whoosh query type had no mapping. Every
+    ``q``: which concrete whoosh query type had no mapping. Every
     whoosh_compat.ast node type (Term/And/Or/Not/AndNot/AndMaybe/Require/
     Phrase/Prefix/Wildcard/TermRange/NumericRange/DateRange/Every/
     _NullQuery) *is* handled by :func:`_to_ast_node`, so in practice this
     only fires for whoosh query types genuinely outside that table (e.g.
-    ``FuzzyTerm``, ``Sequence``, ``Regex`` -- plugins this library doesn't
+    ``FuzzyTerm``, ``Sequence``, ``Regex``: plugins this library doesn't
     implement; see the README's syntax table) or a boosted wrapper around
     one of those.
     """
@@ -541,11 +541,11 @@ def compat_raw_parse(
     module docstring): :func:`analyze_ast` needs to forward-analyze
     each raw ``Term`` *before* any structural normalization runs, or a
     redundant parenthesized single term that analyzes to zero tokens (e.g.
-    ``(title:0)`` -- ``0`` is shorter than StandardAnalyzer's default
+    ``(title:0)``: ``0`` is shorter than StandardAnalyzer's default
     ``minsize=2``) gets pre-collapsed by ``whoosh_compat.parse()``'s
     internal normalize into a bare ``Term`` indistinguishable from an
     unparenthesized one. whoosh's own (also-unnormalized) tree keeps the
-    structure that turns into an empty ``And([])`` in that case --
+    structure that turns into an empty ``And([])`` in that case:
     comparable, post-:func:`analyze_ast`, only if our side is *also* still
     unnormalized when the 0-token drop happens. ``analyze_ast`` still ends
     with its own :func:`~whoosh_compat.ast.normalize` call, exactly
@@ -566,15 +566,15 @@ def analyze_ast(node: ast.Node, reg: FieldRegistry) -> ast.Node:
 
     A 0-token analyzed value (a stopword, or a token shorter than
     StandardAnalyzer's ``minsize=2``) is *dropped from its parent group*
-    entirely -- not replaced with an explicit :class:`~whoosh_compat.ast.Nothing`
-    leaf -- mirroring whoosh's own ``GroupNode``/``Wrapper``/``BinaryGroup``
+    entirely: not replaced with an explicit :class:`~whoosh_compat.ast.Nothing`
+    leaf: mirroring whoosh's own ``GroupNode``/``Wrapper``/``BinaryGroup``
     ``query()`` methods (``qa is None -> use qb``, etc; see
     ``whoosh.qparser.syntax``): a stopword inside ``foo AND the`` doesn't
     make the *whole* query match nothing, it just disappears as though it
     was never typed. This deliberately differs from
     :func:`whoosh_compat.ast.normalize`'s own rule that an *explicit*
     ``Nothing()`` (e.g. a genuinely empty range) poisons an enclosing
-    ``And`` -- that's a different, real "no results" case, not a
+    ``And``: that's a different, real "no results" case, not a
     dropped-token case, and conflating the two here would produce
     normalize()-driven false mismatches like ``(title:0) AND (0)`` (a
     single-char token whoosh's default analyzer drops as too short)
@@ -591,7 +591,7 @@ def analyze_ast(node: ast.Node, reg: FieldRegistry) -> ast.Node:
         if isinstance(n, ast.And):
             # Mirrors whoosh's GroupNode.query(): a plain And/Or group
             # *always* builds a (possibly empty) query object from whatever
-            # children survive analysis -- it never itself disappears the
+            # children survive analysis: it never itself disappears the
             # way a Wrapper/BinaryGroup does. normalize()'s existing
             # empty-group-> Nothing rule handles the all-dropped case
             # identically on both sides of the comparison.

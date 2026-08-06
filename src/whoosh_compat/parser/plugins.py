@@ -28,13 +28,13 @@
 """Forked from whoosh's ``qparser/plugins.py``, trimmed to the plugin subset
 this library supports (see the README's syntax table for what's in and out)
 and adapted so node ``query()`` methods build :class:`whoosh_compat.ast.Node`
-trees -- either directly (:class:`EveryPlugin`) or by calling hooks on the
+trees: either directly (:class:`EveryPlugin`) or by calling hooks on the
 ``parser`` object (``term_query``, ``wildcard_query``, ``prefix_query``,
 ``range_query``, implemented in :mod:`whoosh_compat.parser.default`).
 
 Two extensions beyond stock whoosh live here:
 
-* :class:`CommaValuesPlugin` -- splits ``field:a,b,c`` into an ``AndGroup`` of
+* :class:`CommaValuesPlugin`: splits ``field:a,b,c`` into an ``AndGroup`` of
   single-valued terms for fields whose :class:`~whoosh_compat.fields.FieldSpec`
   has ``comma_values=True``.
 * :class:`FieldsPlugin` accepts dotted field names (``notes.user:foo``) and
@@ -163,7 +163,7 @@ class WildcardPlugin(TaggingPlugin):
     class PrefixNode(syntax.TextNode):
         """Produced by rewriting a trailing-star-only wildcard. Its
         ``query()`` calls ``parser.prefix_query`` rather than the inherited
-        ``term_query`` -- ``QueryParser.prefix_query``
+        ``term_query``: ``QueryParser.prefix_query``
         (:mod:`whoosh_compat.parser.default`) turns this into
         :class:`whoosh_compat.ast.Prefix`.
         """
@@ -226,11 +226,11 @@ class WildcardPlugin(TaggingPlugin):
                 # PrefixNode's text is a *literal*, so folding "202[0-3]*"
                 # into Prefix("202[0-3]") would silently reinterpret the
                 # bracket character class as ordinary characters (real
-                # whoosh does exactly that -- see paperless-ngx#13568 and
+                # whoosh does exactly that: see paperless-ngx#13568 and
                 # ``QueryParser.wildcard_query``'s _TRAILING_STAR_RE).
                 # Nested rather than combined with `and`: mirrors whoosh's
                 # original two-step condition/action shape for this fold.
-                if (  # noqa: SIM102 -- preserves whoosh control-flow fidelity
+                if (  # noqa: SIM102 (preserves whoosh control-flow fidelity)
                     len(text) > 1
                     and "[" not in text
                     and not any(qm in text for qm in self.qmarks)
@@ -282,7 +282,7 @@ class BoostPlugin(TaggingPlugin):
 
         bnode = self.BoostNode
         for i, node in enumerate(group):
-            if isinstance(node, bnode):  # noqa: SIM102 -- preserves whoosh control-flow fidelity
+            if isinstance(node, bnode):  # noqa: SIM102 (preserves whoosh control-flow fidelity)
                 if not i or not group[i - 1].has_boost:
                     group[i] = syntax.to_word(node)  # type: ignore[arg-type]
         return group
@@ -394,7 +394,7 @@ class FieldsPlugin(Plugin):
     ``parser.registry``.
 
     Note: unlike most other ``*Plugin`` classes here, this one does not
-    inherit :class:`TaggingPlugin` -- it builds its own
+    inherit :class:`TaggingPlugin`: it builds its own
     :class:`FieldnameTagger` and fully overrides both ``taggers()`` and
     ``filters()``, so there's no shared regex-compiling behavior to reuse.
     """

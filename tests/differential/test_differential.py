@@ -43,7 +43,7 @@ def test_matches_oracle(q, oracle_reg):
     if diagnostics:
         # DIVERGENCES.md entry 6: any parse producing a diagnostic yields a
         # structured ErrorLeaf on the whoosh-compat side vs whoosh's
-        # untyped error_query()/NullQuery-with-.error -- these never
+        # untyped error_query()/NullQuery-with-.error: these never
         # compare structurally equal, by construction, for *any* invalid
         # date/number, not just the specific strings the static corpus
         # happens to exercise (see test_hypothesis.py, which discovers

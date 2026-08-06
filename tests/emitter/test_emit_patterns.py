@@ -1,7 +1,7 @@
 """Wildcard / Prefix / Every(field) emission.
 
 Every expected doc-id list below was derived by running Python's
-``fnmatch.fnmatch()`` (whoosh's own glob engine -- ``query.Wildcard`` compiles
+``fnmatch.fnmatch()`` (whoosh's own glob engine: ``query.Wildcard`` compiles
 its pattern with ``fnmatch.translate``) over the fixture's *analyzed* tokens,
 not by eyeballing the raw document text. See the module-level token map.
 """
@@ -54,7 +54,7 @@ def fnmatch_ids(tokens, pattern):
     pytest.param("202[0-3]", None, "202[0-3]", id="character-class-passthrough"),
     # fnmatch spells negation "[!...]"; the regex dialect spells it "[^...]".
     pytest.param("202[!0-3]", None, "202[^0-3]", id="negated-class-fnmatch-to-regex-dialect"),
-    # fnmatch.translate("202[0-3") == "(?s:202\\[0\\-3)\\z" -- the unmatched
+    # fnmatch.translate("202[0-3") == "(?s:202\\[0\\-3)\\z": the unmatched
     # "[" is an ordinary character, not a class opener.
     pytest.param("202[0-3", None, "202\\[0\\-3", id="unclosed-bracket-is-literal"),
     # Only literal runs go through the normalizer; the class body is passed
@@ -62,7 +62,7 @@ def fnmatch_ids(tokens, pattern):
     pytest.param("AB[0-3]*", str.lower, "ab[0-3].*", id="class-body-not-normalized-or-escaped-away"),
     # A "*" immediately following a class collapses runs the same as bare
     # "**" (the `while pattern[i]=="*"` collapse only fires after `flush()`,
-    # not right after a class -- this is really exercising the "**" collapse
+    # not right after a class: this is really exercising the "**" collapse
     # itself with a class in front of it).
     pytest.param("a**b", None, "a.*b", id="collapses-runs-of-star"),
     # fnmatch's bracket parser treats a "]" right after "[" (or "[!") as an
@@ -109,7 +109,7 @@ def test_glob_to_regex_escapes_class_internal_set_operators(tindex, ereg):
     pytest.param("title", TITLE_TOKENS, "202[0-3]", [1, 4], id="character-class-13568"),
     pytest.param("title", TITLE_TOKENS, "201[!0-8]", [2], id="negated-character-class"),
     # An unmatched "[" is a literal character; no fixture token contains one,
-    # so this matches nothing -- in contrast to the closed-class form above,
+    # so this matches nothing: in contrast to the closed-class form above,
     # which matches [1, 4].
     pytest.param("title", TITLE_TOKENS, "202[0-3", [], id="unclosed-bracket-is-literal"),
     # The exact wildcard shape from paperless-ngx issue #13568.

@@ -164,7 +164,7 @@ def test_timespan_disambiguate_time_only_uses_basedate():
 
 def test_timespan_disambiguate_no_year_either_side_uses_basedate_year():
     # Neither side has a year, but at least one has a month/day so
-    # has_no_date() is False -- both years fall back to the basedate
+    # has_no_date() is False: both years fall back to the basedate
     # (times.py:314-316).
     ts = timespan(adatetime(month=3), adatetime(month=6)).disambiguated(datetime(2026, 1, 1))
     assert ts.start.year == 2026 and ts.end.year == 2026
@@ -186,7 +186,7 @@ def test_timespan_disambiguate_start_year_missing_uses_end_year():
 
 def test_timespan_disambiguate_end_dm_copied_to_start():
     # End has month/day, start doesn't, and start's time-of-day isn't after
-    # end's -- so start borrows end's month/day (times.py:342-344).
+    # end's: so start borrows end's month/day (times.py:342-344).
     ts = timespan(adatetime(year=2020, hour=1), adatetime(year=2020, month=6, day=15, hour=5)
                   ).disambiguated(datetime(2026, 1, 1))
     assert ts.start.month == 6 and ts.start.day == 15
@@ -194,14 +194,14 @@ def test_timespan_disambiguate_end_dm_copied_to_start():
 
 def test_timespan_disambiguate_end_dm_falls_back_to_basedate_when_time_inverted():
     # End has month/day, start doesn't, but start's time is later than end's
-    # -- so start falls back to the basedate's month/day (times.py:339-341).
+    #: so start falls back to the basedate's month/day (times.py:339-341).
     ts = timespan(adatetime(year=2020, hour=20), adatetime(year=2020, month=6, day=15, hour=5)
                   ).disambiguated(datetime(2026, 3, 9))
     assert ts.start.month == 3 and ts.start.day == 9
 
 
 def test_timespan_disambiguate_start_dm_copied_to_end_uses_basedate():
-    # Start has month/day, end doesn't -- end borrows the basedate's
+    # Start has month/day, end doesn't: end borrows the basedate's
     # month/day (times.py:345-347). Basedate shares start's month/day so the
     # resulting order stays start <= end and no swap kicks in.
     ts = timespan(adatetime(year=2020, month=3, day=9, hour=1), adatetime(year=2020, hour=5)
@@ -230,7 +230,7 @@ def test_timespan_disambiguate_increases_ambiguous_end_year():
 
 def test_timespan_disambiguate_increases_ambiguous_end_year_past_start():
     # end.year is ambiguous and gets filled to start.year via max(), but the
-    # resulting month/day still puts end before start -- so end.year is
+    # resulting month/day still puts end before start: so end.year is
     # bumped by one more (times.py:360-361), not swapped.
     ts = timespan(adatetime(year=2025, month=6, day=1), adatetime(month=1, day=1)
                   ).disambiguated(datetime(2020, 1, 1))

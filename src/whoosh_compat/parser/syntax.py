@@ -615,7 +615,7 @@ class Operator(SyntaxNode):
         :param text: the text of the operator in the query string.
         :param grouptype: the type of group to create in place of the operator
             and the node(s) it operates on.
-        :param leftassoc: for infix opeators, whether the operator is left
+        :param leftassoc: for infix operators, whether the operator is left
             associative. use ``leftassoc=False`` for right-associative infix
             operators.
         """

@@ -1,13 +1,13 @@
 """AST -> tantivy.Query emitter.
 
 Builds ``tantivy.Query`` objects programmatically (``Query.term_query``,
-``Query.boolean_query``, etc.) -- never via ``tantivy.parse_query`` /
+``Query.boolean_query``, etc.): never via ``tantivy.parse_query`` /
 ``index.parse_query`` (that shortcut is reserved for the JSON subpath
 carve-out described below, not general query emission).
 
 Installed tantivy-py's ``Query.term_query`` resolves fields by exact name, so
 it cannot address a JSON subpath (``notes.user``) even when ``notes`` is a
-JSON field -- it raises ``ValueError`` as if the field were unknown. Until
+JSON field: it raises ``ValueError`` as if the field were unknown. Until
 https://github.com/quickwit-oss/tantivy-py/pull/716 lands and ships, JSON
 subpath terms are emitted via ``index.parse_query`` instead; see
 ``TantivyEmitter._json_paths_supported``/``_emit_json_term``.
@@ -56,7 +56,7 @@ def _translate_class(pattern: str, i: int, n: int) -> tuple[str | None, int]:
     """Translate the bracket expression starting just after a ``[`` at ``i-1``.
 
     Returns ``(regex_fragment, next_index)``. ``regex_fragment`` is ``None``
-    when the ``[`` has no matching ``]`` -- in that case the caller must treat
+    when the ``[`` has no matching ``]``: in that case the caller must treat
     the ``[`` as an ordinary literal character and resume at ``i``.
 
     This is a direct port of CPython's ``fnmatch.translate`` bracket handling
@@ -96,7 +96,7 @@ def _translate_class(pattern: str, i: int, n: int) -> tuple[str | None, int]:
             chunks.append(chunk)
         else:
             chunks[-1] += "-"
-        # Remove empty ranges -- invalid in a regex character class.
+        # Remove empty ranges: invalid in a regex character class.
         for k in range(len(chunks) - 1, 0, -1):
             if chunks[k - 1][-1] > chunks[k][0]:
                 chunks[k - 1] = chunks[k - 1][:-1] + chunks[k][1:]
@@ -106,10 +106,10 @@ def _translate_class(pattern: str, i: int, n: int) -> tuple[str | None, int]:
         stuff = "-".join(s.replace("\\", r"\\").replace("-", r"\-") for s in chunks)
 
     if not stuff:
-        # "[]" -- an empty range never matches.
+        # "[]": an empty range never matches.
         return "(?!)", j + 1
     if stuff == "!":
-        # "[!]" -- a negated empty range matches any single character.
+        # "[!]": a negated empty range matches any single character.
         return ".", j + 1
     if stuff[0] == "!":
         stuff = "^" + stuff[1:]
@@ -128,14 +128,14 @@ def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str:
     """Translate an fnmatch-style glob into a tantivy regex.
 
     Whoosh's ``query.Wildcard`` compiles its pattern with
-    ``fnmatch.translate``, so fnmatch -- not a naive split on ``*``/``?`` --
+    ``fnmatch.translate``, so fnmatch: not a naive split on ``*``/``?``:
     is the ground truth for what a whoosh wildcard matches. This function
     reproduces fnmatch's translation with two deliberate changes:
 
     * Literal runs are passed through ``normalizer`` (``spec.pattern_normalizer``,
       identity when ``None``) *before* being regex-escaped, so a pattern can be
       case-folded to line up with the analyzed/indexed term text. Only literal
-      runs are normalized -- ``*``, ``?`` and bracket-class bodies are pattern
+      runs are normalized: ``*``, ``?`` and bracket-class bodies are pattern
       syntax and are passed through as such.
     * No anchoring. ``fnmatch.translate`` emits ``(?s:...)\\z`` framing, and
       newer CPython versions also emit atomic groups (``(?>.*?foo)``) as a
@@ -160,7 +160,7 @@ def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str:
         i += 1
         if c == "*":
             flush()
-            # Collapse runs of "*" -- "a**b" means the same as "a*b".
+            # Collapse runs of "*": "a**b" means the same as "a*b".
             while i < n and pattern[i] == "*":
                 i += 1
             out.append(".*")
@@ -185,7 +185,7 @@ def _to_naive_utc(value: datetime) -> datetime:
     """Naive-UTC form of ``value`` for ``Query.range_query``.
 
     ``Query.range_query`` (tantivy-py 0.26) only accepts *naive* datetimes for
-    ``FieldType.Date`` -- a tz-aware one raises ``ValueError: Expected DateTime
+    ``FieldType.Date``: a tz-aware one raises ``ValueError: Expected DateTime
     type for field ...`` (unlike ``Query.term_query``, which accepts both).
     Parser-produced range bounds are always tz-aware UTC, so convert here.
     Naive input is passed through unchanged (tantivy already reads naive
@@ -209,7 +209,7 @@ def _pad_if_all_negative(
     expected "all except excluded" semantics without affecting scoring.
 
     Must be applied at every nesting level that builds a boolean query out
-    of clauses that might end up all-negative -- a single top-level ``NOT``,
+    of clauses that might end up all-negative: a single top-level ``NOT``,
     a falsy ``BOOLEAN_EXISTS`` term, and any nested group that happens to
     reduce to only negative clauses.
     """
@@ -309,7 +309,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         """Whether the installed tantivy-py's ``Query.term_query`` can address
         a JSON subpath directly (cached once per emitter instance).
 
-        Probes with the first JSON-kind field/subpath found in the registry --
+        Probes with the first JSON-kind field/subpath found in the registry:
         JSON path resolution in ``term_query`` is a schema-level capability of
         the installed tantivy-py, not something that varies per field, so one
         probe per emitter instance is representative for all JSON fields.
@@ -324,7 +324,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                     probe_path = f"{spec.name}.{spec.subpaths[0]}"
                     break
             if probe_path is None:
-                # No JSON fields registered -- the probe result is moot.
+                # No JSON fields registered: the probe result is moot.
                 self._json_paths_ok = False
             else:
                 try:
@@ -341,8 +341,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         terms, so multi-token JSON values follow the same multitoken policy
         (``_text_term_query`` is reused, not duplicated). When the installed
         tantivy-py cannot address JSON subpaths via ``term_query`` (see
-        ``_json_paths_supported``), falls back to ``index.parse_query`` --
-        the only route currently able to reach a JSON subpath -- quoting the
+        ``_json_paths_supported``), falls back to ``index.parse_query``:
+        the only route currently able to reach a JSON subpath: quoting the
         value and escaping backslashes/quotes so it round-trips through the
         query-string grammar.
         """
@@ -360,8 +360,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     def _group_child(self, child: ast.Node) -> tantivy.Query | None:
         """Visit a direct child of an And/Or group.
 
-        Returns ``None`` when the child -- possibly wrapped in one or more
-        transparent ``Boosted`` layers -- is a zero-token analyzed TEXT/
+        Returns ``None`` when the child: possibly wrapped in one or more
+        transparent ``Boosted`` layers: is a zero-token analyzed TEXT/
         KEYWORD term: such a term is dropped from its enclosing group
         entirely (whoosh's own behavior when a field's analyzer consumes a
         token completely, e.g. an all-stopword value). ``Boosted`` is
@@ -418,7 +418,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
             tokens = self._tokens(spec, node.text)
             if not tokens:
-                # Not inside a group that can drop us -- an empty term
+                # Not inside a group that can drop us: an empty term
                 # standalone simply matches nothing.
                 return tantivy.Query.empty_query()
             return self._text_term_query(spec, tokens)

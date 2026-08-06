@@ -214,7 +214,7 @@ def test_range_open_lower(reg):
 def test_range_both_sides_are_periods_cannot_combine(reg):
     # Both sides resolve to an already-disambiguated timespan ("previous
     # week"/"previous month"), which can't be nested inside another
-    # timespan() -- exercises range_to_node's non-combine branch for both
+    # timespan(): exercises range_to_node's non-combine branch for both
     # raw_start and raw_end.
     r = dparse("added:['previous month' TO 'this month']", reg).ast
     assert isinstance(r, ast.DateRange)
@@ -241,7 +241,7 @@ def test_torange_combo_basic(reg):
 
 
 def test_torange_combo_first_side_fails_whole_thing_fails(reg):
-    # Combo.parse's `if at is None: return (None, None)` -- the first bundle
+    # Combo.parse's `if at is None: return (None, None)`: the first bundle
     # doesn't match at all, so neither the "to" combo nor any dmy/bundle
     # alternative in the outer Choice matches either.
     res = dparse("added:'notadate to 2020'", reg)
@@ -270,7 +270,7 @@ def test_bag_time_and_date_both_match_in_one_value(reg):
 def test_dateparser_parse_method_direct() -> None:
     # DateParser.parse() (distinct from .date_from(), which is what
     # DateParserPlugin actually calls) is unused by whoosh-compat's own
-    # code -- same as upstream whoosh, where it's likewise dead from the
+    # code: same as upstream whoosh, where it's likewise dead from the
     # plugin's perspective (only .date_from() is called there too). It's
     # still a documented, non-trivial public method of the grammar classes,
     # so it's covered here directly rather than deleted.
@@ -374,7 +374,7 @@ def test_daterangesyntaxnode_and_dateerrornode_r() -> None:
 def test_do_dates_leaves_non_range_non_text_date_field_node_untouched(reg) -> None:
     # do_dates()'s trailing `else: continue` (has_fieldname but neither a
     # RangeNode nor has_text) has no real-world producer in the current
-    # plugin set -- FieldnameNode/RangeNode/TextNode are the only
+    # plugin set: FieldnameNode/RangeNode/TextNode are the only
     # has_fieldname=True node types, and FieldnameNode never survives as a
     # leaf. Exercised directly against a minimal stub node.
     from whoosh_compat.parser import syntax
@@ -399,7 +399,7 @@ def test_do_dates_leaves_non_range_non_text_date_field_node_untouched(reg) -> No
 def test_range_exclusive_bounds_ignored_for_ambiguous_bounds(reg):
     # "2020"/"2021" are ambiguous (year-only) bounds, not exact instants, so
     # range_to_node forces incl_lo=True regardless of the query's "{" exclusive
-    # marker (parser/dateparse.py:999-1000) -- only incl_hi is
+    # marker (parser/dateparse.py:999-1000): only incl_hi is
     # forced-exclusive (it already carries the "+1us" half-open adjustment).
     r = dparse("added:{2020 TO 2021}", reg).ast
     assert r.incl_lo is True and r.incl_hi is False

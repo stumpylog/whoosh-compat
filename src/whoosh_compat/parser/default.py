@@ -32,7 +32,7 @@ string into a :class:`whoosh_compat.parser.syntax.SyntaxNode` tree (via
 ``tag()``/``filterize()``, both ported verbatim from whoosh) and then into a
 :class:`whoosh_compat.ast.Node` tree (via ``.query(self)``).
 
-Unlike whoosh, this parser has no ``schema``/analysis machinery -- it is
+Unlike whoosh, this parser has no ``schema``/analysis machinery: it is
 handed a :class:`~whoosh_compat.fields.FieldRegistry` instead, and produces
 raw-text AST leaves; tokenization/analysis is entirely the concern of
 whatever backend later consumes the AST ("emit-time" analysis, per the
@@ -62,13 +62,13 @@ from whoosh_compat.parser.plugins import MultifieldPlugin
 from whoosh_compat.parser.plugins import Plugin
 
 # Matches wildcard text that is plain *literal* text followed by exactly one
-# trailing "*" -- rewritten to a Prefix query.
+# trailing "*": rewritten to a Prefix query.
 #
 # "[" is excluded alongside "*"/"?" because a bracket character class is glob
 # syntax too, and a Prefix node's text is a literal (the tantivy emitter
 # regex-escapes it). Real whoosh's ``Wildcard.normalize()`` only checks for
 # "*"/"?" here and so folds ``202[0-3]*`` down to ``Prefix('202[0-3]')``,
-# silently reinterpreting the class as literal characters -- a query that then
+# silently reinterpreting the class as literal characters: a query that then
 # matches (essentially) nothing. That is a whoosh bug, not an intended
 # semantic: the very same class sets ``SPECIAL_CHARS = frozenset("*?[")``
 # for prefix-seeking, so "[" is known to be special everywhere *except* this
@@ -97,7 +97,7 @@ class QueryParser:
         group: type[syntax.GroupNode] = syntax.AndGroup,
     ) -> None:
         """
-        :param fieldname: the default field -- the parser uses this as the
+        :param fieldname: the default field: the parser uses this as the
             field for any terms without an explicit field.
         :param registry: a :class:`~whoosh_compat.fields.FieldRegistry`
             describing the known fields and their kinds/aliases.
@@ -350,7 +350,7 @@ class QueryParser:
         if fieldname and spec is None:
             # Either a dotted JSON subpath, or a literal that reached here
             # because it wasn't a known field (FieldsPlugin already demoted
-            # unknown plain fieldnames back to text) -- either way, keep the
+            # unknown plain fieldnames back to text): either way, keep the
             # (possibly dotted) fieldname text as-is.
             node: ast.Node = ast.Term(field=fieldname, text=text)
             return ast.Boosted(node, boost) if boost != 1.0 else node
@@ -451,7 +451,7 @@ class QueryParser:
 
         Note that this is only ever reached for text ``WildcardPlugin``
         actually tagged as a wildcard, i.e. text containing ``*`` or a
-        question mark -- a bracket-only ``202[0-3]`` lexes as an ordinary
+        question mark: a bracket-only ``202[0-3]`` lexes as an ordinary
         term on both sides, matching whoosh. See ``_TRAILING_STAR_RE`` for
         why ``[`` blocks the Prefix fold.
         """
@@ -488,7 +488,7 @@ class MultifieldParser(QueryParser):
     "(f1:hello OR f2:hello) (f1:there OR f2:there)".
 
     ``fieldboosts`` applies *only* to the per-field copies created by this
-    expansion -- an explicitly-fielded term (``f1:hello``) is never boosted
+    expansion: an explicitly-fielded term (``f1:hello``) is never boosted
     by ``fieldboosts``, matching whoosh's ``MultifieldPlugin`` semantics.
     """
 

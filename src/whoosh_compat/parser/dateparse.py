@@ -36,8 +36,8 @@ a successful parse:
   objects directly against a ``schema``, dropping boost in the process
   (DIVERGENCES.md entry 3). Here, :class:`DateParserPlugin` converts Text/Range
   syntax nodes on DATE/DATETIME fields into a single
-  :class:`whoosh_compat.ast.DateRange` -- an exact instant becomes
-  ``DateRange(dt, dt, True, True)`` -- and preserves boost via
+  :class:`whoosh_compat.ast.DateRange`: an exact instant becomes
+  ``DateRange(dt, dt, True, True)``: and preserves boost via
   :class:`whoosh_compat.ast.Boosted`.
 * Whoosh's vendored ``whoosh.support.relativedelta`` is replaced by the real
   ``python-dateutil`` (already a core dependency).
@@ -45,7 +45,7 @@ a successful parse:
   basedate (``basedate.astimezone(tz).replace(tzinfo=None)``); the plugin
   converts results back to aware UTC datetimes at the end, either as
   UTC-midnight calendar days (DATE/``date_only`` fields) or as local instants
-  converted to UTC (DATETIME fields) -- see ``_to_utc``.
+  converted to UTC (DATETIME fields): see ``_to_utc``.
 * Whoosh represents an ambiguous/period match (e.g. just a year) as a
   ``timespan`` whose ``.end`` is ``adatetime.ceil()`` (the period's last
   microsecond, e.g. ``2020-12-31T23:59:59.999999``). Per paperless#13381,
@@ -117,7 +117,7 @@ class Props:
 
     def __init__(self, **args: Any) -> None:
         # NOTE: ``.update()`` (a dict mutation), not ``self.__dict__ =``
-        # (an attribute assignment) -- the latter would route through
+        # (an attribute assignment): the latter would route through
         # __setattr__ below and nest the whole dict under a literal
         # "__dict__" key instead of replacing the instance namespace.
         self.__dict__.update(args)
@@ -158,7 +158,7 @@ class ParserBase:
         if dt is None:
             # Naive local "now", matching the grammar's naive-local-time
             # contract (see DateParserPlugin._local_now).
-            dt = datetime.now()  # noqa: DTZ005 -- naive local time by contract, see module docstring
+            dt = datetime.now()  # noqa: DTZ005 (naive local time by contract, see module docstring)
 
         d, _pos = self.parse(text, dt, pos, debug + 1)
         return d
@@ -833,7 +833,7 @@ class DateParserPlugin(Plugin):
 
     Unlike whoosh's ``DateParserPlugin``, this class does not support the
     "free" undelimited-date tagging mode (``date:last tuesday`` without
-    quotes) -- paperless v2 never used it (``free=False``), and the
+    quotes): paperless v2 never used it (``free=False``), and the
     ambiguity/complexity it adds isn't worth carrying for a feature nothing
     exercises.
     """
@@ -929,8 +929,8 @@ class DateParserPlugin(Plugin):
         if isinstance(result, timespan):
             # By construction (see module docstring), a timespan's start/end
             # are always concrete datetimes by the time DateParser.date_from
-            # has disambiguated an adatetime -- never an ambiguous adatetime
-            # itself -- so these casts just narrow times.py's more general
+            # has disambiguated an adatetime: never an ambiguous adatetime
+            # itself: so these casts just narrow times.py's more general
             # DateLike union for mypy.
             lo_naive = cast(datetime, result.start)
             hi_naive: datetime | None = cast(datetime, result.end) + timedelta(microseconds=1)
@@ -999,7 +999,7 @@ class DateParserPlugin(Plugin):
 class DateRangeSyntaxNode(syntax.SyntaxNode):
     """Produced by :class:`DateParserPlugin` in place of a Text/Range node on
     a DATE/DATETIME field. Always builds a single
-    :class:`whoosh_compat.ast.DateRange` -- an exact instant is represented
+    :class:`whoosh_compat.ast.DateRange`: an exact instant is represented
     as ``DateRange(dt, dt, True, True)`` rather than a term, per
     DIVERGENCES.md entry 3 (whoosh emits ``query.Term`` for exact instants and drops
     boost; this fork keeps both a uniform range shape and the boost).

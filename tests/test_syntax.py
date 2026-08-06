@@ -459,7 +459,7 @@ def test_groupnode_node_before_after_not_found_returns_none() -> None:
 
 def test_groupnode_node_after_last_element_returns_none() -> None:
     # node_after()'s off-by-one guard (`i < len(nodes) - 2`) means even the
-    # second-to-last element reports no next sibling via this path -- this
+    # second-to-last element reports no next sibling via this path: this
     # locks in that (documented) upstream behavior rather than the "obvious"
     # `i < len(nodes) - 1`.
     a = syntax.WordNode("a")

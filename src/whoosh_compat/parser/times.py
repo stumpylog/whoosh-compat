@@ -198,7 +198,7 @@ class adatetime:
             s = 0
         if ms is None:
             ms = 0
-        return datetime(y, m, d, h, mn, s, ms)  # noqa: DTZ001 -- naive by contract, see module docstring
+        return datetime(y, m, d, h, mn, s, ms)  # noqa: DTZ001 (naive by contract, see module docstring)
 
     def ceil(self) -> datetime:
         """Returns a ``datetime`` version of this object with all unspecified
@@ -229,7 +229,7 @@ class adatetime:
             s = 59
         if ms is None:
             ms = 999999
-        return datetime(y, m, d, h, mn, s, ms)  # noqa: DTZ001 -- naive by contract, see module docstring
+        return datetime(y, m, d, h, mn, s, ms)  # noqa: DTZ001 (naive by contract, see module docstring)
 
     def disambiguated(self, basedate: datetime) -> DateLike | timespan:
         """Returns either a ``datetime`` or unambiguous ``timespan`` version
@@ -404,7 +404,7 @@ def fill_in(at: DateLike, basedate: datetime,
     ``basedate`` is usually a concrete ``datetime``/``adatetime``, but a
     handful of grammar elements (``previous week``, ``previous quarter``;
     see ``parser.dateparse.English.setup``) resolve directly to an
-    already-fully-specified ``timespan`` instead -- a calendar week/quarter
+    already-fully-specified ``timespan`` instead: a calendar week/quarter
     doesn't align with any single ``adatetime`` unit, so it can't be
     expressed as one. Such a result needs no further filling in (there's
     nothing ambiguous left to resolve), so it's returned as-is rather than

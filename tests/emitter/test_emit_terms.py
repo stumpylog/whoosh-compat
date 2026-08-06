@@ -111,7 +111,7 @@ def test_json_field_term_without_subpath_raises(tindex, ereg):
         emit_ast(ast.Term(field="notes", text="x"), tindex, ereg)
 
 
-# -- multitoken resolution: FIRST / PHRASE / OR (DEFAULT/AND is covered by
+#: multitoken resolution: FIRST / PHRASE / OR (DEFAULT/AND is covered by
 # test_multitoken_and above) -------------------------------------------------
 
 def _multitoken_registry(mode):
@@ -122,13 +122,13 @@ def _multitoken_registry(mode):
 
 
 @pytest.mark.parametrize("mode, text, expected", [
-    # FIRST: only the first token is searched -- "shopname" alone matches
+    # FIRST: only the first token is searched: "shopname" alone matches
     # both docs 2 and 4 regardless of what follows it.
     pytest.param(Multitoken.FIRST, "shopname bogus", [2, 4], id="first-uses-only-first-token"),
     # PHRASE: an exact adjacent-token match (tantivy phrase slop=0).
     pytest.param(Multitoken.PHRASE, "shopname product1", [2, 4], id="phrase-requires-adjacency"),
     pytest.param(Multitoken.PHRASE, "product1 shopname", [], id="phrase-order-matters"),
-    # OR: any token matching is enough -- "product2" alone only hits doc 4,
+    # OR: any token matching is enough: "product2" alone only hits doc 4,
     # but paired with "bogus" (which matches nothing) still hits doc 4 via OR.
     pytest.param(Multitoken.OR, "product2 bogus", [4], id="or-any-token-matches"),
 ])

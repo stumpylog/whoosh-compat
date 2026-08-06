@@ -58,8 +58,8 @@ def test_trailing_star_prefix(reg):
     assert parse("title:produ*", reg) == ast.Prefix(field="title", text="produ")
 
 def test_bracket_class_blocks_prefix_fold(reg):
-    # paperless-ngx#13568. Real whoosh folds this to Prefix('202[0-3]') -- a
-    # *literal* prefix -- silently reinterpreting the character class as
+    # paperless-ngx#13568. Real whoosh folds this to Prefix('202[0-3]'): a
+    # *literal* prefix: silently reinterpreting the character class as
     # ordinary text. whoosh-compat keeps it a Wildcard so the class survives.
     assert parse("title:202[0-3]*", reg) == ast.Wildcard(field="title", pattern="202[0-3]*")
 
@@ -76,7 +76,7 @@ def test_bracket_class_wildcard_never_folds_to_term(reg, pattern):
 
 def test_bracket_only_text_is_a_term(reg):
     # WildcardPlugin only tags text containing "*"/"?", so a bare bracket
-    # class is an ordinary term -- same as whoosh. (Not folded *down* from a
+    # class is an ordinary term: same as whoosh. (Not folded *down* from a
     # Wildcard; never tagged as one to begin with.)
     assert parse("title:202[0-3]", reg) == ast.Term(field="title", text="202[0-3]")
 

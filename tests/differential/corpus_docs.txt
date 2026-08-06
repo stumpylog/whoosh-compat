@@ -71,7 +71,7 @@ tag:steuer AND tag:valentin AND (title:*2025 OR (NOT title:*202[0-3] AND NOT tit
 # fold (DIVERGENCES.md entry 13). Real whoosh's Wildcard.normalize() only checks for
 # "*"/"?" (despite SPECIAL_CHARS = "*?["), so a trailing-star pattern
 # containing a character class folds to a Prefix that silently drops the
-# class body -- Prefix('title', '202[0-3]') instead of keeping the class.
+# class body: Prefix('title', '202[0-3]') instead of keeping the class.
 # whoosh-compat fixed this fold in both sites (parser/default.py's
 # _TRAILING_STAR_RE and parser/plugins.py's do_wildcards) so it keeps the
 # full Wildcard('title', '202[0-3]*') pattern instead. See
