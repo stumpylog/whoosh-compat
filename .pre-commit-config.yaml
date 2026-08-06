@@ -49,12 +49,13 @@ repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: "v0.16.1"
     hooks:
-      # Only the linter, not ruff-format: this repo's parser/ package is a
-      # deliberately close port of whoosh's own source (see
-      # ARCHITECTURE.md's "why a fork" section), and an automated
-      # reformatting pass would produce a large, unreviewed diff against
-      # that fidelity for no functional benefit.
       - id: ruff-check
+      # ruff-format is enabled repo-wide except the whoosh-forked parser/
+      # modules, which stay unformatted so they remain diffable against
+      # upstream whoosh (see pyproject.toml's [tool.ruff.format] exclude
+      # list and ARCHITECTURE.md's "why a fork" section for which files
+      # those are and why).
+      - id: ruff-format
   # mypy is intentionally not wired in here: it needs the project's own
   # virtualenv (tantivy, whoosh, types-python-dateutil, ...) rather than
   # pre-commit's isolated hook environments to type-check meaningfully, so
