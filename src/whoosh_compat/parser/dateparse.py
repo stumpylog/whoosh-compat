@@ -156,9 +156,9 @@ class ParserBase:
     def date_from(self, text: str, dt: datetime | None = None, pos: int = 0,
                   debug: int = -9999) -> Any:
         if dt is None:
-            # Naive "now", matching the grammar's naive-local-time contract
-            # (see DateParserPlugin._local_now).
-            dt = datetime.now(UTC).replace(tzinfo=None)
+            # Naive local "now", matching the grammar's naive-local-time
+            # contract (see DateParserPlugin._local_now).
+            dt = datetime.now()  # noqa: DTZ005 -- naive local time by contract, see module docstring
 
         d, _pos = self.parse(text, dt, pos, debug + 1)
         return d
@@ -698,6 +698,10 @@ class DateParser:
     def date_from(self, text: str, basedate: datetime | None = None, pos: int = 0,
                   debug: int = -9999, toend: bool = True) -> Any:
         if basedate is None:
+            # Naive UTC "now": whoosh's own MultiBase.date_from uses
+            # datetime.utcnow() for this fallback (unlike ParserBase.date_from
+            # above, which uses naive local time), so this preserves that
+            # same asymmetry rather than introducing a new one.
             basedate = datetime.now(UTC).replace(tzinfo=None)
 
         parser = self.get_parser()

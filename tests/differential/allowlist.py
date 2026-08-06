@@ -6,7 +6,7 @@ entry in DIVERGENCES.md.
 Reference-string prefix convention (never bake a clear whoosh bug into
 whoosh-compat for parity's sake):
 
-* ``DIVERGENCES #N`` -- see DIVERGENCES.md entry N.
+* ``DIVERGENCES.md entry N`` -- see that numbered entry in DIVERGENCES.md.
 * ``whoosh-bug:`` -- the oracle's behavior is a confirmed defect in real
   whoosh/paperless-v2 (broken parsing, dropped data, wiring that silently
   no-ops); whoosh-compat keeps its own correct behavior and does NOT
