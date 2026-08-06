@@ -218,15 +218,17 @@ def test_created_previous_month_unquoted_is_a_documented_divergence(windex, tind
 
 
 def test_notes_user_json_subpath_has_no_v2_analogue(windex, tindex, ereg):
-    """design (DIVERGENCES JSON-subpath entry): ``notes.user:`` is a v1-only
-    JSON dotted-path concept (:meth:`FieldRegistry.resolve_json`). Real v2
-    whoosh has no JSON field type at all: v2's own ``notes`` field was
-    plain ``TEXT()``: so there is no query real whoosh users could type
-    that reaches "the note written by a specific user" the way v1's JSON
-    subpath does. ``windex``'s ``notes`` field (see conftest.py) is filled
-    with a whitespace-joined dump of the note dict's values purely to give
-    the field *something* to search, not to reproduce a v2 behavior that
-    never existed; unsurprisingly, that naive representation doesn't
+    """design (DIVERGENCES JSON-subpath entry): ``notes.user:`` is a
+    whoosh-compat-only JSON dotted-path concept
+    (:meth:`FieldRegistry.resolve_json`). Real whoosh has no JSON field type
+    at all: the paperless-ngx v2 schema this suite's oracle clones had its
+    own ``notes`` field as plain ``TEXT()``: so there is no query real
+    whoosh users could type that reaches "the note written by a specific
+    user" the way whoosh-compat's JSON subpath does. ``windex``'s ``notes``
+    field (see conftest.py) is filled with a whitespace-joined dump of the
+    note dict's values purely to give the field *something* to search, not
+    to reproduce a real-whoosh behavior that never existed; unsurprisingly,
+    that naive representation doesn't
     happen to satisfy whoosh's own multifield-AND expansion of
     "notes.user:alice" (which requires the literal token "notes" *and* the
     tokens "user"+"alice" together in one field), so it matches nothing.

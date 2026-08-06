@@ -51,8 +51,9 @@ class StubParser:
     ),
     pytest.param(
         syntax.DisMaxGroup,
-        # v1 has no dedicated DisjunctionMax AST node, so DisMaxGroup
-        # degrades to a plain Or of its children (documented in syntax.py).
+        # whoosh-compat has no dedicated DisjunctionMax AST node, so
+        # DisMaxGroup degrades to a plain Or of its children (documented in
+        # syntax.py).
         ast.Or(children=(ast.Term(field=None, text="a"), ast.Term(field=None, text="b"))),
         id="dismaxgroup-maps-to-or",
     ),

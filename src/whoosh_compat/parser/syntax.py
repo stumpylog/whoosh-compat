@@ -485,8 +485,8 @@ class OrGroup(GroupNode):
 class DisMaxGroup(GroupNode):
     """Syntax node for DisMax groups.
 
-    whoosh-compat's v1 AST has no dedicated DisjunctionMax node, and none of
-    the v1 parser plugins produce ``DisMaxGroup`` by default. The class is
+    whoosh-compat's AST has no dedicated DisjunctionMax node, and none of
+    its parser plugins produce ``DisMaxGroup`` by default. The class is
     kept (rather than deleted) so forked plugin/parser code that references
     it continues to work; its ``query()`` degrades to a plain
     :class:`whoosh_compat.ast.Or` of its children.

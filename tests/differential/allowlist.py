@@ -13,9 +13,10 @@ whoosh-compat for parity's sake):
   reproduce the bug.
 * ``design:``: a deliberate whoosh-compat design choice/new feature with no
   whoosh equivalent to match (not a bug on either side).
-* ``out-of-scope:``: the query exercises something outside whoosh-compat's
-  v1 surface entirely (e.g. a v3-only JSON dotted path against the v2
-  schema); there is no meaningful oracle comparison to make.
+* ``out-of-scope:``: the query exercises something entirely outside
+  whoosh-compat's current query surface (e.g. a JSON dotted path, a
+  whoosh-compat-only concept with no counterpart in the real-whoosh schema
+  being compared against); there is no meaningful oracle comparison to make.
 """
 
 from __future__ import annotations
@@ -78,8 +79,8 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # "custom_fields." as plain text merged differently by each side's
     # unknown-field demotion logic. Confirmed via oracle.compat_raw_parse:
     # both sides produce a real (non-None) tree, they just don't structurally
-    # match. This is an inherent consequence of the v1 JSON-subpath tagger
-    # feature existing at all, not a bug on either side.
+    # match. This is an inherent consequence of whoosh-compat's JSON-subpath
+    # tagger feature existing at all, not a bug on either side.
     (
         re.compile(r"\bcustom_fields\.(value|name)\b"),
         (
@@ -97,8 +98,9 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
         ),
     ),
 
-    # NOTE: DIVERGENCES.md entry 8 ("attached -foo searches for foo") describes a
-    # *v1-vs-live-v3* (tantivy) divergence, not v1-vs-v2/whoosh: it does
+    # NOTE: DIVERGENCES.md entry 8 ("attached -foo searches for foo") describes
+    # a divergence between whoosh-compat and paperless-ngx's live tantivy-based
+    # search (not one between whoosh-compat and real whoosh): it does
     # not apply here. Verified directly: a bare leading "-foo" with nothing
     # before it never triggers either parser's NOT-prefix operator (that
     # requires a preceding term to attach to); both whoosh and whoosh-compat

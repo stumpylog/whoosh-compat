@@ -141,8 +141,9 @@ def windex():
     v2 equivalent (v2's ``notes`` field was plain ``TEXT()``); it is rendered
     here as a whitespace-joined dump of the dict's values purely so the field
     is populated with *something* searchable, not to reproduce any particular
-    v2 behavior (see DIVERGENCES.md's JSON-subpath entry, ``notes.user:``
-    style queries are a v1-only concept with no v2 analogue at all).
+    real-whoosh behavior (see DIVERGENCES.md's JSON-subpath entry,
+    ``notes.user:`` style queries are a whoosh-compat-only concept with no
+    real-whoosh analogue at all).
     """
 
     schema = oracle_schema()

@@ -497,7 +497,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         spec = self._resolve(node.field)
         lo = None if node.lo is None else int(node.lo)
         hi = None if node.hi is None else int(node.hi)
-        # v1 scope: numeric fields are U64 only.
+        # Currently numeric fields are U64 only.
         return self._range_query(spec, tantivy.FieldType.Unsigned, lo, hi, node)
 
     def visit_daterange(self, node: ast.DateRange) -> tantivy.Query:
