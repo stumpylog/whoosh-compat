@@ -926,7 +926,7 @@ class DateParserPlugin(Plugin):
         if result is None:
             return self._error(node, text)
 
-        if isinstance(result, timespan):
+        if isinstance(result, timespan) and result.start != result.end:
             # By construction (see module docstring), a timespan's start/end
             # are always concrete datetimes by the time DateParser.date_from
             # has disambiguated an adatetime: never an ambiguous adatetime
@@ -936,7 +936,17 @@ class DateParserPlugin(Plugin):
             hi_naive: datetime | None = cast(datetime, result.end) + timedelta(microseconds=1)
             incl_lo, incl_hi = True, False
         else:
-            lo_naive = hi_naive = result
+            # Either a plain datetime, or a degenerate (start == end)
+            # timespan: text like "midnight"/"noon" disambiguates to an
+            # adatetime whose time-of-day is fully specified but whose
+            # date is not, which times.py's timespan.disambiguated() fills
+            # in from basedate on *both* sides identically (see its
+            # has_no_date branch), producing a zero-width timespan rather
+            # than a plain datetime. That is still an exact instant, not an
+            # ambiguous period, so it gets the same both-inclusive
+            # treatment as the plain-datetime case instead of an
+            # off-by-one-microsecond half-open range.
+            lo_naive = hi_naive = cast(datetime, result.start if isinstance(result, timespan) else result)
             incl_lo = incl_hi = True
 
         lo = self._to_utc(lo_naive, spec.date_only)
