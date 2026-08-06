@@ -64,35 +64,6 @@ def relative_days(current_wday: int, wday: int, dir: int) -> int:
         return (current_wday + 7 - wday) % 7 * -1
 
 
-def timedelta_to_usecs(td: timedelta) -> int:
-    total = td.days * 86400000000  # Microseconds in a day
-    total += td.seconds * 1000000  # Microseconds in a second
-    total += td.microseconds
-    return total
-
-
-def datetime_to_long(dt: datetime) -> int:
-    """Converts a datetime object to a long integer representing the number
-    of microseconds since ``datetime.min``.
-    """
-
-    return timedelta_to_usecs(dt.replace(tzinfo=None) - dt.min)
-
-
-def long_to_datetime(x: int) -> datetime:
-    """Converts a long integer representing the number of microseconds since
-    ``datetime.min`` to a datetime object.
-    """
-
-    days = x // 86400000000  # Microseconds in a day
-    x -= days * 86400000000
-
-    seconds = x // 1000000  # Microseconds in a second
-    x -= seconds * 1000000
-
-    return datetime.min + timedelta(days=days, seconds=seconds, microseconds=x)
-
-
 # Ambiguous datetime object
 
 class adatetime:
@@ -113,39 +84,33 @@ class adatetime:
     second: int | None
     microsecond: int | None
 
-    def __init__(self, year: int | datetime | None = None,
+    def __init__(self, year: int | None = None,
                  month: int | None = None, day: int | None = None,
                  hour: int | None = None, minute: int | None = None,
                  second: int | None = None,
                  microsecond: int | None = None) -> None:
-        if isinstance(year, datetime):
-            dt = year
-            self.year, self.month, self.day = dt.year, dt.month, dt.day
-            self.hour, self.minute, self.second = dt.hour, dt.minute, dt.second
-            self.microsecond = dt.microsecond
-        else:
-            if month is not None and (month < 1 or month > 12):
-                raise TimeError("month must be in 1..12")
+        if month is not None and (month < 1 or month > 12):
+            raise TimeError("month must be in 1..12")
 
-            if day is not None and day < 1:
-                raise TimeError("day must be greater than 1")
-            if (year is not None and month is not None and day is not None
-                and day > calendar.monthrange(year, month)[1]):
-                raise TimeError("day is out of range for month")
+        if day is not None and day < 1:
+            raise TimeError("day must be greater than 1")
+        if (year is not None and month is not None and day is not None
+            and day > calendar.monthrange(year, month)[1]):
+            raise TimeError("day is out of range for month")
 
-            if hour is not None and (hour < 0 or hour > 23):
-                raise TimeError("hour must be in 0..23")
-            if minute is not None and (minute < 0 or minute > 59):
-                raise TimeError("minute must be in 0..59")
-            if second is not None and (second < 0 or second > 59):
-                raise TimeError("second must be in 0..59")
-            if microsecond is not None and (microsecond < 0
-                                            or microsecond > 999999):
-                raise TimeError("microsecond must be in 0..999999")
+        if hour is not None and (hour < 0 or hour > 23):
+            raise TimeError("hour must be in 0..23")
+        if minute is not None and (minute < 0 or minute > 59):
+            raise TimeError("minute must be in 0..59")
+        if second is not None and (second < 0 or second > 59):
+            raise TimeError("second must be in 0..59")
+        if microsecond is not None and (microsecond < 0
+                                        or microsecond > 999999):
+            raise TimeError("microsecond must be in 0..999999")
 
-            self.year, self.month, self.day = year, month, day
-            self.hour, self.minute, self.second = hour, minute, second
-            self.microsecond = microsecond
+        self.year, self.month, self.day = year, month, day
+        self.hour, self.minute, self.second = hour, minute, second
+        self.microsecond = microsecond
 
     def __eq__(self, other: object) -> bool:
         if other.__class__ is not self.__class__:

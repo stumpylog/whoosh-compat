@@ -428,29 +428,6 @@ class Bag(MultiBase):
         return (d, pos)
 
 
-class Optional(ParserBase):
-    """Wraps a sub-element to indicate that the sub-element is optional."""
-
-    def __init__(self, element: Any) -> None:
-        self.element = self.to_parser(element)
-
-    def __repr__(self) -> str:
-        return f"{self.__class__.__name__}({self.element!r})"
-
-    def parse(self, text: str, dt: datetime, pos: int = 0, debug: int = -9999) -> Any:
-        d: Any
-        newpos: Any
-        try:
-            d, newpos = self.element.parse(text, dt, pos, debug + 1)
-        except TimeError:
-            d, newpos = None, None
-
-        if d:
-            return (d, newpos)
-        else:
-            return (adatetime(), newpos)
-
-
 class ToEnd(ParserBase):
     """Wraps a sub-element and requires that the end of the sub-element's match
     be the end of the text.
