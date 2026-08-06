@@ -55,6 +55,12 @@ exclude_also = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Pre-commit (and other tools) invoke ruff with explicit file paths rather
+# than a directory; without this, `exclude`/`format.exclude` are only
+# honored during directory traversal and would silently stop protecting
+# the forked parser/ modules from ruff-format the moment they're passed by
+# name instead of via `.`.
+force-exclude = true
 
 [tool.ruff.lint]
 extend-select = ["I"]
@@ -67,6 +73,22 @@ force-single-line = true
 # (see src/whoosh_compat/parser/times.py's module docstring); constructing
 # naive datetimes is the point, not an omission.
 "tests/**" = ["DTZ001", "DTZ003", "DTZ005"]
+
+[tool.ruff.format]
+# The parser/ modules forked from whoosh (see ARCHITECTURE.md's "Module
+# map with provenance") stay unformatted so they remain diffable against
+# upstream whoosh; ruff check still lints them normally, this exclusion is
+# format-only.
+exclude = [
+  "src/whoosh_compat/parser/default.py",
+  "src/whoosh_compat/parser/plugins.py",
+  "src/whoosh_compat/parser/syntax.py",
+  "src/whoosh_compat/parser/taggers.py",
+  "src/whoosh_compat/parser/common.py",
+  "src/whoosh_compat/parser/dateparse.py",
+  "src/whoosh_compat/parser/times.py",
+  "src/whoosh_compat/parser/text.py",
+]
 
 [tool.codespell]
 # Each of these is a deliberate false positive, not a typo to fix:
