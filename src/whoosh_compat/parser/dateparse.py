@@ -893,12 +893,14 @@ class DateParserPlugin(Plugin):
             return datetime(dt_naive.year, dt_naive.month, dt_naive.day, tzinfo=UTC)
         return dt_naive.replace(tzinfo=self.tz).astimezone(UTC)
 
-    def _error(self, node: syntax.SyntaxNode, text: str) -> DateErrorNode:
+    def _error(self, node: syntax.SyntaxNode, text: str, field: str) -> DateErrorNode:
         diagnostic = Diagnostic(
             message=f"{text!r} is not a recognizable date",
             kind=DiagnosticKind.BAD_DATE,
             startchar=node.startchar,
             endchar=node.endchar,
+            field=field,
+            raw_value=text,
         )
         return DateErrorNode(diagnostic)
 
@@ -944,7 +946,7 @@ class DateParserPlugin(Plugin):
             # fail in the arithmetic rather than in the grammar. Parsing
             # reports bad input through diagnostics, so treat these as an
             # unrecognizable date like any other.
-            return self._error(node, text)
+            return self._error(node, text, spec.name)
 
     def _text_to_node(
         self, node: syntax.SyntaxNode, spec: FieldSpec, text: str
@@ -952,7 +954,7 @@ class DateParserPlugin(Plugin):
         local_now = self._local_now()
         result = self.dateparser.date_from(text, local_now)
         if result is None:
-            return self._error(node, text)
+            return self._error(node, text, spec.name)
 
         if isinstance(result, timespan) and result.start != result.end:
             # By construction (see module docstring), a timespan's start/end
@@ -998,7 +1000,7 @@ class DateParserPlugin(Plugin):
             # disambiguation failure most commonly comes from the exclusive-
             # ceiling arithmetic on the end side (see the +1 microsecond
             # step just below _range_to_node's combine branch).
-            return self._error(node, node.end or node.start or "")
+            return self._error(node, node.end or node.start or "", spec.name)
 
     def _range_to_node(self, node: syntax.RangeNode, spec: FieldSpec) -> syntax.SyntaxNode:
         local_now = self._local_now()
@@ -1017,16 +1019,16 @@ class DateParserPlugin(Plugin):
             try:
                 raw_start = self.dateparser.date_from(node.start, local_now)
             except (ValueError, OverflowError):
-                return self._error(node, node.start)
+                return self._error(node, node.start, spec.name)
             if raw_start is None:
-                return self._error(node, node.start)
+                return self._error(node, node.start, spec.name)
         if node.end:
             try:
                 raw_end = self.dateparser.date_from(node.end, local_now)
             except (ValueError, OverflowError):
-                return self._error(node, node.end)
+                return self._error(node, node.end, spec.name)
             if raw_end is None:
-                return self._error(node, node.end)
+                return self._error(node, node.end, spec.name)
 
         start_exact = isinstance(raw_start, datetime)
         end_exact = isinstance(raw_end, datetime)
@@ -1061,7 +1063,7 @@ class DateParserPlugin(Plugin):
                 # The exclusive-ceiling adjustment is end-bound-only
                 # arithmetic (e.g. year 9999's last microsecond plus one
                 # lands past datetime.max): always the end bound's fault.
-                return self._error(node, node.end)
+                return self._error(node, node.end, spec.name)
             incl_hi = False
         if lo_naive is not None and not start_exact:
             incl_lo = True
@@ -1069,11 +1071,11 @@ class DateParserPlugin(Plugin):
         try:
             lo = self._to_utc(lo_naive, spec.date_only) if lo_naive is not None else None
         except (ValueError, OverflowError):
-            return self._error(node, node.start)
+            return self._error(node, node.start, spec.name)
         try:
             hi = self._to_utc(hi_naive, spec.date_only) if hi_naive is not None else None
         except (ValueError, OverflowError):
-            return self._error(node, node.end)
+            return self._error(node, node.end, spec.name)
         return DateRangeSyntaxNode(spec.name, lo, hi, incl_lo, incl_hi, node.boost)
 
 

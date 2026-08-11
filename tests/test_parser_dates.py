@@ -64,6 +64,11 @@ def test_whoosh_plusminus(reg):
 def test_bad_date_diagnostic(reg):
     res = dparse("added:notadate", reg)
     assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    # A host mapping this to a typed exception (e.g. InvalidDateQuery(field,
+    # value)) needs the field name and offending text structurally, not by
+    # regex-parsing the rendered message.
+    assert res.diagnostics[0].field == "added"
+    assert res.diagnostics[0].raw_value == "notadate"
 
 
 def test_datetime_boost_preserved(reg):
@@ -388,16 +393,24 @@ def test_range_out_of_range_diagnostic_names_the_failing_bound(reg, query, bad_b
     res = dparse(query, reg)
     assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
     assert bad_bound in res.diagnostics[0].message
+    assert res.diagnostics[0].field == "created"
+    assert res.diagnostics[0].raw_value == bad_bound
 
 
 def test_range_bad_start_diagnostic(reg):
     res = dparse("added:[notadate TO 2020]", reg)
     assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics[0].field == "added"
+    assert res.diagnostics[0].raw_value == "notadate"
 
 
 def test_range_bad_end_diagnostic(reg):
     res = dparse("added:[2020 TO notadate]", reg)
     assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics[0].field == "added"
+    # The end bound is the offending text here, not the start bound: the
+    # diagnostic's raw_value must track whichever bound the message names.
+    assert res.diagnostics[0].raw_value == "notadate"
 
 
 # --- torange Combo grammar (free "X to Y" text inside one field value) -----

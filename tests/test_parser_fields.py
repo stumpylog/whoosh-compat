@@ -20,6 +20,17 @@ def test_u64_bad(reg):
     # somewhere to point the user at, same as BAD_DATE diagnostics already do.
     assert r.diagnostics[0].startchar == 4
     assert r.diagnostics[0].endchar == 7
+    # A host that wants a typed exception (field, raw value) rather than
+    # regex-parsing the rendered message needs these carried structurally.
+    assert r.diagnostics[0].field == "asn"
+    assert r.diagnostics[0].raw_value == "xyz"
+
+
+def test_numeric_range_bad_bound_diagnostic_carries_field_and_raw_value(reg):
+    r = wc.parse("asn:[xyz TO 20]", registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf) and r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert r.diagnostics[0].field == "asn"
+    assert r.diagnostics[0].raw_value == "xyz"
 
 
 def test_bool_words(reg):

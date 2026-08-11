@@ -366,6 +366,8 @@ class QueryParser:
                         kind=DiagnosticKind.BAD_NUMBER,
                         startchar=kw.get("startchar"),  # type: ignore[arg-type]
                         endchar=kw.get("endchar"),  # type: ignore[arg-type]
+                        field=fieldname,
+                        raw_value=text,
                     )
                     self.report(d)
                     return ast.ErrorLeaf(diagnostic=d)
@@ -396,6 +398,8 @@ class QueryParser:
                 kind=DiagnosticKind.BAD_NUMBER,
                 startchar=getattr(node, "startchar", None),
                 endchar=getattr(node, "endchar", None),
+                field=fieldname,
+                raw_value=text,
             )
             self.report(d)
             return None, ast.ErrorLeaf(diagnostic=d)

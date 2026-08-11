@@ -21,6 +21,8 @@ class Diagnostic:
     kind: DiagnosticKind
     startchar: int | None
     endchar: int | None
+    field: str | None = None
+    raw_value: str | None = None
 
 
 class WhooshCompatError(Exception):

@@ -146,8 +146,16 @@ module docstring explains its one deliberate exception to "build everything
 programmatically" (the JSON-subpath carve-out, §5).
 
 **Errors/diagnostics flow (`errors.py`)**: `Diagnostic(message, kind,
-startchar, endchar)` is a plain data record; `DiagnosticKind` currently has
-`BAD_DATE`/`BAD_NUMBER`/`UNKNOWN`. Parsing never raises for bad input:
+startchar, endchar, field, raw_value)` is a plain data record; `DiagnosticKind`
+currently has `BAD_DATE`/`BAD_NUMBER`/`UNKNOWN`. `field` and `raw_value`
+default to `None` and are populated wherever a `Diagnostic` is constructed
+against a known field (`DateParserPlugin._error()` in `dateparse.py`, and
+both `BAD_NUMBER` sites in `default.py`'s `QueryParser`): `field` is the
+field name the diagnostic concerns, `raw_value` is the offending text as the
+user typed it. A host that wants a typed exception (e.g. paperless-ngx's
+`InvalidDateQuery(field, value)`) reads these two fields directly instead of
+regex-parsing `message`, which stays human-readable and can change wording
+without notice. Parsing never raises for bad input:
 `QueryParser` accumulates `Diagnostic`s onto `self.diagnostics` as it goes
 (see `default.py`'s `report()`), and bad fragments become
 `ast.ErrorLeaf(diagnostic)` nodes in the tree rather than raising. This
