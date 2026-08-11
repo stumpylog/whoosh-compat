@@ -637,26 +637,48 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         child = self.visit(node.child)
         return _boolean_query([(tantivy.Occur.MustNot, child)])
 
+    def _binary_operands(
+        self, left: ast.Node, right: ast.Node
+    ) -> tuple[tantivy.Query | None, tantivy.Query | None]:
+        """Emit both operands of a binary operator, dropping zero-token ones.
+
+        An operand that analyzes to nothing drops out exactly as it would as
+        an And/Or child, and the caller keeps whatever survives. Whoosh
+        reaches the same result by a different route: it discards such a term
+        while parsing, so the operator never gets built and the surviving
+        operand stands alone.
+        """
+        return self._group_child(left), self._group_child(right)
+
     def visit_andnot(self, node: ast.AndNot) -> tantivy.Query:
-        positive = self.visit(node.positive)
-        negative = self.visit(node.negative)
+        positive, negative = self._binary_operands(node.positive, node.negative)
+        if positive is None or negative is None:
+            return self._lone_operand(positive, negative)
         clauses = [(tantivy.Occur.Must, positive), (tantivy.Occur.MustNot, negative)]
         return _boolean_query(clauses)
 
     def visit_andmaybe(self, node: ast.AndMaybe) -> tantivy.Query:
-        required = self.visit(node.required)
-        optional = self.visit(node.optional)
+        required, optional = self._binary_operands(node.required, node.optional)
+        if required is None or optional is None:
+            return self._lone_operand(required, optional)
         clauses = [(tantivy.Occur.Must, required), (tantivy.Occur.Should, optional)]
         return _boolean_query(clauses)
 
     def visit_require(self, node: ast.Require) -> tantivy.Query:
-        scored = self.visit(node.scored)
-        filter_only = self.visit(node.filter_only)
+        scored, filter_only = self._binary_operands(node.scored, node.filter_only)
+        if scored is None or filter_only is None:
+            return self._lone_operand(scored, filter_only)
         clauses = [
             (tantivy.Occur.Must, scored),
             (tantivy.Occur.Must, tantivy.Query.const_score_query(filter_only, 0.0)),
         ]
         return _boolean_query(clauses)
+
+    @staticmethod
+    def _lone_operand(left: tantivy.Query | None, right: tantivy.Query | None) -> tantivy.Query:
+        """The surviving operand, or an empty query when both dropped."""
+        survivor = left if left is not None else right
+        return survivor if survivor is not None else tantivy.Query.empty_query()
 
     def visit_boosted(self, node: ast.Boosted) -> tantivy.Query:
         child = self.visit(node.child)

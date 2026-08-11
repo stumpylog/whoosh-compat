@@ -109,65 +109,31 @@ def test_require_filters_not_scores(tindex, ereg):
     assert search_ids(tindex[0], q) == [1]
 
 
-# -- DIVERGENCES.md entry 24: zero-token TERM operands of REQUIRE/ANDMAYBE/
-# ANDNOT diverge from whoosh in three binary-operator shapes, pinning
-# current (divergent) behavior. Verified against a live whoosh oracle: the
-# operand orders marked "diverges" return [1] in whoosh but [] here; the
-# "mirror agrees" orders return the same doc-id set on both sides. Phrases
-# are not covered here (whoosh raises ValueError on an empty-phrase search,
-# so a zero-token PHRASE can't be oracle-checked the same way; see the
-# module docstring note referenced from DIVERGENCES.md).
+# -- Zero-token TERM operands of REQUIRE/ANDMAYBE/ANDNOT ---------------------
+#
+# An operand whose analyzer consumes every token drops out, and the surviving
+# operand becomes the whole query, exactly as the same policy already works
+# for And/Or children. This matches whoosh, which drops such a term at syntax
+# level so the binary operator has nothing left to apply and the survivor
+# remains: verified against a live oracle, where all six operand orders below
+# return [1]. Phrases are not covered here, because whoosh raises ValueError
+# when searching an empty phrase, so a zero-token PHRASE cannot be
+# oracle-checked the same way.
 
 
-def test_require_zero_token_filter_only_diverges(tindex, ereg, parse):
-    # "invoice REQUIRE content:!!!": whoosh drops the zero-token filter_only
-    # term at syntax level so the scored operand alone wins ([1] in
-    # whoosh); whoosh-compat's visit_require treats the dropped term as a
-    # live, unmatchable Must clause that kills the whole query.
-    node = parse("invoice REQUIRE content:!!!")
-    q = emit_ast(node, tindex, ereg)
-    assert search_ids(tindex[0], q) == []
-
-
-def test_require_zero_token_scored_mirror_agrees(tindex, ereg, parse):
-    # "content:!!! REQUIRE invoice": both sides return [] (zero-token
-    # scored operand fails standalone in both).
-    node = parse("content:!!! REQUIRE invoice")
-    q = emit_ast(node, tindex, ereg)
-    assert search_ids(tindex[0], q) == []
-
-
-def test_andmaybe_zero_token_required_diverges(tindex, ereg, parse):
-    # "content:!!! ANDMAYBE invoice": whoosh drops the zero-token required
-    # term so the optional operand alone wins ([1]); whoosh-compat's
-    # visit_andmaybe keeps it as a live, unmatchable Must clause.
-    node = parse("content:!!! ANDMAYBE invoice")
-    q = emit_ast(node, tindex, ereg)
-    assert search_ids(tindex[0], q) == []
-
-
-def test_andmaybe_zero_token_optional_mirror_agrees(tindex, ereg, parse):
-    # "invoice ANDMAYBE content:!!!": both sides return [1] (a zero-token
-    # optional operand is harmless: Should never restricts a Must match).
-    node = parse("invoice ANDMAYBE content:!!!")
-    q = emit_ast(node, tindex, ereg)
-    assert search_ids(tindex[0], q) == [1]
-
-
-def test_andnot_zero_token_positive_diverges(tindex, ereg, parse):
-    # "content:!!! ANDNOT invoice": whoosh drops the zero-token positive
-    # term so the query normalizes to just the negative operand's
-    # complement ([1]); whoosh-compat's visit_andnot keeps the zero-token
-    # positive as a live, unmatchable Must clause.
-    node = parse("content:!!! ANDNOT invoice")
-    q = emit_ast(node, tindex, ereg)
-    assert search_ids(tindex[0], q) == []
-
-
-def test_andnot_zero_token_negative_mirror_agrees(tindex, ereg, parse):
-    # "invoice ANDNOT content:!!!": both sides return [1] (a zero-token
-    # negative operand excludes nothing on either side).
-    node = parse("invoice ANDNOT content:!!!")
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("invoice REQUIRE content:!!!", id="require-zero-token-filter"),
+        pytest.param("content:!!! REQUIRE invoice", id="require-zero-token-scored"),
+        pytest.param("invoice ANDMAYBE content:!!!", id="andmaybe-zero-token-optional"),
+        pytest.param("content:!!! ANDMAYBE invoice", id="andmaybe-zero-token-required"),
+        pytest.param("invoice ANDNOT content:!!!", id="andnot-zero-token-negative"),
+        pytest.param("content:!!! ANDNOT invoice", id="andnot-zero-token-positive"),
+    ],
+)
+def test_zero_token_operand_leaves_the_survivor(tindex, ereg, parse, query):
+    node = parse(query)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
 
