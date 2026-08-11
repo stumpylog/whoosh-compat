@@ -4,9 +4,11 @@ import dataclasses
 
 import pytest
 
+from whoosh_compat.fields import ExistsStrategy
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
+from whoosh_compat.fields import resolve_exists_strategy
 
 # ============================================================================
 # Test resolve(): canonical names and aliases
@@ -210,20 +212,27 @@ def test_validation_boolean_exists_target_must_exist():
         FieldRegistry([spec])
 
 
-def test_validation_boolean_exists_target_must_be_fast_or_text():
-    """ValueError if exists_target is not fast=True or kind=TEXT."""
-    spec1 = FieldSpec(name="body", kind=FieldKind.KEYWORD)  # not TEXT, not fast
+def test_validation_boolean_exists_target_unsupported_kind_rejected():
+    """ValueError if exists_target has no resolvable 'exists' strategy:
+    non-fast and not TEXT/KEYWORD. The error names the target field and the
+    two remedies (mark it fast, or change its kind).
+    """
+    spec1 = FieldSpec(name="page_count", kind=FieldKind.U64)  # not fast, not TEXT/KEYWORD
     spec2 = FieldSpec(
-        name="has_body",
+        name="has_pages",
         kind=FieldKind.BOOLEAN_EXISTS,
-        exists_target="body",
+        exists_target="page_count",
     )
-    with pytest.raises(ValueError, match="has_body"):
+    with pytest.raises(ValueError, match="has_pages") as excinfo:
         FieldRegistry([spec1, spec2])
+    message = str(excinfo.value)
+    assert "page_count" in message
+    assert "fast=True" in message
+    assert "TEXT or KEYWORD" in message
 
 
 def test_validation_boolean_exists_target_text_is_valid():
-    """BOOLEAN_EXISTS can target a TEXT field."""
+    """BOOLEAN_EXISTS can target a non-fast TEXT field."""
     spec1 = FieldSpec(name="attachment", kind=FieldKind.TEXT)
     spec2 = FieldSpec(
         name="has_attachment",
@@ -232,6 +241,24 @@ def test_validation_boolean_exists_target_text_is_valid():
     )
     registry = FieldRegistry([spec1, spec2])
     assert registry.resolve("has_attachment") is spec2
+
+
+def test_validation_boolean_exists_target_keyword_is_valid():
+    """BOOLEAN_EXISTS can target a non-fast KEYWORD field.
+
+    Previously only fast=True or kind=TEXT was accepted at registry
+    construction, even though emission already handled non-fast KEYWORD
+    via the same term-scan fallback as non-fast TEXT: the accepted set and
+    the executable set disagreed. KEYWORD is now explicitly accepted.
+    """
+    spec1 = FieldSpec(name="tag", kind=FieldKind.KEYWORD)  # not TEXT, not fast
+    spec2 = FieldSpec(
+        name="has_tag",
+        kind=FieldKind.BOOLEAN_EXISTS,
+        exists_target="tag",
+    )
+    registry = FieldRegistry([spec1, spec2])
+    assert registry.resolve("has_tag") is spec2
 
 
 def test_validation_boolean_exists_target_fast_is_valid():
@@ -244,6 +271,64 @@ def test_validation_boolean_exists_target_fast_is_valid():
     )
     registry = FieldRegistry([spec1, spec2])
     assert registry.resolve("has_flag") is spec2
+
+
+# ============================================================================
+# ExistsStrategy resolution
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "kind, fast, expected",
+    [
+        pytest.param(FieldKind.TEXT, True, ExistsStrategy.FAST_FIELD, id="fast-text"),
+        pytest.param(FieldKind.KEYWORD, True, ExistsStrategy.FAST_FIELD, id="fast-keyword"),
+        pytest.param(FieldKind.U64, True, ExistsStrategy.FAST_FIELD, id="fast-u64"),
+        pytest.param(FieldKind.DATE, True, ExistsStrategy.FAST_FIELD, id="fast-date"),
+        pytest.param(FieldKind.TEXT, False, ExistsStrategy.TERM_SCAN, id="non-fast-text"),
+        pytest.param(FieldKind.KEYWORD, False, ExistsStrategy.TERM_SCAN, id="non-fast-keyword"),
+        pytest.param(FieldKind.U64, False, None, id="non-fast-u64-unsupported"),
+        pytest.param(FieldKind.DATE, False, None, id="non-fast-date-unsupported"),
+        pytest.param(FieldKind.DATETIME, False, None, id="non-fast-datetime-unsupported"),
+    ],
+)
+def test_resolve_exists_strategy_function(kind, fast, expected):
+    """The pure kind/fast -> strategy resolution function used by both
+    registry validation and (via ``FieldRegistry.exists_strategy``)
+    emission.
+    """
+    assert resolve_exists_strategy(kind, fast) is expected
+
+
+def test_registry_exists_strategy_accessor():
+    """FieldRegistry.exists_strategy() returns the strategy resolved at
+    construction time for a registered spec, without re-inspecting kind or
+    fastness at call time.
+    """
+    fast_spec = FieldSpec(name="flag", kind=FieldKind.KEYWORD, fast=True)
+    text_spec = FieldSpec(name="body", kind=FieldKind.TEXT)
+    unsupported_spec = FieldSpec(name="page_count", kind=FieldKind.U64)
+    registry = FieldRegistry([fast_spec, text_spec, unsupported_spec])
+
+    assert registry.exists_strategy(fast_spec) is ExistsStrategy.FAST_FIELD
+    assert registry.exists_strategy(text_spec) is ExistsStrategy.TERM_SCAN
+    assert registry.exists_strategy(unsupported_spec) is None
+
+
+def test_every_and_boolean_exists_share_resolved_strategy():
+    """A field's exists strategy, as resolved for a bare ``field:*``
+    (``Every``), and as resolved for a BOOLEAN_EXISTS field targeting it,
+    are the exact same registry-computed value, by construction.
+    """
+    target = FieldSpec(name="tag", kind=FieldKind.KEYWORD)
+    has_tag = FieldSpec(name="has_tag", kind=FieldKind.BOOLEAN_EXISTS, exists_target="tag")
+    registry = FieldRegistry([target, has_tag])
+
+    every_field_strategy = registry.exists_strategy(registry.resolve("tag"))
+    boolean_exists_target_strategy = registry.exists_strategy(
+        registry.resolve(has_tag.exists_target)
+    )
+    assert every_field_strategy is boolean_exists_target_strategy is ExistsStrategy.TERM_SCAN
 
 
 # ============================================================================

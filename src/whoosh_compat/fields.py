@@ -32,6 +32,46 @@ class Multitoken(Enum):
     FIRST = auto()
 
 
+class ExistsStrategy(Enum):
+    """How to execute an "exists" check (bare ``field:*`` or BOOLEAN_EXISTS)
+    against a given field.
+
+    Resolved once, at ``FieldRegistry`` construction, from a field's
+    ``fast``/``kind`` combination, and stored on the ``FieldSpec`` so
+    emission dispatches on the resolved strategy instead of re-deriving it
+    from field capability, keeping ``Every(field)`` and BOOLEAN_EXISTS in
+    agreement by construction.
+    """
+
+    FAST_FIELD = auto()
+    """A cheap fast-field presence check (tantivy's ``exists_query``)."""
+
+    TERM_SCAN = auto()
+    """"Has at least one indexed term", via a ``regex_query(".*")`` sweep of
+    the field's term dictionary. Only meaningful for TEXT/KEYWORD fields, and
+    only "has at least one indexed term", not "the stored value is
+    non-empty": a whitespace-only or punctuation-only value that the field's
+    analyzer reduces to zero tokens reads as absent (DIVERGENCES.md entry
+    20).
+    """
+
+
+def resolve_exists_strategy(kind: FieldKind, fast: bool) -> ExistsStrategy | None:
+    """Resolve the "exists" execution strategy for a field, or ``None`` if
+    the field's kind/fastness combination cannot support one at all.
+
+    A fast field always uses ``FAST_FIELD`` regardless of kind, since
+    tantivy's ``exists_query`` works on any fast field. A non-fast TEXT or
+    KEYWORD field falls back to ``TERM_SCAN``. Every other combination
+    (a non-fast field of any other kind) has no way to answer "exists".
+    """
+    if fast:
+        return ExistsStrategy.FAST_FIELD
+    if kind in (FieldKind.TEXT, FieldKind.KEYWORD):
+        return ExistsStrategy.TERM_SCAN
+    return None
+
+
 @dataclass(frozen=True, slots=True)
 class FieldSpec:
     """Specification for a single field in the schema."""
@@ -63,6 +103,10 @@ class FieldRegistry:
         """
         self._specs: list[FieldSpec] = []
         self._by_name: dict[str, FieldSpec] = {}
+        # Each canonical field name's resolved "exists" execution strategy,
+        # computed once here from kind/fast rather than re-derived at emit
+        # time. See ``exists_strategy()``.
+        self._exists_strategies: dict[str, ExistsStrategy | None] = {}
         specs_list = list(specs)
 
         # First pass: normalize DATE specs and collect all specs
@@ -117,6 +161,12 @@ class FieldRegistry:
             for alias in spec.aliases:
                 self._by_name[alias] = spec
 
+            # Resolve and store this field's own "exists" execution
+            # strategy once, up front, so BOOLEAN_EXISTS validation below
+            # and emission later both read the same answer instead of
+            # re-deriving it from kind/fast independently.
+            self._exists_strategies[spec.name] = resolve_exists_strategy(spec.kind, spec.fast)
+
             self._specs.append(spec)
 
         # Third pass: validate BOOLEAN_EXISTS targets (now all specs are registered)
@@ -131,11 +181,14 @@ class FieldRegistry:
                         f"Field '{spec.name}': exists_target '{spec.exists_target}' "
                         f"does not reference a registered spec"
                     )
-                # Validate: target must be fast=True or kind=TEXT
-                if not (target_spec.fast or target_spec.kind == FieldKind.TEXT):
+                # Validate: target must resolve to a supported "exists"
+                # strategy (fast=True of any kind, or non-fast TEXT/KEYWORD).
+                if self.exists_strategy(target_spec) is None:
                     raise ValueError(
                         f"Field '{spec.name}': exists_target '{spec.exists_target}' "
-                        f"must be fast=True or kind=TEXT"
+                        f"(kind={target_spec.kind.name}, fast={target_spec.fast}) has "
+                        f"no way to answer 'exists': mark it fast=True, or change its "
+                        f"kind to TEXT or KEYWORD"
                     )
 
     def resolve(self, name: str) -> FieldSpec | None:
@@ -148,6 +201,24 @@ class FieldRegistry:
             The FieldSpec, or None if not found.
         """
         return self._by_name.get(name)
+
+    def exists_strategy(self, spec: FieldSpec) -> ExistsStrategy | None:
+        """Return ``spec``'s resolved "exists" execution strategy.
+
+        Resolved once, at registry construction, from ``spec.kind`` and
+        ``spec.fast`` (see ``resolve_exists_strategy``); ``None`` means the
+        field has no way to answer "exists" while non-fast and not
+        TEXT/KEYWORD. Shared by ``Every(field)`` and BOOLEAN_EXISTS emission
+        so the two agree by construction rather than by parallel capability
+        checks.
+
+        Args:
+            spec: A ``FieldSpec`` registered in this registry.
+
+        Returns:
+            The resolved ``ExistsStrategy``, or ``None`` if unsupported.
+        """
+        return self._exists_strategies.get(spec.name)
 
     def resolve_json(self, dotted: str) -> tuple[FieldSpec, str] | None:
         """Resolve a JSON field by dotted path.
