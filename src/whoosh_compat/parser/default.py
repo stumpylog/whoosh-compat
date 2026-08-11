@@ -428,6 +428,16 @@ class QueryParser:
                     return hi_err
                 result: ast.Node = ast.NumericRange(
                     field=fieldname, lo=lo, hi=hi,
+                    # Unlike DateParserPlugin._range_to_node, a NUMERIC
+                    # bound's exclusivity flag is *not* normalized when the
+                    # bound is absent: real whoosh preserves the literal
+                    # bracket typed on the numeric side even with nothing
+                    # between it and "TO" (confirmed directly:
+                    # "id:[0 TO}" keeps endexcl=True even though there's no
+                    # end value), unlike DATE ranges, which always ignore
+                    # the absent side's bracket. Two genuinely different
+                    # behaviors on real whoosh's side, not an oversight
+                    # here.
                     incl_lo=not startexcl, incl_hi=not endexcl,
                 )
                 return ast.Boosted(result, boost) if boost != 1.0 else result

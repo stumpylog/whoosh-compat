@@ -1076,6 +1076,17 @@ class DateParserPlugin(Plugin):
             hi = self._to_utc(hi_naive, spec.date_only) if hi_naive is not None else None
         except (ValueError, OverflowError):
             return self._error(node, node.end, spec.name)
+        # An exclusivity flag is meaningless for a bound that isn't there at
+        # all (there's nothing to exclude): normalize it to True/inclusive
+        # rather than preserving whatever bracket character the user
+        # happened to type, matching real whoosh's own behavior (confirmed
+        # directly: `created:{ TO ]` and `created:[ TO ]` both parse to an
+        # identical, fully-inclusive-shaped range in the oracle regardless
+        # of which bracket was used on the absent side).
+        if lo is None:
+            incl_lo = True
+        if hi is None:
+            incl_hi = True
         return DateRangeSyntaxNode(spec.name, lo, hi, incl_lo, incl_hi, node.boost)
 
 

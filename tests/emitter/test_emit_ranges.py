@@ -6,7 +6,6 @@ from datetime import datetime
 import pytest
 
 from whoosh_compat import ast
-from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.errors import UnsupportedQueryError
 
 from .conftest import emit_ast
@@ -89,7 +88,14 @@ def test_date_range_naive_bounds_pass_through(tindex, ereg):
     assert search_ids(tindex[0], q) == [1, 4]
 
 
-def test_range_query_needs_at_least_one_bound(tindex, ereg):
+def test_range_open_on_both_sides_means_field_exists(tindex, ereg):
+    # A range with no bounds at all ("asn:[TO]") used to raise QueryEmitError
+    # (the ast.NumericRange/DateRange constructors don't forbid this shape,
+    # and the grammar-aware property fuzzer found it parses cleanly, see
+    # tests/emitter/test_hypothesis_e2e.py): semantically it just means "asn
+    # has some value", exactly what visit_every's `field:*` already answers,
+    # so _range_query now delegates to the same _exists_query helper instead
+    # of erroring on a query nothing told the caller was invalid.
     node = ast.NumericRange(field="asn", lo=None, hi=None, incl_lo=True, incl_hi=True)
-    with pytest.raises(QueryEmitError, match="at least one bound"):
-        emit_ast(node, tindex, ereg)
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1, 2, 3, 4, 5]

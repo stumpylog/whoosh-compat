@@ -577,9 +577,17 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         tantivy requires an unbounded side to be *inclusive* (passing
         ``include_* = False`` alongside a ``None`` bound is an error), so the
         node's inclusivity flag is only honored on bounds that actually exist.
+
+        A range open on *both* sides (e.g. ``created:[TO]``, a corner case
+        the grammar-aware property fuzzer generated, see
+        ``tests/emitter/test_hypothesis_e2e.py``) is a range in name only:
+        semantically it means "this field has some value", exactly what
+        ``_exists_query`` already answers for a bare ``field:*``
+        (``visit_every``) and a BOOLEAN_EXISTS term, so delegate to it
+        instead of erroring on a query that parsed without complaint.
         """
         if lo is None and hi is None:
-            raise QueryEmitError("range query needs at least one bound")
+            return self._exists_query(spec)
         return tantivy.Query.range_query(
             self.schema,
             spec.name,
