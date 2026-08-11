@@ -356,3 +356,35 @@ parse-then-emit pipeline).
     cannot match it. Forms with no time component are unaffected.
 
     Test references: `tests/test_parser_dates.py`'s year-plus-time case.
+
+22. **JSON-subpath `index.parse_query` fallback cannot honor
+    `Multitoken.AND`/`OR`/`PHRASE` combinator semantics, only `FIRST` and
+    single-leaf matching (a known limitation of the fallback path, not the
+    general design).** `TantivyEmitter._emit_json_term`
+    (`emitters/tantivy_.py`) runs `spec.analyzer` over a JSON subpath
+    term's value and, when the installed tantivy-py can address a JSON
+    subpath directly (`_json_paths_supported()`), reuses
+    `_text_term_query` exactly like an ordinary TEXT/KEYWORD term: every
+    `Multitoken` mode works identically to a plain field. When it cannot
+    (as of tantivy-py 0.26, the version this project currently runs against;
+    see the JSON `parse_query` carve-out in `ARCHITECTURE.md` §5), the
+    fallback still runs `spec.analyzer` and honors `Multitoken.FIRST`
+    (searching only the first token), but `AND`/`OR`/`PHRASE`/
+    DEFAULT-resolved-to-AND-or-OR all collapse to one quoted, space-joined
+    leaf through `index.parse_query`, which behaves like a phrase match,
+    not true AND ("all tokens present, any order/position") or OR ("any
+    token present") semantics. This is a structural limitation of the
+    carve-out itself: `index.parse_query`'s single-leaf call has no
+    programmatic way to build a JSON-subpath boolean query the way
+    `_text_term_query` does for every other field kind. It was fixed to at
+    least stop discarding the analyzed tokens entirely (previously the
+    fallback quoted the *raw, unanalyzed* text verbatim, ignoring
+    `spec.analyzer` and every `Multitoken` mode including `FIRST`), but
+    full AND/OR/PHRASE parity is not achievable without the JSON subpath
+    `term_query`/`phrase_query` support `_json_paths_supported()` probes
+    for. Once tantivy-py#716 lands and ships, `_json_paths_supported()`
+    starts returning `True` and this whole fallback branch (including this
+    limitation) stops being taken.
+
+    Test references: `tests/emitter/test_emit_json.py`'s
+    `test_json_subpath_parse_query_fallback_honors_multitoken_first`.
