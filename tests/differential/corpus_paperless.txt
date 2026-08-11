@@ -81,6 +81,12 @@ added:yesterday
 added:20231201
 modified:20231201
 
+# --- KNOWN DIVERGENCE (DIVERGENCES.md entry 3, allowlist.py): date-node
+# boost preservation. Real whoosh's DateTimeNode/DateRangeNode hardcode
+# self.boost = 1.0, silently dropping a boost written on a date value;
+# whoosh-compat's DateParserPlugin preserves the typed boost instead.
+added:yesterday^2
+
 # --- compared: quoted multi-word natural-date keywords (whoosh's own
 # multi-word-value quoting mechanism; contrast with the unquoted forms
 # further below, which are a documented divergence).
