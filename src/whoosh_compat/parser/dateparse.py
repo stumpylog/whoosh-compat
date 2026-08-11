@@ -84,6 +84,7 @@ from whoosh_compat import ast
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldSpec
 from whoosh_compat.parser import priorities
 from whoosh_compat.parser import syntax
@@ -899,7 +900,11 @@ class DateParserPlugin(Plugin):
             kind=DiagnosticKind.BAD_DATE,
             startchar=node.startchar,
             endchar=node.endchar,
-            field=field,
+            # DATE/DATETIME fields are never JSON (FieldRegistry rejects
+            # date_only/comma_values combinations outside those kinds), so
+            # this is always a plain field reference; spec.name is already
+            # canonical (aliases resolved by the time a spec is in hand).
+            field=FieldRef(field),
             raw_value=text,
         )
         return DateErrorNode(diagnostic)
@@ -918,7 +923,8 @@ class DateParserPlugin(Plugin):
             if fname is None:
                 continue
 
-            spec = registry.resolve(fname)
+            ref = registry.make_ref(fname)
+            spec = registry.resolve(ref) if ref is not None else None
             if spec is None or spec.kind not in (FieldKind.DATE, FieldKind.DATETIME):
                 continue
 
@@ -1116,7 +1122,9 @@ class DateRangeSyntaxNode(syntax.SyntaxNode):
         return f"DateRange {self.lo!r}-{self.hi!r}"
 
     def query(self, parser: Any) -> ast.Node:
-        node: ast.Node = ast.DateRange(field=self.fieldname, lo=self.lo, hi=self.hi,
+        # self.fieldname is always spec.name (see DateParserPlugin.do_dates),
+        # a plain canonical field name: DATE/DATETIME fields are never JSON.
+        node: ast.Node = ast.DateRange(field=FieldRef(self.fieldname), lo=self.lo, hi=self.hi,
                                         incl_lo=self.incl_lo, incl_hi=self.incl_hi)
         if self.boost != 1.0:
             node = ast.Boosted(node, self.boost)

@@ -29,6 +29,7 @@ from whoosh_compat.errors import QueryParserError
 from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.errors import WhooshCompatError
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 from whoosh_compat.fields import Multitoken
@@ -41,6 +42,7 @@ __all__ = [
     "Diagnostic",
     "DiagnosticKind",
     "FieldKind",
+    "FieldRef",
     "FieldRegistry",
     "FieldSpec",
     "Multitoken",

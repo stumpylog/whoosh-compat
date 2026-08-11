@@ -38,10 +38,10 @@ Two extensions beyond stock whoosh live here:
   single-valued terms for fields whose :class:`~whoosh_compat.fields.FieldSpec`
   has ``comma_values=True``.
 * :class:`FieldsPlugin` accepts dotted field names (``notes.user:foo``) and
-  only treats them as known fields when
-  ``parser.registry.resolve_json(name)`` (or a plain registry lookup) hits;
-  otherwise the ``field:`` text is demoted and merged back into the
-  following node exactly as whoosh does for unknown fields.
+  only treats them as known fields when ``parser.registry.make_ref(name)``
+  resolves them (either as a plain/aliased field or a registered JSON
+  subpath); otherwise the ``field:`` text is demoted and merged back into
+  the following node exactly as whoosh does for unknown fields.
 """
 
 from __future__ import annotations
@@ -491,10 +491,11 @@ class PhrasePlugin(Plugin):
 
         def query(self, parser: Any) -> ast.Node:
             fieldname = self.fieldname or getattr(parser, "fieldname", None)
+            ref = parser.field_ref(fieldname)
             # Analysis is emit-time: just hand the raw phrase text and slop
             # off to the AST; whatever backend consumes the AST is
             # responsible for tokenizing it.
-            q: ast.Node = ast.Phrase(field=fieldname, text=self.text, slop=self.slop)
+            q: ast.Node = ast.Phrase(field=ref, text=self.text, slop=self.slop)
             if self.boost != 1.0:
                 q = ast.Boosted(q, self.boost)
             return attach(q, self)
@@ -777,7 +778,8 @@ class CommaValuesPlugin(Plugin):
                     and node.fieldname is not None
                     and not getattr(node, "is_quoted", False)
                     and "," in node.text):
-                spec = registry.resolve(node.fieldname)
+                ref = registry.make_ref(node.fieldname)
+                spec = registry.resolve(ref) if ref is not None else None
                 if spec is not None and spec.comma_values:
                     parts = [p for p in node.text.split(",") if p]
                     if parts:

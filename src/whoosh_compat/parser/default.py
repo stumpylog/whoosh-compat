@@ -55,6 +55,7 @@ from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryParserError
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.parser import syntax
 from whoosh_compat.parser.common import print_debug
@@ -335,6 +336,30 @@ class QueryParser:
 
         self.diagnostics.append(diagnostic)
 
+    def field_ref(self, fieldname: str | None) -> FieldRef | None:
+        """Resolve a syntax-tree fieldname string into the :class:`FieldRef`
+        an AST leaf should carry.
+
+        Delegates to :meth:`~whoosh_compat.fields.FieldRegistry.make_ref` for
+        the actual dotted-name/alias interpretation (the parse boundary
+        DIVERGENCES.md and ARCHITECTURE.md describe). By the time a fieldname
+        reaches here it has normally already passed ``FieldsPlugin``'s
+        registry check (an explicit ``field:`` that didn't resolve is
+        demoted back to text before it can reach a term/range/wildcard
+        node), so ``make_ref`` returning ``None`` is only reachable via a
+        fieldname supplied directly by the host (the parser's own default
+        field, or ``MultifieldPlugin``'s configured field list) that isn't
+        actually registered. Rather than silently dropping that fieldname,
+        keep it as an (unresolvable) :class:`FieldRef` so emission still
+        reports "unknown field" instead of a different, more confusing
+        error.
+        """
+
+        if fieldname is None:
+            return None
+        ref = self.registry.make_ref(fieldname)
+        return ref if ref is not None else FieldRef(fieldname)
+
     def term_query(
         self, fieldname: str | None, text: str, boost: float = 1.0, **kw: object
     ) -> ast.Node:
@@ -342,31 +367,24 @@ class QueryParser:
 
         Field-kind-specific coercion (U64 -> int, BOOLEAN_EXISTS -> bool) is
         applied when ``fieldname`` resolves to a known
-        :class:`~whoosh_compat.fields.FieldSpec`. Unknown/dotted (JSON
-        subpath) fields fall through to a plain text :class:`~whoosh_compat.ast.Term`.
+        :class:`~whoosh_compat.fields.FieldSpec`. Unknown/JSON-subpath
+        fields fall through to a plain text :class:`~whoosh_compat.ast.Term`.
         """
 
-        spec = self.registry.resolve(fieldname) if fieldname else None
-        if fieldname and spec is None:
-            # Either a dotted JSON subpath, or a literal that reached here
-            # because it wasn't a known field (FieldsPlugin already demoted
-            # unknown plain fieldnames back to text): either way, keep the
-            # (possibly dotted) fieldname text as-is.
-            node: ast.Node = ast.Term(field=fieldname, text=text)
-            return ast.Boosted(node, boost) if boost != 1.0 else node
+        ref = self.field_ref(fieldname)
+        spec = self.registry.resolve(ref) if ref is not None else None
 
-        if spec:
-            fieldname = spec.name  # canonicalize alias
+        if spec is not None:
             if spec.kind is FieldKind.U64:
                 try:
-                    node = ast.Term(field=fieldname, text=int(text))
+                    node = ast.Term(field=ref, text=int(text))
                 except ValueError:
                     d = Diagnostic(
-                        message=f"{text!r} is not a valid number for {fieldname}",
+                        message=f"{text!r} is not a valid number for {ref}",
                         kind=DiagnosticKind.BAD_NUMBER,
                         startchar=kw.get("startchar"),  # type: ignore[arg-type]
                         endchar=kw.get("endchar"),  # type: ignore[arg-type]
-                        field=fieldname,
+                        field=ref,
                         raw_value=text,
                     )
                     self.report(d)
@@ -375,18 +393,20 @@ class QueryParser:
 
             if spec.kind is FieldKind.BOOLEAN_EXISTS:
                 truthy = text.lower() not in ("f", "false", "no", "0")
-                node = ast.Term(field=fieldname, text=truthy)
+                node = ast.Term(field=ref, text=truthy)
                 return ast.Boosted(node, boost) if boost != 1.0 else node
 
             # DATE/DATETIME leaves are normally converted by DateParserPlugin
             # before reaching here; if one arrives anyway (plugin disabled or
             # not wired up yet), fall through to a plain text term below.
+            # A JSON-kind spec (a resolved subpath ref) also falls through
+            # here: term text on a JSON field needs no further coercion.
 
-        node = ast.Term(field=fieldname, text=text)
+        node = ast.Term(field=ref, text=text)
         return ast.Boosted(node, boost) if boost != 1.0 else node
 
     def _coerce_range_bound(
-        self, text: str | None, fieldname: str, node: object
+        self, text: str | None, ref: FieldRef, node: object
     ) -> tuple[int | None, ast.ErrorLeaf | None]:
         if text is None:
             return None, None
@@ -394,11 +414,11 @@ class QueryParser:
             return int(text), None
         except ValueError:
             d = Diagnostic(
-                message=f"{text!r} is not a valid number for {fieldname}",
+                message=f"{text!r} is not a valid number for {ref}",
                 kind=DiagnosticKind.BAD_NUMBER,
                 startchar=getattr(node, "startchar", None),
                 endchar=getattr(node, "endchar", None),
-                field=fieldname,
+                field=ref,
                 raw_value=text,
             )
             self.report(d)
@@ -416,37 +436,37 @@ class QueryParser:
     ) -> ast.Node:
         """Returns the AST node for a range query."""
 
-        spec = self.registry.resolve(fieldname) if fieldname else None
-        if spec is not None:
-            fieldname = spec.name
-            if spec.kind is FieldKind.U64:
-                lo, lo_err = self._coerce_range_bound(start, fieldname, node)
-                if lo_err is not None:
-                    return lo_err
-                hi, hi_err = self._coerce_range_bound(end, fieldname, node)
-                if hi_err is not None:
-                    return hi_err
-                result: ast.Node = ast.NumericRange(
-                    field=fieldname, lo=lo, hi=hi,
-                    # Unlike DateParserPlugin._range_to_node, a NUMERIC
-                    # bound's exclusivity flag is *not* normalized when the
-                    # bound is absent: real whoosh preserves the literal
-                    # bracket typed on the numeric side even with nothing
-                    # between it and "TO" (confirmed directly:
-                    # "id:[0 TO}" keeps endexcl=True even though there's no
-                    # end value), unlike DATE ranges, which always ignore
-                    # the absent side's bracket. Two genuinely different
-                    # behaviors on real whoosh's side, not an oversight
-                    # here.
-                    incl_lo=not startexcl, incl_hi=not endexcl,
-                )
-                return ast.Boosted(result, boost) if boost != 1.0 else result
-            # DATE/DATETIME ranges are normally converted by
-            # DateParserPlugin before reaching here; if one arrives anyway,
-            # fall back to a plain TermRange below.
+        ref = self.field_ref(fieldname)
+        spec = self.registry.resolve(ref) if ref is not None else None
+        if spec is not None and spec.kind is FieldKind.U64:
+            assert ref is not None  # spec only resolves from a non-None ref
+            lo, lo_err = self._coerce_range_bound(start, ref, node)
+            if lo_err is not None:
+                return lo_err
+            hi, hi_err = self._coerce_range_bound(end, ref, node)
+            if hi_err is not None:
+                return hi_err
+            result: ast.Node = ast.NumericRange(
+                field=ref, lo=lo, hi=hi,
+                # Unlike DateParserPlugin._range_to_node, a NUMERIC
+                # bound's exclusivity flag is *not* normalized when the
+                # bound is absent: real whoosh preserves the literal
+                # bracket typed on the numeric side even with nothing
+                # between it and "TO" (confirmed directly:
+                # "id:[0 TO}" keeps endexcl=True even though there's no
+                # end value), unlike DATE ranges, which always ignore
+                # the absent side's bracket. Two genuinely different
+                # behaviors on real whoosh's side, not an oversight
+                # here.
+                incl_lo=not startexcl, incl_hi=not endexcl,
+            )
+            return ast.Boosted(result, boost) if boost != 1.0 else result
+        # DATE/DATETIME ranges are normally converted by DateParserPlugin
+        # before reaching here; if one arrives anyway, fall back to a plain
+        # TermRange below.
 
         result = ast.TermRange(
-            field=fieldname, lo=start, hi=end,
+            field=ref, lo=start, hi=end,
             incl_lo=not startexcl, incl_hi=not endexcl,
         )
         return ast.Boosted(result, boost) if boost != 1.0 else result
@@ -473,13 +493,14 @@ class QueryParser:
         if not any(ch in text for ch in "*?"):
             return self.term_query(fieldname, text, boost=boost)
 
+        ref = self.field_ref(fieldname)
         node: ast.Node
         if text == "*":
-            node = ast.Every(field=fieldname)
+            node = ast.Every(field=ref)
         elif _TRAILING_STAR_RE.match(text):
-            node = ast.Prefix(field=fieldname, text=text[:-1])
+            node = ast.Prefix(field=ref, text=text[:-1])
         else:
-            node = ast.Wildcard(field=fieldname, pattern=text)
+            node = ast.Wildcard(field=ref, pattern=text)
 
         return ast.Boosted(node, boost) if boost != 1.0 else node
 
@@ -488,7 +509,8 @@ class QueryParser:
     ) -> ast.Node:
         """Returns the AST node for a prefix query."""
 
-        node: ast.Node = ast.Prefix(field=fieldname, text=text)
+        ref = self.field_ref(fieldname)
+        node: ast.Node = ast.Prefix(field=ref, text=text)
         return ast.Boosted(node, boost) if boost != 1.0 else node
 
 

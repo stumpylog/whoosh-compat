@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from enum import Enum
 from enum import auto
 
+from whoosh_compat.fields import FieldRef
+
 
 class DiagnosticKind(Enum):
     """Kinds of diagnostics that can be reported during query processing."""
@@ -21,7 +23,7 @@ class Diagnostic:
     kind: DiagnosticKind
     startchar: int | None
     endchar: int | None
-    field: str | None = None
+    field: FieldRef | None = None
     raw_value: str | None = None
 
 

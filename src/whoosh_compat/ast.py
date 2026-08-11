@@ -9,6 +9,7 @@ from typing import Generic
 from typing import TypeVar
 
 from whoosh_compat.errors import Diagnostic
+from whoosh_compat.fields import FieldRef
 
 T = TypeVar("T")
 
@@ -32,7 +33,7 @@ class Node:
 class Term(Node):
     """A single term query."""
 
-    field: str | None
+    field: FieldRef | None
     text: str | int | bool
 
 
@@ -85,7 +86,7 @@ class Require(Node):
 class Phrase(Node):
     """Phrase query with optional slop."""
 
-    field: str | None
+    field: FieldRef | None
     text: str
     slop: int = 1
 
@@ -94,7 +95,7 @@ class Phrase(Node):
 class Prefix(Node):
     """Prefix query."""
 
-    field: str | None
+    field: FieldRef | None
     text: str
 
 
@@ -102,7 +103,7 @@ class Prefix(Node):
 class Wildcard(Node):
     """Wildcard pattern query."""
 
-    field: str | None
+    field: FieldRef | None
     pattern: str
 
 
@@ -110,7 +111,7 @@ class Wildcard(Node):
 class TermRange(Node):
     """Range query on term values."""
 
-    field: str | None
+    field: FieldRef | None
     lo: str | None
     hi: str | None
     incl_lo: bool
@@ -121,7 +122,7 @@ class TermRange(Node):
 class NumericRange(Node):
     """Range query on numeric values."""
 
-    field: str
+    field: FieldRef
     lo: int | None
     hi: int | None
     incl_lo: bool
@@ -132,7 +133,7 @@ class NumericRange(Node):
 class DateRange(Node):
     """Range query on date values."""
 
-    field: str
+    field: FieldRef
     lo: datetime | None
     hi: datetime | None
     incl_lo: bool
@@ -143,7 +144,7 @@ class DateRange(Node):
 class Every(Node):
     """Match all documents (optionally in a field)."""
 
-    field: str | None = None
+    field: FieldRef | None = None
 
 
 @dataclass(frozen=True, slots=True)

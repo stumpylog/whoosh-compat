@@ -73,6 +73,37 @@ def resolve_exists_strategy(kind: FieldKind, fast: bool) -> ExistsStrategy | Non
 
 
 @dataclass(frozen=True, slots=True)
+class FieldRef:
+    """A resolved reference to a field, and, for a JSON field, the subpath
+    addressed within it.
+
+    Carries the *canonical* field name: alias resolution happens once, at
+    ``FieldRegistry.make_ref``, so a ``FieldRef`` never holds the alias text
+    a user typed. AST leaves (``whoosh_compat.ast``) hold this instead of a
+    raw field-name string, so a type checker can prove ``ref.json_path`` is
+    meaningful at a read site without re-deriving it from string inspection
+    (e.g. checking for a literal ``"."``).
+
+    Constructing a ``FieldRef`` directly does not validate it against any
+    registry: validation happens at ``FieldRegistry.resolve``, which returns
+    ``None`` for a ref naming an unregistered field or an unregistered
+    subpath. This keeps ``FieldRef`` a plain, cheap data carrier usable in
+    tests without a registry in hand.
+    """
+
+    name: str
+    json_path: str | None = None
+
+    def __str__(self) -> str:
+        """The canonical dotted form: ``"name.json_path"``, or just
+        ``"name"`` when this ref does not address a JSON subpath.
+        """
+        if self.json_path is not None:
+            return f"{self.name}.{self.json_path}"
+        return self.name
+
+
+@dataclass(frozen=True, slots=True)
 class FieldSpec:
     """Specification for a single field in the schema."""
 
@@ -175,7 +206,7 @@ class FieldRegistry:
                 # Second pass above already rejected BOOLEAN_EXISTS specs
                 # with exists_target=None.
                 assert spec.exists_target is not None
-                target_spec = self.resolve(spec.exists_target)
+                target_spec = self._by_name.get(spec.exists_target)
                 if target_spec is None:
                     raise ValueError(
                         f"Field '{spec.name}': exists_target '{spec.exists_target}' "
@@ -191,16 +222,65 @@ class FieldRegistry:
                         f"kind to TEXT or KEYWORD"
                     )
 
-    def resolve(self, name: str) -> FieldSpec | None:
-        """Resolve a field spec by canonical name or alias.
+    def resolve(self, ref: FieldRef) -> FieldSpec | None:
+        """Resolve a :class:`FieldRef` to its :class:`FieldSpec`.
+
+        The single resolver for both plain fields and JSON subpaths (see
+        the module-level design note above ``FieldRef``): a plain ref
+        (``json_path is None``) resolves by canonical name, and a JSON
+        subpath ref additionally requires ``spec.kind`` be ``JSON`` and
+        ``ref.json_path`` be one of ``spec.subpaths``.
 
         Args:
-            name: The canonical name or alias to resolve.
+            ref: The field reference to resolve, normally produced by
+                :meth:`make_ref`.
 
         Returns:
-            The FieldSpec, or None if not found.
+            The FieldSpec, or None if ``ref`` does not name a registered
+            field, or names a subpath that field does not have.
         """
-        return self._by_name.get(name)
+        spec = self._by_name.get(ref.name)
+        if spec is None:
+            return None
+        if ref.json_path is not None and (
+            spec.kind is not FieldKind.JSON or ref.json_path not in spec.subpaths
+        ):
+            return None
+        return spec
+
+    def make_ref(self, raw: str) -> FieldRef | None:
+        """Resolve a raw field-name string from the parser into a
+        :class:`FieldRef`, the single place dotted-name interpretation and
+        alias canonicalization happen.
+
+        A name that resolves directly (a canonical name or an alias) wins
+        outright, even if it also contains a dot: this is what keeps a
+        registered plain field whose own name contains a dot (e.g.
+        ``"field.with.dots"``) working, including as an exact match, rather
+        than being reinterpreted as a JSON subpath lookup. Only when that
+        direct lookup misses does a dotted name get a second look as
+        ``base.subpath`` against a registered JSON field's ``subpaths``.
+
+        Args:
+            raw: The raw field-name text, as captured by the parser's
+                fieldname tagger (already alias-as-typed, not yet
+                canonicalized).
+
+        Returns:
+            A canonical :class:`FieldRef`, or None if ``raw`` names neither
+            a registered field nor a registered JSON subpath.
+        """
+        spec = self._by_name.get(raw)
+        if spec is not None:
+            return FieldRef(spec.name)
+
+        if "." in raw:
+            name, subpath = raw.split(".", 1)
+            spec = self._by_name.get(name)
+            if spec is not None and spec.kind is FieldKind.JSON and subpath in spec.subpaths:
+                return FieldRef(spec.name, subpath)
+
+        return None
 
     def exists_strategy(self, spec: FieldSpec) -> ExistsStrategy | None:
         """Return ``spec``'s resolved "exists" execution strategy.
@@ -220,33 +300,6 @@ class FieldRegistry:
         """
         return self._exists_strategies.get(spec.name)
 
-    def resolve_json(self, dotted: str) -> tuple[FieldSpec, str] | None:
-        """Resolve a JSON field by dotted path.
-
-        Splits on the first dot only. Returns (spec, subpath) if spec.kind is JSON
-        and subpath is in spec.subpaths, else None.
-
-        Args:
-            dotted: Dotted path like "notes.user" or "metadata.author.name".
-
-        Returns:
-            Tuple of (FieldSpec, subpath) if valid, else None.
-        """
-        if "." not in dotted:
-            return None
-
-        # Split on first dot only
-        name, subpath = dotted.split(".", 1)
-        spec = self.resolve(name)
-        if spec is None or spec.kind != FieldKind.JSON:
-            return None
-
-        # Check if subpath is registered
-        if subpath not in spec.subpaths:
-            return None
-
-        return (spec, subpath)
-
     def __contains__(self, name: str) -> bool:
         """Check if a name is a canonical name, alias, or valid dotted path.
 
@@ -256,12 +309,7 @@ class FieldRegistry:
         Returns:
             True if name is found as canonical, alias, or valid dotted JSON path.
         """
-        # Check canonical name or alias
-        if name in self._by_name:
-            return True
-
-        # Check if it's a valid dotted JSON path
-        return self.resolve_json(name) is not None
+        return self.make_ref(name) is not None
 
     def __iter__(self):
         """Iterate over FieldSpec objects in insertion order (deduplicated)."""

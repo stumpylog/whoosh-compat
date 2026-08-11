@@ -32,6 +32,7 @@ from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.fields import ExistsStrategy
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import Multitoken
 
@@ -260,12 +261,12 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
     # -- helpers -----------------------------------------------------
 
-    def _resolve(self, field: str | None):
+    def _resolve(self, field: FieldRef | None):
         if field is None:
             raise QueryEmitError("cannot emit an unfielded term")
         spec = self.registry.resolve(field)
         if spec is None:
-            raise QueryEmitError(f"unknown field {field!r}")
+            raise QueryEmitError(f"unknown field {str(field)!r}")
         return spec
 
     def _tokens(self, spec, text) -> list[str]:
@@ -387,21 +388,18 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         Returns ``None`` when ``node``'s field kind is not subject to the
         drop policy (its emission should just run normally, including
         raising for an unresolvable field). Reuses the exact same
-        JSON-subpath resolution (``registry.resolve_json``) and
-        tokenization (``_tokens``) that ``visit_term``/``_emit_json_term``
-        use, so this is a read-only preview of what emission will do, not a
-        second implementation of it.
+        JSON-subpath resolution and tokenization (``_tokens``) that
+        ``visit_term``/``_emit_json_term`` use, so this is a read-only
+        preview of what emission will do, not a second implementation of it.
         """
-        if node.field is not None and "." in node.field:
-            resolved = self.registry.resolve_json(node.field)
-            if resolved is not None:
-                spec, _subpath = resolved
+        if node.field is not None and node.field.json_path is not None:
+            spec = self.registry.resolve(node.field)
+            if spec is not None:
                 return self._tokens(spec, node.text)
-            # Not a registered JSON subpath: fall through to plain
-            # resolution below. The field may still be a registered
-            # non-JSON field whose name happens to contain a dot (e.g.
-            # "field.with.dots"), in which case it is subject to the same
-            # zero-token drop policy as any other TEXT/KEYWORD field.
+            # Not a resolvable JSON subpath (an invalid one, constructed
+            # directly rather than by the parser): fall through to
+            # ``_resolve`` below, which raises a clear "unknown field"
+            # error for it instead of silently treating it as droppable.
         spec = self._resolve(node.field)
         if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
             return self._tokens(spec, node.text)
@@ -500,11 +498,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         )
 
     def visit_term(self, node: ast.Term) -> tantivy.Query:
-        if node.field is not None and "." in node.field:
-            resolved = self.registry.resolve_json(node.field)
-            if resolved is not None:
-                spec, subpath = resolved
-                return self._emit_json_term(spec, subpath, node.text)
+        if node.field is not None and node.field.json_path is not None:
+            spec = self.registry.resolve(node.field)
+            if spec is not None:
+                return self._emit_json_term(spec, node.field.json_path, node.text)
+            # Falls through to _resolve below, which raises "unknown field"
+            # for an invalid subpath reference instead of silently treating
+            # it as a plain field.
 
         spec = self._resolve(node.field)
 
@@ -533,7 +533,9 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             return tantivy.Query.term_query(self.schema, spec.name, int(node.text))
 
         if spec.kind is FieldKind.BOOLEAN_EXISTS:
-            target = self._resolve(spec.exists_target)
+            # exists_target is always a plain (non-JSON) canonical field
+            # name: FieldRegistry validates it at construction time.
+            target = self._resolve(FieldRef(spec.exists_target))  # type: ignore[arg-type]
             exists = self._exists_query(target)
             if _is_truthy(node.text):
                 return exists
