@@ -289,8 +289,15 @@ expansion, which analyzer/pattern-normalizer to run, how multi-token values
 combine, JSON subpaths, boolean-exists targets, fast-field/date-only
 declarations) is entirely data on `FieldSpec`, validated at
 `FieldRegistry` construction time (e.g. `BOOLEAN_EXISTS` requires
-`exists_target`; an `exists_target` must resolve to a `fast=True` or `TEXT`
-field). Extending what the library can express for a field means adding a
+`exists_target`). Where a field's declared shape decides *how* a query can
+be executed, the registry resolves that once, at construction, rather than
+leaving it to the emitter: an `exists_target` is resolved to an
+`ExistsStrategy` (a fast-field presence check, or a term-dictionary scan
+for a non-fast TEXT/KEYWORD field), and a target that supports neither is
+rejected there with a message naming the remedy. `Every(field)` and
+`BOOLEAN_EXISTS` then share that single resolved strategy, so the two
+cannot drift into different answers to the same question. Extending what
+the library can express for a field means adding a
 new `FieldSpec` attribute and teaching the parser/emitter to read it, no
 plugin-architecture changes required for field-level behavior.
 
