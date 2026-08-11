@@ -1,6 +1,11 @@
 import pytest
+import tantivy
 
 from whoosh_compat import ast
+from whoosh_compat.emitters.tantivy_ import emit as emit_
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
 
 from .conftest import emit_ast
 from .conftest import search_ids
@@ -114,6 +119,59 @@ def test_boolean_exists(tindex, ereg, value, expected):
     node = ast.Term(field="has_tag", text=value)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
+
+
+# -- BOOLEAN_EXISTS targeting a non-fast field (end-to-end) -----------------
+
+
+def _non_fast_text_target_fixture():
+    """A standalone tantivy index/registry: a BOOLEAN_EXISTS field whose
+    exists_target is a non-fast TEXT field, actually searched.
+
+    FieldRegistry validation permits this shape (a non-fast TEXT
+    exists_target), but emission used to always build ``exists_query``,
+    which tantivy only accepts for fast fields, so a registry like this one
+    used to fail at *search* time with "Field body is not a fast field"
+    despite being constructed successfully. Self-contained (not the shared
+    ``tindex``/``ereg`` fixtures) so it doesn't require adding an unrelated
+    field to those.
+    """
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_text_field("body", stored=True)  # non-fast TEXT field
+    schema = sb.build()
+    index = tantivy.Index(schema)
+    w = index.writer()
+    for id_, body in [(1, "has a body"), (2, "")]:
+        doc = tantivy.Document()
+        doc.add_unsigned("id", id_)
+        if body:
+            doc.add_text("body", body)
+        w.add_document(doc)
+    w.commit()
+    index.reload()
+
+    registry = FieldRegistry(
+        [
+            FieldSpec("body", FieldKind.TEXT),
+            FieldSpec("has_body", FieldKind.BOOLEAN_EXISTS, exists_target="body"),
+        ]
+    )
+    return index, schema, registry
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        pytest.param(True, [1], id="exists-true-matches-doc-with-body"),
+        pytest.param(False, [2], id="exists-false-matches-doc-without-body"),
+    ],
+)
+def test_boolean_exists_non_fast_text_target(value, expected):
+    index, schema, registry = _non_fast_text_target_fixture()
+    node = ast.Term(field="has_body", text=value)
+    q = emit_(node, index=index, schema=schema, registry=registry)
+    assert search_ids(index, q) == expected
 
 
 def test_nothing(tindex, ereg):
