@@ -13,6 +13,7 @@ that used to build ``whoosh`` query objects directly:
 
 from __future__ import annotations
 
+import importlib.metadata
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -34,7 +35,7 @@ from whoosh_compat.fields import Multitoken
 from whoosh_compat.parser.dateparse import DateParserPlugin
 from whoosh_compat.parser.default import MultifieldParser
 
-__version__ = "0.1.0.dev0"
+__version__ = importlib.metadata.version("whoosh-compat")
 
 __all__ = [
     "Diagnostic",
