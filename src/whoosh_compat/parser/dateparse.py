@@ -814,7 +814,22 @@ class English(DateParser):
                            ), name="date")
 
         self.datetime = Bag((self.time, self.dmy), name="datetime")
-        self.bundle = Choice((self.nowcompact, self.plusdate, self.datetime, self.simple),
+        # "simple" (the compact/separated numeric sequence, e.g. "2020-01-01"
+        # or "20200304") is tried *before* "datetime" (the named-month/dayname
+        # Bag): Choice.parse returns the first sub-element that matches
+        # *anything*, even a partial prefix of the input, and doesn't itself
+        # enforce full consumption (that's ToEnd's job, applied by
+        # DateParser.date_from around the whole "all" grammar). A separated
+        # numeric date like "2020-01-01" satisfies self.dmy's lone `self.year`
+        # fallback alternative for just its "2020" prefix (the "-" after it
+        # passes self.year's `(?=(\W|$))` lookahead), so if "datetime" were
+        # tried first it would "succeed" there, discarding "-01-01" and
+        # denying "simple" (which needs to see the whole string, including
+        # the separators) any chance to run at all. Trying "simple" first
+        # means the compact/separated numeric grammar gets first refusal on
+        # digit-led input; "datetime" still runs for anything "simple" can't
+        # match at all (named months, day names, keywords, ...).
+        self.bundle = Choice((self.nowcompact, self.plusdate, self.simple, self.datetime),
                              name="bundle")
         self.torange = Combo((self.bundle, "to", self.bundle), name="torange")
 
@@ -955,17 +970,24 @@ class DateParserPlugin(Plugin):
         return DateRangeSyntaxNode(spec.name, lo, hi, incl_lo, incl_hi, boost)
 
     def range_to_node(self, node: syntax.RangeNode, spec: FieldSpec) -> syntax.SyntaxNode:
-        dp = self.dateparser.get_parser()
         local_now = self._local_now()
 
+        # Use the dateparser's own date_from (which wraps the grammar in
+        # ToEnd, requiring the bound text to match in full), not the bare
+        # grammar object's date_from: the latter accepts whatever prefix the
+        # first successful Choice alternative happened to consume (e.g. just
+        # the year out of "2020-06-15"), silently discarding the rest of the
+        # bound instead of diagnosing it. See text_to_node, which already
+        # goes through this same wrapped date_from for single (non-range)
+        # values.
         raw_start: Any = None
         raw_end: Any = None
         if node.start:
-            raw_start = dp.date_from(node.start, local_now)
+            raw_start = self.dateparser.date_from(node.start, local_now)
             if raw_start is None:
                 return self._error(node, node.start)
         if node.end:
-            raw_end = dp.date_from(node.end, local_now)
+            raw_end = self.dateparser.date_from(node.end, local_now)
             if raw_end is None:
                 return self._error(node, node.end)
 

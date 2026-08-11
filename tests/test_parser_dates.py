@@ -231,6 +231,67 @@ def test_plusdate_years_months_weeks_combo(reg):
     assert isinstance(r, ast.DateRange)
 
 
+# --- Dashed/space/dot/slash-separated ISO dates (English.__init__'s "simple"
+# sequence; see module docstring / DIVERGENCES.md for the bug this covers:
+# the "bundle" Choice used to try the "datetime" Bag before "simple", which
+# partial-matched a bare year and starved "simple" of the input, so any
+# separated single-value date failed to parse at all) -----------------------
+
+
+@pytest.mark.parametrize(
+    "query, lo, hi",
+    [
+        pytest.param(
+            "created:2020-01-01",
+            datetime(2020, 1, 1, tzinfo=UTC),
+            datetime(2020, 1, 2, tzinfo=UTC),
+            id="bare-dashed-day",
+        ),
+        pytest.param(
+            "created:'2020-01-01'",
+            datetime(2020, 1, 1, tzinfo=UTC),
+            datetime(2020, 1, 2, tzinfo=UTC),
+            id="quoted-dashed-day",
+        ),
+        pytest.param(
+            "created:2020-01",
+            datetime(2020, 1, 1, tzinfo=UTC),
+            datetime(2020, 2, 1, tzinfo=UTC),
+            id="bare-dashed-month",
+        ),
+        pytest.param(
+            "created:'2020-01'",
+            datetime(2020, 1, 1, tzinfo=UTC),
+            datetime(2020, 2, 1, tzinfo=UTC),
+            id="quoted-dashed-month",
+        ),
+        pytest.param(
+            "created:'2020 01 01'",
+            datetime(2020, 1, 1, tzinfo=UTC),
+            datetime(2020, 1, 2, tzinfo=UTC),
+            id="space-separated-day",
+        ),
+        pytest.param(
+            "created:'2020.01.01'",
+            datetime(2020, 1, 1, tzinfo=UTC),
+            datetime(2020, 1, 2, tzinfo=UTC),
+            id="dot-separated-day",
+        ),
+        pytest.param(
+            "created:'2020/01/01'",
+            datetime(2020, 1, 1, tzinfo=UTC),
+            datetime(2020, 1, 2, tzinfo=UTC),
+            id="slash-separated-day",
+        ),
+    ],
+)
+def test_separated_iso_date_precision(reg, query, lo, hi):
+    r = dparse(query, reg).ast
+    assert isinstance(r, ast.DateRange), r
+    assert r.lo == lo
+    assert r.hi == hi and not r.incl_hi
+
+
 # --- Range queries combining two date expressions (range_to_node) ---------
 
 
@@ -238,6 +299,18 @@ def test_range_both_bounds_named_dates(reg):
     r = dparse("created:[2020-01-01 TO 2020-12-31]", reg).ast
     assert r.lo == datetime(2020, 1, 1, tzinfo=UTC)
     assert r.hi == datetime(2021, 1, 1, tzinfo=UTC)
+
+
+def test_range_bounds_do_not_collapse_to_year(reg):
+    # Companion to test_range_both_bounds_named_dates: that test's answer
+    # coincidentally matches what the pre-fix "collapse to bare year" bug
+    # (DIVERGENCES.md, range_to_node not enforcing full-text consumption on
+    # a bound) would also produce (both bounds fall in 2020, so the whole
+    # year happens to contain them). This case doesn't coincide: the buggy
+    # behavior would silently produce the whole of 2020, not June 15-20.
+    r = dparse("created:[2020-06-15 TO 2020-06-20]", reg).ast
+    assert r.lo == datetime(2020, 6, 15, tzinfo=UTC)
+    assert r.hi == datetime(2020, 6, 21, tzinfo=UTC)
 
 
 def test_range_open_lower(reg):
