@@ -399,9 +399,20 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # exists_query is a cheap fast-field presence check, but it only
             # works on fast fields (tantivy errors out otherwise).
             return tantivy.Query.exists_query(spec.name)
-        # Non-fast (TEXT/KEYWORD) fields: "has any term at all" via a regex
-        # that matches every term in the field's dictionary.
-        return tantivy.Query.regex_query(self.schema, spec.name, ".*")
+        if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
+            # Non-fast TEXT/KEYWORD fields: "has any term at all" via a
+            # regex that matches every term in the field's dictionary.
+            return tantivy.Query.regex_query(self.schema, spec.name, ".*")
+        # Any other non-fast kind (U64, DATE, DATETIME, BOOLEAN_EXISTS, ...):
+        # regex_query only matches against a tantivy text/string field, so
+        # this fallback would build a query that dies at tantivy search
+        # time rather than emit time. Report it clearly instead of letting
+        # that surface later as an opaque tantivy error.
+        raise UnsupportedQueryError(
+            f"field {spec.name!r} ({spec.kind.name}) has no way to match"
+            f" 'exists' while non-fast: mark it fast=True to support"
+            f" '{spec.name}:*'"
+        )
 
     def visit_errorleaf(self, node: ast.ErrorLeaf) -> tantivy.Query:
         raise QueryEmitError(
@@ -422,6 +433,18 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             if not tokens:
                 # Not inside a group that can drop us: an empty term
                 # standalone simply matches nothing.
+                #
+                # Edge case worth noting explicitly (no code change needed):
+                # visit_not wraps this in a bare self.visit(node.child), not
+                # _group_child, so `NOT term` for a term whose analyzer drops
+                # every token becomes MustNot(empty_query()) here, which
+                # matches *every* document (there is nothing for MustNot to
+                # exclude). That is consistent with ast.normalize()'s
+                # Not(Nothing) -> Every rule (see ast.py): a NOT of "nothing"
+                # is "everything", by the same logic whether the emptiness
+                # comes from the parser (an explicit Nothing node) or from
+                # the analyzer dropping every token of an otherwise
+                # syntactically valid term at emit time.
                 return tantivy.Query.empty_query()
             return self._text_term_query(spec, tokens)
 

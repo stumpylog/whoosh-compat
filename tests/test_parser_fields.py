@@ -15,6 +15,11 @@ def test_u64(reg):
 def test_u64_bad(reg):
     r = wc.parse("asn:xyz", registry=reg, default_fields=["content"])
     assert isinstance(r.ast, ast.ErrorLeaf) and r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    # The diagnostic must carry a real span pointing at "xyz" (offsets 4-7 in
+    # "asn:xyz"), not None/None: a host turning this into an HTTP 400 needs
+    # somewhere to point the user at, same as BAD_DATE diagnostics already do.
+    assert r.diagnostics[0].startchar == 4
+    assert r.diagnostics[0].endchar == 7
 
 
 def test_bool_words(reg):

@@ -12,6 +12,10 @@ import pytest
 
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import glob_to_regex
+from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
 
 from .conftest import emit_ast
 from .conftest import search_ids
@@ -164,3 +168,19 @@ def test_prefix_normalizes_and_escapes(tindex, ereg):
 def test_every_field(tindex, ereg, field, expected):
     q = emit_ast(ast.Every(field=field), tindex, ereg)
     assert search_ids(tindex[0], q) == expected
+
+
+def test_every_field_non_fast_non_text_raises(tindex, ereg):
+    # 'asn' is registered as a fast U64 field in ereg, so build a second
+    # registry with it as non-fast instead: the regex(".*") fallback
+    # visit_every otherwise applies to any non-fast field only actually
+    # works against a tantivy text/string field. A non-fast U64 field would
+    # build a query that dies at tantivy search time; this must be caught
+    # and reported clearly at emit time instead, naming the fix (make the
+    # field fast).
+    non_fast_registry = FieldRegistry(
+        [FieldSpec("asn", FieldKind.U64, fast=False)]
+        + [spec for spec in ereg if spec.name != "asn"]
+    )
+    with pytest.raises(UnsupportedQueryError, match="fast"):
+        emit_ast(ast.Every(field="asn"), tindex, non_fast_registry)

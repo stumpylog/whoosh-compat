@@ -585,7 +585,8 @@ class TextNode(SyntaxNode):
         fieldname = self.fieldname or getattr(parser, "fieldname", None)
         q = parser.term_query(fieldname, self.text, boost=self.boost,
                                tokenize=self.tokenize,
-                               removestops=self.removestops)
+                               removestops=self.removestops,
+                               startchar=self.startchar, endchar=self.endchar)
         return attach(q, self)
 
 

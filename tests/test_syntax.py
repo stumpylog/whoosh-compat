@@ -197,7 +197,15 @@ def test_wordnode_passes_tokenize_and_removestops_flags() -> None:
     syntax.WordNode("dog").query(RecordingParser())
 
     assert calls == [
-        {"fieldname": None, "text": "dog", "boost": 1.0, "tokenize": True, "removestops": True}
+        {
+            "fieldname": None,
+            "text": "dog",
+            "boost": 1.0,
+            "tokenize": True,
+            "removestops": True,
+            "startchar": None,
+            "endchar": None,
+        }
     ]
 
 
