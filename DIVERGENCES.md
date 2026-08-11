@@ -74,9 +74,11 @@ parse-then-emit pipeline).
     reproducing the bug.
 
     Test references: `tests/differential/allowlist.py`'s
-    `created|modified|added:\[` entry (covers every bracketed range on a
-    DATE/DATETIME field in the differential corpus,
-    `tests/differential/corpus_*.txt`); confirmed to *not* change actual
+    `created|modified|added:[\[{]` entry (covers every bracketed range,
+    inclusive or exclusive open bracket, on a DATE/DATETIME field in the
+    differential corpus, `tests/differential/corpus_*.txt`, broadened from
+    `[`-only after the grammar-aware fuzzer generated an exclusive-bracket
+    case that hit the identical bypass); confirmed to *not* change actual
     search results for this project's small acceptance fixture in
     `tests/emitter/test_acceptance_e2e.py::test_scenario_equal[lowercase-to-open-range]`
     (see that test module's docstring for why an AST-level divergence
@@ -125,7 +127,10 @@ parse-then-emit pipeline).
 
     Test references: `tests/differential/corpus_docs.txt`'s
     `title:202[0-3]*` line plus its matching `tests/differential/allowlist.py`
-    entry (`\btitle:202\[0-3\]\*`); `tests/emitter/test_emit_patterns.py`
+    entry, broadened from that one literal string to the general
+    field/value shape after the grammar-aware fuzzer generated other
+    bracket-then-trailing-star patterns (e.g. `title:0[0-0]*`) that hit the
+    same root cause; `tests/emitter/test_emit_patterns.py`
     (`test_wildcard_emission`'s `character-class-13568` /
     `13568-leading-star-class` cases exercise the emitter's own
     class-preserving behavior directly, independent of the parser fold);
@@ -456,5 +461,75 @@ parse-then-emit pipeline).
     predictable than a rule that depends on an implementation detail.
 
     Test references: `tests/emitter/test_emit_boolean.py`'s
-    `test_not_zero_token_term_matches_everything`.
+    `test_not_zero_token_term_matches_everything`. The grammar-aware
+    property fuzzer (`tests/differential/strategies.py`,
+    `test_hypothesis.py::test_fuzz_grammar_matches_oracle`) later found that
+    this same divergence also reaches the *differential AST-comparison*
+    layer, not just the emitter: `oracle.analyze_ast`'s own token-dropping
+    rule turns a `NOT`'s now-empty child into an empty `And()`, which
+    `ast.normalize()`'s pre-existing `Not(Nothing) -> Every` rule then
+    upgrades to `Every()`, landing on the same "matches everything" shape
+    this entry already describes, just reached through the test harness's
+    forward-analysis step instead of `TantivyEmitter`. Allowlisted in
+    `tests/differential/allowlist.py` (a `NOT` directly wrapping a single
+    known-zero-token TEXT-field value) rather than treated as a new
+    divergence, since the underlying behavior is this same entry.
 
+24. **An all-zero-token quoted phrase parses to a real empty-words `Phrase`
+    object in real whoosh, but is dropped entirely by whoosh-compat's
+    emit-time analysis (design, found by the grammar-aware fuzzer).** Real
+    whoosh's `PhrasePlugin.PhraseNode.query()`
+    (`whoosh/qparser/plugins.py`) tokenizes a quoted phrase's text at
+    *parse* time, via the field's own analyzer, and builds a
+    `whoosh.query.Phrase(fieldname, words, ...)` regardless of how many
+    words come out the other end, including zero (e.g. `title:"the"`, a
+    single stopword): the result is a real, non-null `Phrase` query object
+    whose `words` list just happens to be empty. whoosh-compat instead
+    defers all analysis to emit time (see ARCHITECTURE.md's "analyzer
+    contract" invariant): `ast.Phrase` keeps the raw, unanalyzed text, and
+    `TantivyEmitter` (and, for the differential harness's purposes,
+    `oracle.analyze_ast`'s `_analyzed_phrase` helper, which models the same
+    behavior for comparison) drops the phrase from its enclosing group
+    entirely once analysis reduces it to zero tokens, the same rule already
+    applied to a zero-token plain `Term` (see `oracle.analyze_ast`'s
+    docstring). The two sides therefore build structurally different trees
+    for the exact same input: an oracle `ast.Phrase(field, text="")` versus
+    whoosh-compat's node vanishing (its enclosing group normalizing to
+    `Nothing()` if nothing else survives). This is the same underlying
+    parse-time-vs-emit-time-analysis design already responsible for several
+    other entries in this document, just not previously exercised by name
+    for a *phrase* (only single terms) until the grammar-aware fuzzer
+    generated an all-stopword phrase.
+
+    Test references: `tests/differential/allowlist.py`'s all-zero-token
+    quoted-phrase entry; `tests/differential/strategies.py`'s
+    `ZERO_TOKEN_WORDS` (the same verified-zero-token vocabulary used to
+    generate both this case and entry 23's).
+
+25. **A bare (non-bracketed) relative date offset is a whoosh-compat-only
+    feature (design, found by the grammar-aware fuzzer).** `created:now-7d`
+    and `created:-3mos` parse to a real `DateRange` in whoosh-compat: this
+    is documented directly in README.md's syntax table, which lists
+    `created:now-7d` as a bare example, not just something usable inside a
+    bracketed range's bounds. Real whoosh's date grammar only recognizes
+    this relative-offset syntax (`now-7d`, `-1 week`, etc.) as a *range
+    bound*; a bare, non-bracketed value in this shape fails to parse as a
+    date on the real-whoosh side and falls back to `NullQuery`. Confirmed
+    directly against the pinned oracle:
+    `oracle_parse("created:now-7d", ...)` returns `NullQuery`, while
+    `oracle_parse("created:[now-7d TO now]", ...)` parses the identical
+    relative-offset text correctly as a range bound. Not a bug on either
+    side: whoosh-compat's single-value date grammar simply accepts a syntax
+    real whoosh's does too, just only in the other position.
+
+    A relative offset written with a space (`created:-1 week`, unquoted)
+    fails to parse as a single token on whoosh-compat's side too (it splits
+    at the whitespace like any other unquoted multi-word value, producing a
+    `BAD_DATE` diagnostic for the `-1` piece and an ordinary multifield term
+    search for `week`): that shape is already excluded from comparison by
+    the DIVERGENCES.md entry 6 diagnostics check, not by this entry.
+
+    Test references: `tests/differential/allowlist.py`'s bare-relative-
+    date-offset entry; `tests/differential/strategies.py`'s
+    `_DATE_RELATIVE` (the relative-offset vocabulary the grammar-aware
+    fuzzer draws bare date values from).

@@ -5,9 +5,11 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from hypothesis import example
 from hypothesis import given
 from hypothesis import settings
 from hypothesis import strategies as st
+from hypothesis import target
 
 import whoosh_compat as wc
 from tests.differential.allowlist import allowed
@@ -17,6 +19,10 @@ from tests.differential.oracle import analyze_ast
 from tests.differential.oracle import compat_raw_parse
 from tests.differential.oracle import oracle_parse
 from tests.differential.oracle import to_ast
+from tests.differential.strategies import ast_shape
+from tests.differential.strategies import query_text
+from tests.differential.strategies import seed_corpus
+from tests.differential.strategies import zero_token_leaf_count
 from whoosh_compat.ast import normalize
 
 BERLIN = ZoneInfo("Europe/Berlin")
@@ -62,6 +68,106 @@ def test_fuzz_matches_oracle(q):
         return
     got = normalize(analyze_ast(raw_ast, ORACLE_REGISTRY))
     assert got == normalize(expected), f"query: {q!r}"
+
+
+# --------------------------------------------------------------------------
+# Grammar-aware parity: the full supported query language (strategies.py),
+# nested rather than flat, with `hypothesis.target()` guiding the search
+# toward structurally rich examples (see strategies.py's module docstring
+# for why nesting/composition is specifically the gap this closes) and
+# seeded with the corpus/DIVERGENCES examples known to be interesting.
+# --------------------------------------------------------------------------
+
+# Seeds: every static differential corpus line (known-interesting query
+# shapes already curated by hand) plus a few strings pulled directly from
+# DIVERGENCES.md entries that aren't already corpus lines, so those
+# documented divergence shapes are always exercised by this property too,
+# not just left to chance generation.
+_DIVERGENCE_SEEDS = (
+    "created:[2020-06-15 TO 2020-06-20]",  # entry 12: partial-bound collapse
+    "title:202[0-3]*",  # entry 13: bracket-class trailing-star fold
+    "notes.user:alice",  # entry 14: JSON subpath, no whoosh analogue
+    "tag:'foo,bar'",  # entry 17: comma-quote-literal
+    "title:*",  # entry 20: bare field:* -> Every(field)
+    "added:'2020 12:30'",  # entry 21: year + colon-time ambiguity
+    "NOT title:the",  # entry 23: NOT of a zero-token term
+)
+_SEED_QUERIES = tuple(
+    dict.fromkeys((*seed_corpus("corpus_paperless.txt", "corpus_docs.txt"), *_DIVERGENCE_SEEDS))
+)
+
+
+def _grammar_fuzz_matches_oracle(q: str) -> None:
+    raw_ast, diagnostics = compat_raw_parse(q, ORACLE_REGISTRY, V2_FIELDS, BERLIN, BASE)
+    count, depth, distinct_types = ast_shape(raw_ast)
+    dropped = zero_token_leaf_count(raw_ast, ORACLE_REGISTRY)
+    # Hill-climb toward structurally rich examples: more nodes, deeper
+    # nesting, more distinct node types in one tree, and more zero-token
+    # leaves buried somewhere inside a larger structure (exactly the
+    # composition gap described in strategies.py's module docstring: every
+    # real defect found so far involved a dropped/zero-token child nested
+    # inside something else, not a zero-token value tested alone).
+    target(float(count), label="node_count")
+    target(float(depth), label="depth")
+    target(float(distinct_types), label="distinct_types")
+    target(float(dropped), label="dropped_zero_token")
+
+    if allowed(q):
+        return
+    try:
+        oracle_query = oracle_parse(q, BASE, BERLIN)
+    except Exception:  # noqa: BLE001 - the oracle's own failure modes are not enumerable
+        # The oracle (real whoosh, plus this harness's LocalDateParser clone
+        # of paperless-ngx's own tz-reversal override, see oracle.py) makes
+        # no promise of never raising for malformed input the way
+        # whoosh-compat's diagnostics-not-exceptions contract does (see
+        # ARCHITECTURE.md's "Diagnostics never raise mid-parse" invariant):
+        # an empty range bound with an exclusive bracket
+        # ("created:{ TO 1]") crashes whoosh's own field.parse_range, and a
+        # year at the extreme edge of what datetime can represent
+        # ("created:0001") overflows the harness's own UTC tz-reversal
+        # arithmetic. Neither is a whoosh-compat defect (whoosh-compat
+        # handles both without raising, producing either an ErrorLeaf/
+        # diagnostic or a valid DateRange); there is simply no oracle
+        # result to compare against for shapes the oracle itself cannot
+        # parse, so skip rather than fail.
+        return
+    expected = to_ast(oracle_query, ORACLE_REGISTRY)
+    if expected is None:
+        return
+    if diagnostics:
+        # DIVERGENCES.md entry 6, see test_fuzz_matches_oracle above.
+        return
+    got = normalize(analyze_ast(raw_ast, ORACLE_REGISTRY))
+    assert got == normalize(expected), f"query: {q!r}"
+
+
+test_fuzz_grammar_matches_oracle = given(query_text(max_leaves=6))(
+    settings(max_examples=300, deadline=None)(_grammar_fuzz_matches_oracle)
+)
+for _q in _SEED_QUERIES:
+    test_fuzz_grammar_matches_oracle = example(_q)(test_fuzz_grammar_matches_oracle)
+del _q
+
+
+# --------------------------------------------------------------------------
+# normalize() resilience: totality (never raises for any parsed AST) and
+# idempotence (a second pass is always a no-op). Grammar-aware so it reaches
+# every node type the language can produce, not just the ones the simpler
+# `words`-based strategy above happens to build.
+# --------------------------------------------------------------------------
+
+
+@given(query_text(max_leaves=6))
+@settings(max_examples=300, deadline=None)
+def test_normalize_is_total_and_idempotent(q):
+    # compat_raw_parse (not the public wc.parse()) so this exercises
+    # normalize() the way callers actually invoke it: on a freshly parsed,
+    # not-yet-normalized tree, not one that has already been through it once.
+    raw_ast, _diagnostics = compat_raw_parse(q, ORACLE_REGISTRY, V2_FIELDS, BERLIN, BASE)
+    once = normalize(raw_ast)
+    twice = normalize(once)
+    assert once == twice, f"normalize() not idempotent for query: {q!r}"
 
 
 @given(st.text(max_size=80))

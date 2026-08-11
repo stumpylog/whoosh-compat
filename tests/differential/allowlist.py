@@ -47,11 +47,32 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # a query pattern here (a fixed regex here couldn't keep up with
     # hypothesis-fuzzed invalid dates/numbers).
     # #2: wildcard/prefix patterns are case-folded via pattern_normalizer in
-    # whoosh-compat (Wär* matches Wärrantyplan); whoosh matched raw
-    # (already-lowercased-at-index-time) terms, so a capitalized wildcard
-    # pattern like "Wär*" never matched in v2 either: this is a fix, not
-    # parity.
-    (re.compile(r"Wär\*"), "DIVERGENCES.md entry 2: wildcard pattern normalization"),
+    # whoosh-compat, but only at *emit* time (TantivyEmitter, see
+    # ARCHITECTURE.md's analyzer-contract paragraph): the parsed AST always
+    # keeps the pattern's original case (Wildcard.pattern/Prefix.text are
+    # never touched at parse time). Real whoosh instead folds case into the
+    # AST itself: field.process_text(text, tokenize=False) still runs the
+    # field's LowercaseFilter even though tokenize=False skips the
+    # tokenizer (filters aren't skipped, see
+    # whoosh.analysis.tokenizers.RegexTokenizer.__call__), so any wildcard/
+    # prefix pattern containing an uppercase letter parses to a
+    # lowercased Wildcard/Prefix node on the oracle side but an
+    # unmodified-case one on whoosh-compat's. This was originally scoped to
+    # the single literal corpus string "Wär*"; broadened here (grammar-fuzz
+    # discovered via `title:A*`) to the general shape, since the root cause
+    # (parse-time AST case is never folded by whoosh-compat, only
+    # emit-time text is) applies identically to every field/pattern, not
+    # just that one string. The field prefix is optional (`(?:\w+:)?`) so
+    # this also covers an unfielded, multifield-expanded pattern like the
+    # original bare "Wär*" corpus line, which has no ":" at all.
+    (
+        re.compile(r"\b(?:\w+:)?(?=[^\s()]*[A-Z])(?=[^\s()]*[*?])[^\s()]+"),
+        (
+            "DIVERGENCES.md entry 2: wildcard/prefix pattern case is folded into"
+            " the AST by whoosh (LowercaseFilter runs even with tokenize=False)"
+            " but only at emit time by whoosh-compat (FieldSpec.pattern_normalizer)"
+        ),
+    ),
     # design: whoosh-compat's CommaValuesPlugin treats a *quoted* comma-values
     # field value as a literal (SingleQuotePlugin marks it is_quoted); real
     # whoosh has no such plugin at all: its KEYWORD(commas=True) analyzer
@@ -125,9 +146,14 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # to cover), not an intended whoosh design choice, so whoosh-compat does
     # NOT reproduce it: DateParserPlugin.range_to_node applies the same tz
     # conversion uniformly to both single values and range bounds. Covers
-    # every bracketed range on a DATE/DATETIME field in the corpus.
+    # every bracketed range on a DATE/DATETIME field in the corpus. The
+    # opening bracket is "[" or "{" (inclusive/exclusive): the root cause
+    # (range_to_dt's missing ToEnd/override wiring) doesn't care which one
+    # was typed, only that it's a range at all; broadened from "[" only
+    # after the grammar-aware fuzzer generated an exclusive-bracket range
+    # ("created:{TO 1000]") that hit the identical bypass.
     (
-        re.compile(r"\b(?:created|modified|added):\["),
+        re.compile(r"\b(?:created|modified|added):[\[{]"),
         (
             "whoosh-bug: LocalDateParser's tz-reversal override doesn't reach"
             " range bounds (range_to_dt uses the bare grammar's date_from, not"
@@ -200,11 +226,20 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # Every(field) shape is deliberate: see DIVERGENCES's emitter table
     # (Every(field) -> fast-field exists_query or a regex(".*") fallback for
     # non-fast TEXT, both cheaper than a literal wildcard scan).
+    # A standalone "*" (bounded by whitespace/parens/start-end, optionally
+    # preceded by "field:") triggers the same simplification whether or not
+    # it's fielded: an entirely bare "*" multifield-expands to one Every()
+    # per default field, same shape as the fielded case, just without the
+    # ":". Broadened from a colon-only match (which missed the bare form,
+    # found by the grammar-aware fuzzer) without also catching "*" used as
+    # a wildcard character inside a larger pattern like "produ*name" or a
+    # trailing-star fold like "abc*" (neither of those has a "*" bounded by
+    # whitespace/parens/start-end on both sides).
     (
-        re.compile(r":\*(?:\s|$)"),
+        re.compile(r"(?:^|(?<=[\s(:]))\*(?=$|[\s)])"),
         (
-            "DIVERGENCES.md entry 20: bare field:* simplifies to Every(field) in"
-            " whoosh-compat vs a literal Wildcard('*') in whoosh"
+            "DIVERGENCES.md entry 20: bare field:* (or unfielded *) simplifies to"
+            " Every(field) in whoosh-compat vs a literal Wildcard('*') in whoosh"
         ),
     ),
     # whoosh-bug (DIVERGENCES.md entry 13): real whoosh's WildcardPlugin.do_wildcards
@@ -218,10 +253,118 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # for "[", so it keeps the full Wildcard pattern. Not reproduced:
     # whoosh-compat's own trailing-star-with-bracket corpus line
     # (title:202[0-3]*) is intentionally allowlisted here rather than
-    # matched against the (buggy) oracle tree.
+    # matched against the (buggy) oracle tree. Broadened from the single
+    # literal corpus string to the general shape (any field/value with a
+    # bracket class immediately followed by a trailing "*"): the root cause
+    # is a check that's missing for every field/pattern, not just this one
+    # corpus line, as the grammar-aware fuzzer confirmed (title:0[0-0]*).
     (
-        re.compile(r"\btitle:202\[0-3\]\*"),
+        re.compile(r"\b\w+:[^\s()]*\[[^\]]*\]\*(?:\s|$|\))"),
         "whoosh-bug (DIVERGENCES.md entry 13): Wildcard.normalize() bracket fold drops the character class on a trailing-star pattern",
+    ),
+    # design (extends DIVERGENCES.md entry 23, found by the grammar-aware
+    # fuzzer, see test_hypothesis.py): NOT of a term/phrase whose value is
+    # empty after the field's own token-dropping analysis (a stopword, or a
+    # token shorter than StandardAnalyzer's minsize=2) reaches the exact
+    # same divergence entry 23 already documents at emit time, but at the
+    # differential AST-comparison layer instead: oracle.analyze_ast's own
+    # "a dropped Term/Phrase vanishes from its parent group" rule (see that
+    # function's docstring) turns the NOT's now-empty child into an empty
+    # And(), which whoosh_compat.ast.normalize()'s pre-existing
+    # Not(Nothing) -> Every rule then upgrades to Every(): whoosh-compat's
+    # comparison tree becomes "matches everything", while real whoosh's
+    # Not(NullQuery).normalize() stays NullQuery ("matches nothing"), same
+    # as entry 23. Scoped to a NOT directly wrapping a single known-
+    # zero-token-word value on any field (see strategies.ZERO_TOKEN_WORDS;
+    # kept as a literal list here rather than importing strategies.py, so
+    # this module doesn't depend on the fuzzer that discovered the case).
+    # The field name itself is left generic (any \w+) rather than
+    # enumerated: the mechanism applies to every TEXT field in the
+    # registry, and an earlier version of this entry that spelled out only
+    # a handful of field names missed "owner" (found by the fuzzer, which
+    # samples the oracle registry's full field list). The value alternation
+    # also includes a bare "\w" (matches exactly one word character): any
+    # single-character value is zero-token too (StandardAnalyzer's
+    # minsize=2 drops it), and the grammar-aware fuzzer's generic term
+    # atom (not just its dedicated zero-token atom) produces single-
+    # character words often enough by chance ("title:2", not just the
+    # curated word list) that enumerating specific single characters here
+    # would be a losing game; the "\w" alternative, ordered last so the
+    # named stopwords still match themselves rather than just their first
+    # letter, covers all of them at once. The four registered KEYWORD
+    # fields are excluded (negative lookahead): whoosh's KEYWORD analyzer
+    # only splits on commas, with no stopword/minsize filtering, so a
+    # single-character KEYWORD value is *not* zero-token and a NOT of one
+    # is a real comparison, not this divergence.
+    (
+        re.compile(
+            r"\bNOT\s*\(*\s*(?!(?:tag|tag_id|custom_fields_id|viewer_id):)\w+:"
+            r"(?:the|a|an|of|to|and|in|is|it|by|\w)(?=\W|$)"
+        ),
+        (
+            "DIVERGENCES.md entry 23: NOT of a zero-token term/phrase reaches the"
+            " same emit-time divergence at the AST-comparison layer"
+        ),
+    ),
+    # design (DIVERGENCES.md entry 24, found by the grammar-aware fuzzer): a
+    # quoted phrase whose entire content analyzes to zero tokens (every word
+    # is a stopword or shorter than minsize=2) parses on the oracle side to
+    # a real (non-None) whoosh.query.Phrase object with an empty words list
+    # (whoosh tokenizes phrase content at *parse* time, see
+    # PhrasePlugin.PhraseNode.query in whoosh/qparser/plugins.py), which
+    # oracle.to_ast maps faithfully to ast.Phrase(text=""); whoosh-compat
+    # defers phrase analysis to emit time (ARCHITECTURE.md's analyzer
+    # contract), so oracle.analyze_ast's own _analyzed_phrase helper
+    # correctly drops the whole phrase (mirrors what TantivyEmitter would
+    # do), collapsing the enclosing group to Nothing() instead. Scoped to a
+    # double-quoted phrase whose entire content is one or more known
+    # zero-token words (see strategies.ZERO_TOKEN_WORDS; kept as a literal
+    # list here, same rationale as the entry-23 allowlist entry above). The
+    # field name is left generic for the same reason entry 23's was
+    # broadened above. Each word is either a named stopword or a bare
+    # single character (any single char is zero-token too, StandardAnalyzer's
+    # minsize=2 drops it): the trailing lookahead `(?=[\s"])` on every
+    # alternative requires the match to actually end there, so a real
+    # (non-zero-token) word that merely *starts with* a stopword or a
+    # digit, e.g. "thermal" or "20th", is not mistaken for one, the same
+    # false-positive risk fixed for entry 23 above.
+    (
+        re.compile(
+            r"\b\w+:"
+            r'"(?:the|a|an|of|to|and|in|is|it|by|\w)(?=[\s"])'
+            r'(?:\s+(?:the|a|an|of|to|and|in|is|it|by|\w)(?=[\s"]))*"'
+        ),
+        (
+            "DIVERGENCES.md entry 24: an all-zero-token quoted phrase parses to"
+            " a real empty-words Phrase object in whoosh (tokenized at parse"
+            " time) but is dropped entirely by whoosh-compat's emit-time"
+            " analysis"
+        ),
+    ),
+    # design (DIVERGENCES.md entry 25, found by the grammar-aware fuzzer): a
+    # bare (non-bracketed) relative date offset ("created:now-7d",
+    # "created:-3mos") parses to a real DateRange in whoosh-compat (README's
+    # syntax table documents this directly: "created:now-7d" is listed as a
+    # bare example, not just a range bound), but real whoosh's date grammar
+    # only recognizes this relative-offset syntax inside a bracketed range's
+    # bounds; a bare value in this shape fails to parse as a date on the
+    # oracle side and falls back to NullQuery. Confirmed directly:
+    # oracle_parse("created:now-7d", ...) -> NullQuery, while
+    # oracle_parse("created:[now-7d TO now]", ...) parses the exact same
+    # relative-offset text correctly. A whoosh-compat feature with no whoosh
+    # equivalent, not a bug either side. Scoped to a value starting with
+    # "now" immediately followed by a sign, or a bare "-" immediately
+    # followed by a digit (a relative offset with a *space*, e.g.
+    # "created:-1 week", already fails to parse as a single token on both
+    # sides and is skipped separately via the DIVERGENCES.md entry 6
+    # diagnostics check, not by this entry).
+    (
+        re.compile(r"\b(?:created|modified|added):'?(?:now[+-]|-\d)"),
+        (
+            "DIVERGENCES.md entry 25: a bare relative date offset parses as a"
+            " DateRange in whoosh-compat (a documented feature/extension) but"
+            " whoosh's grammar only supports this syntax inside a bracketed range"
+        ),
     ),
 ]
 

@@ -214,6 +214,67 @@ Because layer 2 needs a real Whoosh installation as an oracle, it's pulled
 in as a dev-only dependency (pinned by git ref, not the PyPI 2.7.4 release)
 rather than a runtime dependency of the library itself.
 
+### Property-based / fuzz testing
+
+`tests/differential/strategies.py` is a grammar-aware [Hypothesis](https://hypothesis.readthedocs.io/)
+strategy covering the whole supported query language (README's syntax
+table above): nested groups, every operator, wildcards/ranges/phrases/
+comma-lists/boosts/JSON subpaths, and deliberately placed zero-token
+values (an all-stopword term/phrase, see `strategies.ZERO_TOKEN_WORDS`).
+It drives four properties:
+
+- `tests/differential/test_hypothesis.py::test_fuzz_grammar_matches_oracle`:
+  the same AST-shape parity check as the static corpus (layer 2 above), but
+  over generated, nested queries, guided by `hypothesis.target()` toward
+  structurally rich examples (more nodes, deeper nesting, more distinct
+  node types, more zero-token leaves buried inside a larger structure).
+  Seeded with every static corpus line plus a few strings pulled directly
+  from `DIVERGENCES.md` entries, via `@example()`.
+- `tests/differential/test_hypothesis.py::test_normalize_is_total_and_idempotent`:
+  `normalize(normalize(x)) == normalize(x)` for every freshly parsed AST,
+  and `normalize()` never raises.
+- `tests/emitter/test_hypothesis_e2e.py::test_emit_never_raises_except_unsupported`:
+  parsing a query that produced no diagnostics, then emitting it against a
+  real in-memory tantivy index, never raises anything except the
+  documented `UnsupportedQueryError`.
+- `tests/emitter/test_hypothesis_e2e.py::test_normalize_idempotent_on_emitter_registry_grammar`:
+  the same `normalize()` property again, against the emitter registry's
+  own (smaller, JSON/BOOLEAN_EXISTS-carrying) field vocabulary.
+
+These run at a modest `max_examples` in CI so the suite stays fast. To run
+a longer local soak (recommended before a release, or after touching
+`parser/`, `ast.py`, or `emitters/`), raise the example count for a single
+run without editing the files:
+
+```bash
+uv run python - <<'EOF'
+import hypothesis
+hypothesis.settings.register_profile("soak", max_examples=5000, deadline=None)
+hypothesis.settings.load_profile("soak")
+import pytest
+raise SystemExit(pytest.main(["tests/differential/test_hypothesis.py", "tests/emitter/test_hypothesis_e2e.py", "-q"]))
+EOF
+```
+
+or edit the `max_examples=300` values in those two files directly for the
+duration of the run. Keep long soaks (thousands of examples) **out of
+CI**: they take minutes, not seconds, and are meant for local/pre-release
+verification, not every push.
+
+**HypoFuzz** (coverage-guided fuzzing that runs existing Hypothesis
+properties under instrumentation) was evaluated for this purpose and is
+**not used**: its license (`Zac-HD/hypofuzz`'s `LICENSE`, checked directly)
+grants use "for non-commercial purposes only", explicitly requires a
+separate paid commercial license for "use within a commercial
+organization, including internal tooling or testing" and "use in
+continuous integration or development pipelines for commercial products",
+and prohibits modification/redistribution without permission. That's
+incompatible with this BSD-2-Clause project (whoosh-compat is itself used
+by, and expected to be run in CI by, commercial downstream users like
+paperless-ngx installs), so it was not added as a dependency. The plain-
+Hypothesis soak profile above is the recommended way to get a similar
+"run longer, look harder" effect without it.
+
 ## License
 
 BSD-2-Clause, see [LICENSE](./LICENSE). This project's parser
