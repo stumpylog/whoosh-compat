@@ -1,3 +1,5 @@
+import re
+
 import pytest
 import tantivy
 
@@ -198,6 +200,126 @@ def test_boosted_group_child_with_tokens_is_wrapped(tindex, ereg):
         children=(
             ast.Term(field="content", text="invoice"),
             ast.Boosted(child=ast.Term(field="content", text="total"), boost=2.0),
+        )
+    )
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1]
+
+
+# -- nested group whose children all drop must itself drop ------------------
+
+
+def _stopword_registry():
+    """A standalone registry whose "content" analyzer drops "the"/"a" as
+    stopwords, reused against the shared `tindex` fixture's real doc content
+    (doc 1's content is "invoice total amount").
+
+    Used to reproduce: a nested And/Or group whose every child analyzes to
+    zero tokens (an all-stopword group) must itself be dropped from its
+    enclosing group, not survive as a live `empty_query()` that wrongly
+    requires nothing to be true and kills a sibling required clause.
+    """
+    stopwords = {"the", "a"}
+
+    def analyzer(text):
+        return [t for t in re.split(r"\W+", text.lower()) if t and t not in stopwords]
+
+    return FieldRegistry([FieldSpec("content", FieldKind.TEXT, analyzer=analyzer)])
+
+
+def test_nested_or_all_dropped_is_dropped_from_and(tindex):
+    # Repro from the task: invoice AND ("the" OR "a") must match doc 1, not [].
+    ereg = _stopword_registry()
+    node = ast.And(
+        children=(
+            ast.Term(field="content", text="invoice"),
+            ast.Or(
+                children=(
+                    ast.Term(field="content", text="the"),
+                    ast.Term(field="content", text="a"),
+                )
+            ),
+        )
+    )
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1]
+
+
+def test_nested_and_all_dropped_is_dropped_from_or(tindex):
+    ereg = _stopword_registry()
+    node = ast.Or(
+        children=(
+            ast.Term(field="content", text="invoice"),
+            ast.And(
+                children=(
+                    ast.Term(field="content", text="the"),
+                    ast.Term(field="content", text="a"),
+                )
+            ),
+        )
+    )
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1]
+
+
+def test_deeply_nested_group_all_dropped_is_dropped(tindex):
+    # Arbitrary nesting depth: And(Or(And(the, a))) inside the outer And.
+    ereg = _stopword_registry()
+    node = ast.And(
+        children=(
+            ast.Term(field="content", text="invoice"),
+            ast.Or(
+                children=(
+                    ast.And(
+                        children=(
+                            ast.Term(field="content", text="the"),
+                            ast.Term(field="content", text="a"),
+                        )
+                    ),
+                )
+            ),
+        )
+    )
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1]
+
+
+def test_nested_group_all_dropped_through_boosted_composes(tindex):
+    # The nested-group drop rule must compose with the existing Boosted
+    # unwrapping: Boosted(Or(all-dropped)) is still dropped, not turned into
+    # a live boost_query(empty_query(), ...) clause.
+    ereg = _stopword_registry()
+    node = ast.And(
+        children=(
+            ast.Term(field="content", text="invoice"),
+            ast.Boosted(
+                child=ast.Or(
+                    children=(
+                        ast.Term(field="content", text="the"),
+                        ast.Term(field="content", text="a"),
+                    )
+                ),
+                boost=2.0,
+            ),
+        )
+    )
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1]
+
+
+def test_nested_group_with_surviving_child_is_not_dropped(tindex):
+    # Sanity check on the other side of the fix: a nested group with at
+    # least one surviving child must NOT be dropped.
+    ereg = _stopword_registry()
+    node = ast.And(
+        children=(
+            ast.Term(field="content", text="invoice"),
+            ast.Or(
+                children=(
+                    ast.Term(field="content", text="the"),
+                    ast.Term(field="content", text="total"),
+                )
+            ),
         )
     )
     q = emit_ast(node, tindex, ereg)

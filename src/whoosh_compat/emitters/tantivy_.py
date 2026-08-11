@@ -390,12 +390,14 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         """
         if node.field is not None and "." in node.field:
             resolved = self.registry.resolve_json(node.field)
-            if resolved is None:
-                # Not a registered JSON subpath: let visit()/visit_term's
-                # own _resolve() raise the "unknown field" error.
-                return None
-            spec, _subpath = resolved
-            return self._tokens(spec, node.text)
+            if resolved is not None:
+                spec, _subpath = resolved
+                return self._tokens(spec, node.text)
+            # Not a registered JSON subpath: fall through to plain
+            # resolution below. The field may still be a registered
+            # non-JSON field whose name happens to contain a dot (e.g.
+            # "field.with.dots"), in which case it is subject to the same
+            # zero-token drop policy as any other TEXT/KEYWORD field.
         spec = self._resolve(node.field)
         if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
             return self._tokens(spec, node.text)
@@ -406,15 +408,23 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
         Returns ``None`` when the child: possibly wrapped in one or more
         transparent ``Boosted`` layers: is a zero-token analyzed TEXT/
-        KEYWORD term (plain or JSON subpath), or a zero-token analyzed
-        Phrase: such a node is dropped from its enclosing group entirely
-        (whoosh's own behavior when a field's analyzer consumes a value
-        completely, e.g. an all-stopword value). ``Boosted`` is unwrapped
-        recursively (rather than only checking a direct ``ast.Term``/
-        ``ast.Phrase`` child) so ``Boosted(Boosted(Term(...)))`` and similar
-        shapes are still dropped correctly instead of turning into a
-        live-but-unmatchable ``boost_query(empty_query(), ...)`` clause
-        that would wrongly restrict an enclosing And.
+        KEYWORD term (plain or JSON subpath), a zero-token analyzed Phrase,
+        or a nested And/Or group whose own children all dropped: such a
+        node is dropped from its enclosing group entirely (whoosh's own
+        behavior when a field's analyzer consumes a value completely, e.g.
+        an all-stopword value). Without the nested-group case, a group like
+        ``invoice AND ("the" OR "a")`` under a stopword analyzer would emit
+        the inner ``Or`` as a live ``Query.empty_query()`` (see
+        ``visit_or``'s "no children survived" branch) which, as a required
+        clause of the outer ``And``, would wrongly match nothing instead of
+        just dropping out and leaving "invoice" to match on its own.
+        ``Boosted`` is unwrapped recursively (rather than only checking a
+        direct ``ast.Term``/``ast.Phrase``/``ast.And``/``ast.Or`` child) so
+        ``Boosted(Boosted(Term(...)))``, ``Boosted(Or(all-dropped))`` and
+        similar shapes at any nesting depth are still dropped correctly
+        instead of turning into a live-but-unmatchable
+        ``boost_query(empty_query(), ...)`` clause that would wrongly
+        restrict an enclosing And.
         """
         if isinstance(child, ast.Boosted):
             inner = self._group_child(child.child)
@@ -428,6 +438,9 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         elif isinstance(child, ast.Phrase):
             spec = self._resolve(child.field)
             if not self._tokens(spec, child.text):
+                return None
+        elif isinstance(child, (ast.And, ast.Or)):
+            if not any(self._group_child(c) is not None for c in child.children):
                 return None
         return self.visit(child)
 

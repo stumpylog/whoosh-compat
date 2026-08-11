@@ -1,6 +1,8 @@
 import pytest
+import tantivy
 
 from whoosh_compat import ast
+from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRegistry
@@ -159,7 +161,75 @@ def test_multitoken_modes(tindex, mode, text, expected):
     assert search_ids(tindex[0], q) == expected
 
 
-# -- Prefix without a pattern_normalizer -------------------------------------
+# -- registered non-JSON field whose name contains a dot --------------------
+
+
+def _dotted_plain_field_fixture():
+    """A standalone tantivy index/registry with a plain (non-JSON) TEXT
+    field whose name contains a dot, alongside "content". `_term_drop_tokens`
+    used to route any field name containing "." straight to `resolve_json`,
+    regardless of whether that field was actually registered as JSON: for a
+    registered plain field like "field.with.dots" here, `resolve_json`
+    returns None (it is not JSON), so the zero-token drop check never ran,
+    and the field's own zero-token value survived as a live empty query
+    that could wrongly kill an enclosing group.
+
+    Self-contained (not the shared `tindex`/`ereg` fixtures) because a
+    dotted field name has to actually exist in the tantivy schema for
+    ``Query.term_query`` to accept it, and the shared schema has no such
+    field.
+    """
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_text_field("content", stored=True)
+    sb.add_text_field("field.with.dots", stored=True)
+    schema = sb.build()
+    index = tantivy.Index(schema)
+    w = index.writer()
+    for id_, content, dotted in [(1, "invoice total amount", "anything"), (2, "other", "")]:
+        doc = tantivy.Document()
+        doc.add_unsigned("id", id_)
+        doc.add_text("content", content)
+        if dotted:
+            doc.add_text("field.with.dots", dotted)
+        w.add_document(doc)
+    w.commit()
+    index.reload()
+
+    registry = FieldRegistry(
+        [
+            FieldSpec("content", FieldKind.TEXT, analyzer=lambda t: t.lower().split()),
+            FieldSpec(
+                "field.with.dots",
+                FieldKind.TEXT,
+                analyzer=lambda t: [w for w in t.lower().split() if w != "!!!"],
+            ),
+        ]
+    )
+    return index, schema, registry
+
+
+def test_dotted_plain_field_zero_token_term_dropped():
+    index, schema, registry = _dotted_plain_field_fixture()
+    grp = ast.And(
+        children=(
+            ast.Term(field="content", text="invoice"),
+            ast.Term(field="field.with.dots", text="!!!"),
+        )
+    )
+    q = emit_(grp, index=index, schema=schema, registry=registry)
+    assert search_ids(index, q) == [1]
+
+
+def test_dotted_plain_field_term_with_tokens_still_emits():
+    index, schema, registry = _dotted_plain_field_fixture()
+    q = emit_(
+        ast.Term(field="field.with.dots", text="anything"),
+        index=index,
+        schema=schema,
+        registry=registry,
+    )
+    assert search_ids(index, q) == [1]
 
 
 def test_prefix_without_normalizer(tindex):
