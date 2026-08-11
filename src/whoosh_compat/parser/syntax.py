@@ -424,6 +424,11 @@ class Wrapper(GroupNode):
         raise NotImplementedError(self.__class__.__name__)
 
     def query(self, parser: Any) -> ast.Node | None:
+        # A wrapper can end up with no child at all when a neighbouring
+        # operator consumes the text it would have wrapped ("NOT AND x").
+        # There is nothing to build from, so contribute nothing.
+        if not self.nodes:
+            return None
         q = self.nodes[0].query(parser)
         if q is not None:
             return attach(self._build1(q), self)

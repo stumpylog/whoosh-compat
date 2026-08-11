@@ -539,6 +539,13 @@ def test_wrapper_returns_none_when_child_is_none() -> None:
     assert group.query(StubParser()) is None
 
 
+def test_wrapper_returns_none_when_it_has_no_child() -> None:
+    # A wrapper can be left with nothing to wrap when an operator consumes the
+    # text it would have applied to ("NOT AND x"). There is no query to build,
+    # so it contributes nothing rather than failing.
+    assert syntax.NotGroup([]).query(StubParser()) is None
+
+
 # --- ErrorNode startchar/endchar without a wrapped node --------------------
 
 
