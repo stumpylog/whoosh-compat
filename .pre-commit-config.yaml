@@ -39,7 +39,7 @@ repos:
   # yamlfmt and pyproject-fmt (both present in the reference config this
   # file is adapted from) are intentionally left out: yamlfmt's default
   # style strips the blank lines and reindents the commented-out codecov
-  # step in ci.yml in a way that misattaches those comments to the wrong
+  # step in ci.yaml in a way that misattaches those comments to the wrong
   # step, and pyproject-fmt's default output rewrites pyproject.toml into
   # dotted-key style and adds classifiers (including one for a Python
   # version this project does not support) that nobody asked for. Both
