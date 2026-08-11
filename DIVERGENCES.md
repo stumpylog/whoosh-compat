@@ -359,9 +359,29 @@ parse-then-emit pipeline).
     before BOOLEAN_EXISTS started sharing the strategy, not a new or
     separate divergence.
 
+    The strategy used for a given field (`FAST_FIELD` via `exists_query`, or
+    `TERM_SCAN` via the `regex_query(".*")` fallback) is resolved once, at
+    `FieldRegistry` construction, from the field's `kind`/`fast` combination
+    (`fields.py`'s `resolve_exists_strategy`/`ExistsStrategy`), and stored on
+    the registry rather than re-derived by `_exists_query` at emit time;
+    `Every(field)` and a BOOLEAN_EXISTS field targeting that same field read
+    the exact same registry-resolved strategy, so they cannot drift apart. A
+    non-fast, non-TEXT, non-KEYWORD `exists_target` (nothing left that can
+    answer "exists" at all) is rejected at registry construction, not left
+    to fail at search time.
+
     Test references: `tests/emitter/test_emit_boolean.py`'s
     `test_boolean_exists_non_fast_text_target` (docs 3/4, punctuation-only
-    and whitespace-only `body` values).
+    and whitespace-only `body` values),
+    `test_boolean_exists_non_fast_keyword_target` (the same shape for a
+    non-fast KEYWORD target),
+    `test_registry_rejects_non_fast_non_text_non_keyword_exists_target`,
+    `test_every_field_and_boolean_exists_agree`, and
+    `test_every_field_and_boolean_exists_agree_across_targets`
+    (`Every`/BOOLEAN_EXISTS agreement on the same and on differently-typed
+    targets); `tests/test_fields.py`'s
+    `test_validation_boolean_exists_target_unsupported_kind_rejected` and
+    `test_validation_boolean_exists_target_keyword_is_valid`.
 
 21. **A year followed by a colon-separated time reads as a calendar date
     (design).** Value text like `added:'2020 12:30'` is ambiguous: the
