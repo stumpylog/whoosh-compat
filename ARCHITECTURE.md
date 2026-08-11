@@ -199,6 +199,34 @@ zero-token result (the analyzer dropped everything, e.g. an all-stopword
 value) drops the term from its enclosing group rather than producing an
 unsatisfiable clause.
 
+**The analyzer contract carries no positions.** `FieldSpec.analyzer` is typed
+`Callable[[str], list[str]] | None`: it returns tokens in order, with no
+positional metadata attached to any of them. This is not a parity gap, it
+mirrors whoosh's own model exactly. Checked against the pinned oracle:
+`whoosh.query.Phrase(fieldname, words, slop=1, boost=1.0, char_ranges=None)`
+takes a plain word list that carries no positions either, and
+`whoosh.analysis.filters.StopFilter(..., renumber=True)` renumbers surviving
+tokens by default, so a stopword removed from the middle of a phrase leaves
+no gap for whoosh to reason about in the first place. `str -> list[str]` is
+the same contract whoosh already committed to.
+
+That contract has two consequences worth stating plainly. First, if a host's
+*index-time* tantivy analyzer leaves a position gap (for example, a stop
+word filter that, unlike whoosh's, does not renumber), a phrase query built
+from consecutive query-time positions can under-match against the index:
+the words are still there and still in order, but the position arithmetic
+tantivy's phrase matcher does no longer lines up. The mitigation available
+today is `slop`, widened by however many positions the gap spans; there is
+no way for `FieldSpec.analyzer` to close the gap itself, since it only ever
+sees query-time text and has no visibility into how the host indexed the
+field. Second, an analyzer that would want to produce several tokens at one
+position, such as synonym expansion, cannot express that either: the return
+type is a flat list, so any such tokens get flattened into sequence instead
+of standing in parallel. Both are accepted boundaries of today's contract,
+not defects in it. Whether to accept a richer, position-carrying token type
+later, once a host presents a real query that under-matches because of the
+first consequence, is a deliberate product decision and deferred until then.
+
 `FieldSpec.pattern_normalizer` is a second, narrower callable used only for
 the literal segments of `Wildcard`/`Prefix` patterns: character-level only
 (lowercase, ASCII-fold), **never stemming or tokenization**. The two
