@@ -81,7 +81,7 @@ behavior intentionally differs from real Whoosh.
 | Syntax | Example | Notes |
 |---|---|---|
 | Bare terms, implicit AND | `invoice total` | both terms required (Whoosh's own semantics) |
-| Boolean operators (uppercase only) | `a AND b`, `a OR b`, `NOT a`, `a ANDNOT b`, `a ANDMAYBE b`, `REQUIRE a b` | lowercase `and`/`or`/`not` are plain text, matching Whoosh's operator regexes |
+| Boolean operators (uppercase only) | `a AND b`, `a OR b`, `NOT a`, `a ANDNOT b`, `a ANDMAYBE b`, `a REQUIRE b` | lowercase `and`/`or`/`not` are plain text, matching Whoosh's operator regexes; `REQUIRE` is infix like the others |
 | Grouping | `(a OR b) AND c` | |
 | Fielded terms | `title:invoice` | |
 | Field aliases | `type:invoice` → `document_type:invoice` | host-configured on `FieldSpec.aliases` |
@@ -92,7 +92,7 @@ behavior intentionally differs from real Whoosh.
 | Boost | `title:invoice^2.0` | |
 | Comma value lists | `tag:foo,bar` → `tag:foo AND tag:bar` | per-field opt-in (`FieldSpec.comma_values`); `tag:'foo,bar'` quoting keeps it a single literal |
 | Every / exists | `*`, `*:*`, `title:*` | |
-| Dates | `created:2020`, `created:today`, `created:previous month`, `created:now-7d` | full grammar: ISO/compact forms, natural-language keywords, relative offsets (`now-7d`, `-1 week`) |
+| Dates | `created:2020`, `created:today`, `created:'previous month'`, `created:now-7d` | full grammar: ISO/compact forms, natural-language keywords, relative offsets (`now-7d`, `-1 week`); multi-word keywords need quoting, see `DIVERGENCES.md` entry 19 |
 | JSON subpaths | `notes.user:alice` | an extension with no equivalent in Whoosh itself (registered per-field via `FieldSpec.subpaths`) |
 
 Not carried over from Whoosh (not currently implemented, kept cheap to add
