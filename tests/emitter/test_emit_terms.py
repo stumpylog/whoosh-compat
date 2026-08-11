@@ -232,6 +232,9 @@ def test_dotted_plain_field_term_with_tokens_still_emits():
     assert search_ids(index, q) == [1]
 
 
+# -- Prefix without a pattern_normalizer -------------------------------------
+
+
 def test_prefix_without_normalizer(tindex):
     # visit_prefix's `if spec.pattern_normalizer is not None` skip branch:
     # a registry field with no pattern_normalizer configured at all.
