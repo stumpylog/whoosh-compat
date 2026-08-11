@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
 
@@ -16,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -26,7 +27,13 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           python-version: ${{ matrix.python-version }}
-          enable-cache: true
+          # Caching is disabled here (and in the other jobs below) because
+          # this workflow now runs on pushed release tags and ends in a
+          # PyPI publish step: a cache populated by an untrusted run could
+          # otherwise be reused when building the artifacts that get
+          # published. zizmor flags this as cache-poisoning; see
+          # https://docs.zizmor.sh/audits/#cache-poisoning.
+          enable-cache: false
 
       - name: Install dependencies
         run: uv sync --group dev
@@ -73,7 +80,7 @@ jobs:
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
           python-version: "3.11"
-          enable-cache: true
+          enable-cache: false
 
       - name: Install dependencies
         run: uv sync --group dev
@@ -83,3 +90,48 @@ jobs:
 
       - name: Test emitter against the pinned tantivy
         run: uv run pytest tests/emitter
+
+  publish:
+    name: Publish to PyPI
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, tantivy-pin]
+    runs-on: ubuntu-latest
+    environment: pypi-publish
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          python-version: "3.11"
+          enable-cache: false
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Verify built artifacts
+        run: |
+          set -euo pipefail
+
+          sdist=$(ls dist/*.tar.gz)
+          wheel=$(ls dist/*.whl)
+
+          echo "Checking sdist contents: $sdist"
+          for f in LICENSE NOTICE py.typed; do
+            if ! tar -tzf "$sdist" | grep -q "$f"; then
+              echo "::error::$f missing from sdist"
+              exit 1
+            fi
+          done
+
+          echo "Checking wheel imports cleanly: $wheel"
+          uv run --with "$wheel" --no-project python -c "import whoosh_compat"
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: dist
