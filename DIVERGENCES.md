@@ -340,6 +340,24 @@ parse-then-emit pipeline).
     Test references: `tests/differential/allowlist.py`'s `:\*(?:\s|$)`
     entry; `tests/emitter/test_emit_patterns.py`'s `test_every_field`.
 
+    This "has any term at all" strategy (the non-fast TEXT/KEYWORD
+    `regex_query(".*")` fallback in `_exists_query`) is shared by
+    BOOLEAN_EXISTS term emission (`visit_term`'s `BOOLEAN_EXISTS` branch,
+    for a field whose `exists_target` is non-fast TEXT/KEYWORD, not just
+    `Every`/bare `field:*`), so it carries the same consequence there:
+    "exists" means "has at least one indexed term", not "the stored field
+    value is non-empty". A whitespace-only or punctuation-only value that
+    the target field's own tokenizer reduces to zero terms reads as absent
+    for existence purposes, on both the `field:*` and BOOLEAN_EXISTS paths,
+    since both go through the same `_exists_query` helper. This is correct
+    and intentional, consistent with how `Every(field)` already behaved
+    before BOOLEAN_EXISTS started sharing the strategy, not a new or
+    separate divergence.
+
+    Test references: `tests/emitter/test_emit_boolean.py`'s
+    `test_boolean_exists_non_fast_text_target` (docs 3/4, punctuation-only
+    and whitespace-only `body` values).
+
 21. **A year followed by a colon-separated time reads as a calendar date
     (design).** Value text like `added:'2020 12:30'` is ambiguous: the
     trailing digits can be read as a time of day, or as the month and day
@@ -388,3 +406,105 @@ parse-then-emit pipeline).
 
     Test references: `tests/emitter/test_emit_json.py`'s
     `test_json_subpath_parse_query_fallback_honors_multitoken_first`.
+
+23. **`NOT` of a term whose analyzer drops every token matches every
+    document here, but matches none in real whoosh (confirmed divergence,
+    not fixed).** `visit_term`'s zero-token TEXT/KEYWORD branch
+    (`emitters/tantivy_.py`) returns `Query.empty_query()` for a term that
+    analyzes to zero tokens (e.g. an all-stopword value). `visit_not`
+    wraps whatever `self.visit(node.child)` returns in `MustNot(...)`
+    without going through `_group_child`'s zero-token-drop check (that
+    check only applies to direct And/Or children), so `NOT` of such a term
+    becomes `MustNot(empty_query())`, which excludes nothing and therefore
+    matches every document.
+
+    Real whoosh does the opposite. Verified directly against the pinned
+    oracle: `query.Not(NullQuery).normalize()` is `NullQuery` (real
+    whoosh's `Not.normalize()`, `whoosh/query/wrappers.py`, returns the
+    singleton `NullQuery` unchanged when its child normalizes to
+    `NullQuery`, rather than treating "not nothing" as "everything"), and
+    searching that normalized query returns zero hits. This is the exact
+    opposite of whoosh-compat's emit-time behavior for the equivalent
+    shape.
+
+    This is *not* the same case as `ast.normalize()`'s own
+    `Not(Nothing) -> Every` rule (`ast.py`), even though the two produce
+    the same-shaped result: that rule fires at parse/normalize time for an
+    explicit `ast.Nothing` node reaching a `Not`, and is itself a
+    deliberate, pre-existing design choice with no claim to whoosh parity
+    (whoosh's own rule for the equivalent AST-level case is also
+    "stays nothing", the same direction as the term-analyzer case
+    documented here). The case documented in this entry is purely an
+    *emit-time* phenomenon: an `ast.Term` that is syntactically ordinary
+    (not an `ast.Nothing` node) but whose configured `analyzer` happens to
+    consume its text entirely once emission runs `_tokens` over it, a fact
+    `ast.normalize()` has no visibility into since it runs before
+    analysis. Left undocumented before this entry, `visit_term`'s
+    docstring described the emit-time behavior as consistent with
+    `ast.normalize()`'s rule without flagging that neither one actually
+    matches real whoosh; the docstring now points here instead.
+
+    Decision: documented, not changed, matching this project's judgment
+    call. Changing only the emit-time case to match whoosh (while leaving
+    `ast.normalize()`'s already-established, unrelated `Not(Nothing) ->
+    Every` parse-time rule as-is) would make two structurally identical
+    situations, a `NOT` whose operand turns out empty, behave differently
+    depending purely on *when* the emptiness was discovered (parse-time
+    Nothing node vs. emit-time zero-token analysis), which is a timing
+    artifact a query author has no way to predict or control. Uniform
+    emit-time behavior, even though it disagrees with whoosh, is more
+    predictable than a rule that depends on an implementation detail.
+
+    Test references: `tests/emitter/test_emit_boolean.py`'s
+    `test_not_zero_token_term_matches_everything`.
+
+24. **Zero-token TERM operands of `REQUIRE`/`ANDMAYBE`/`ANDNOT` diverge from
+    whoosh in three of the six operand-order shapes; the mirror-image
+    orders all agree (confirmed divergence, not fixed).** Whoosh's parser
+    drops a zero-token term at syntax level, so the surviving operand wins
+    outright rather than the binary combinator ever running with an empty
+    side; whoosh-compat's emitter has no equivalent syntax-level drop for
+    these three combinators (unlike `And`/`Or`, which route every direct
+    child through `_group_child`'s zero-token check), so a zero-token
+    operand instead reaches `visit_require`/`visit_andmaybe`/`visit_andnot`
+    as a live `Query.empty_query()` and is wrapped in a `Must` (or, for
+    `Require`'s filter side, `const_score_query(Must, 0.0)`) clause that
+    then kills the whole query.
+
+    Verified directly against the pinned whoosh oracle (all six shapes,
+    `content` populated with an all-dropped value `!!!` against a doc whose
+    content also contains `invoice`):
+
+    | Query | whoosh-compat | whoosh |
+    | --- | --- | --- |
+    | `invoice REQUIRE content:!!!` | `[]` | `[1]` |
+    | `content:!!! REQUIRE invoice` | `[]` | `[1]` |
+    | `content:!!! ANDMAYBE invoice` | `[]` | `[1]` |
+    | `invoice ANDMAYBE content:!!!` | `[1]` | `[1]` |
+    | `content:!!! ANDNOT invoice` | `[]` | `[1]` |
+    | `invoice ANDNOT content:!!!` | `[1]` | `[1]` |
+
+    The `REQUIRE`-scored-operand order diverges on *both* sides (the
+    zero-token operand fails standalone whichever side of `REQUIRE` it sits
+    on, since `visit_require`'s scored clause and filter clause are both
+    plain `Must`), while `ANDMAYBE`'s optional side and `ANDNOT`'s negative
+    side are harmless when zero-token: a `Should` clause never restricts a
+    satisfied `Must`, and an empty exclusion excludes nothing, so those two
+    orders happen to already agree with whoosh without any fix.
+
+    This does not extend to zero-token *phrases*: whoosh's own
+    `Require`/`AndMaybe`/`AndNot` combinators normalize a `NullQuery`
+    operand at the query-object level (e.g. `Require(A, NullQuery)`
+    normalizes to `NullQuery` for phrases, not the "surviving operand
+    wins" behavior above), a different normalization path than the
+    syntax-level term drop this entry describes; whoosh raises `ValueError`
+    when searching an empty phrase query directly, so that path was not
+    independently oracle-verified here.
+
+    Test references: `tests/emitter/test_emit_boolean.py`'s
+    `test_require_zero_token_filter_only_diverges`,
+    `test_require_zero_token_scored_mirror_agrees`,
+    `test_andmaybe_zero_token_required_diverges`,
+    `test_andmaybe_zero_token_optional_mirror_agrees`,
+    `test_andnot_zero_token_positive_diverges`,
+    `test_andnot_zero_token_negative_mirror_agrees`.

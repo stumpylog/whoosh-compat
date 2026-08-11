@@ -509,12 +509,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 # _group_child, so `NOT term` for a term whose analyzer drops
                 # every token becomes MustNot(empty_query()) here, which
                 # matches *every* document (there is nothing for MustNot to
-                # exclude). That is consistent with ast.normalize()'s
-                # Not(Nothing) -> Every rule (see ast.py): a NOT of "nothing"
-                # is "everything", by the same logic whether the emptiness
-                # comes from the parser (an explicit Nothing node) or from
-                # the analyzer dropping every token of an otherwise
-                # syntactically valid term at emit time.
+                # exclude). This mirrors the *shape* of ast.normalize()'s
+                # Not(Nothing) -> Every rule (see ast.py) but is not evidence
+                # of whoosh parity: real whoosh's own Not.normalize() does
+                # the opposite (Not(NullQuery) stays NullQuery, i.e. "not
+                # nothing" stays "nothing", not "everything"), so this is a
+                # confirmed, deliberate divergence from whoosh, not a
+                # parity-preserving fallback. See DIVERGENCES.md entry 23.
                 return tantivy.Query.empty_query()
             return self._text_term_query(spec, tokens)
 

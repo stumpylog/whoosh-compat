@@ -109,6 +109,80 @@ def test_require_filters_not_scores(tindex, ereg):
     assert search_ids(tindex[0], q) == [1]
 
 
+# -- DIVERGENCES.md entry 23: zero-token TERM operands of REQUIRE/ANDMAYBE/
+# ANDNOT diverge from whoosh in three binary-operator shapes, pinning
+# current (divergent) behavior. Verified against a live whoosh oracle: the
+# operand orders marked "diverges" return [1] in whoosh but [] here; the
+# "mirror agrees" orders return the same doc-id set on both sides. Phrases
+# are not covered here (whoosh raises ValueError on an empty-phrase search,
+# so a zero-token PHRASE can't be oracle-checked the same way; see the
+# module docstring note referenced from DIVERGENCES.md).
+
+
+def test_require_zero_token_filter_only_diverges(tindex, ereg, parse):
+    # "invoice REQUIRE content:!!!": whoosh drops the zero-token filter_only
+    # term at syntax level so the scored operand alone wins ([1] in
+    # whoosh); whoosh-compat's visit_require treats the dropped term as a
+    # live, unmatchable Must clause that kills the whole query.
+    node = parse("invoice REQUIRE content:!!!")
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == []
+
+
+def test_require_zero_token_scored_mirror_agrees(tindex, ereg, parse):
+    # "content:!!! REQUIRE invoice": both sides return [] (zero-token
+    # scored operand fails standalone in both).
+    node = parse("content:!!! REQUIRE invoice")
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == []
+
+
+def test_andmaybe_zero_token_required_diverges(tindex, ereg, parse):
+    # "content:!!! ANDMAYBE invoice": whoosh drops the zero-token required
+    # term so the optional operand alone wins ([1]); whoosh-compat's
+    # visit_andmaybe keeps it as a live, unmatchable Must clause.
+    node = parse("content:!!! ANDMAYBE invoice")
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == []
+
+
+def test_andmaybe_zero_token_optional_mirror_agrees(tindex, ereg, parse):
+    # "invoice ANDMAYBE content:!!!": both sides return [1] (a zero-token
+    # optional operand is harmless: Should never restricts a Must match).
+    node = parse("invoice ANDMAYBE content:!!!")
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1]
+
+
+def test_andnot_zero_token_positive_diverges(tindex, ereg, parse):
+    # "content:!!! ANDNOT invoice": whoosh drops the zero-token positive
+    # term so the query normalizes to just the negative operand's
+    # complement ([1]); whoosh-compat's visit_andnot keeps the zero-token
+    # positive as a live, unmatchable Must clause.
+    node = parse("content:!!! ANDNOT invoice")
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == []
+
+
+def test_andnot_zero_token_negative_mirror_agrees(tindex, ereg, parse):
+    # "invoice ANDNOT content:!!!": both sides return [1] (a zero-token
+    # negative operand excludes nothing on either side).
+    node = parse("invoice ANDNOT content:!!!")
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1]
+
+
+# -- DIVERGENCES.md entry 24: NOT of a zero-token term matches every
+# document here; whoosh normalizes Not(NullQuery) to NullQuery and matches
+# none.
+
+
+def test_not_zero_token_term_matches_everything(tindex, ereg, parse):
+    node = parse("NOT content:!!!")
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1, 2, 3, 4, 5]
+
+
 @pytest.mark.parametrize(
     "value, expected",
     [
@@ -137,6 +211,16 @@ def _non_fast_text_target_fixture():
     despite being constructed successfully. Self-contained (not the shared
     ``tindex``/``ereg`` fixtures) so it doesn't require adding an unrelated
     field to those.
+
+    Docs 3 and 4 (whitespace-only / punctuation-only ``body`` values) pin
+    DIVERGENCES.md entry 20's extended scope: the non-fast fallback
+    (``_exists_query``'s ``regex_query(".*")`` against the field's term
+    dictionary) means "has at least one indexed term", not "the stored
+    field value is non-empty". Both values are indexed as *some* raw text
+    (``doc.add_text`` runs, the field is technically "populated"), but
+    tantivy's default tokenizer produces zero tokens for either, so no term
+    ever reaches the dictionary for that document and the field reads as
+    absent, same as doc 2's outright-missing value.
     """
     sb = tantivy.SchemaBuilder()
     sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
@@ -144,7 +228,7 @@ def _non_fast_text_target_fixture():
     schema = sb.build()
     index = tantivy.Index(schema)
     w = index.writer()
-    for id_, body in [(1, "has a body"), (2, "")]:
+    for id_, body in [(1, "has a body"), (2, ""), (3, "!!!"), (4, "   ")]:
         doc = tantivy.Document()
         doc.add_unsigned("id", id_)
         if body:
@@ -166,7 +250,11 @@ def _non_fast_text_target_fixture():
     "value, expected",
     [
         pytest.param(True, [1], id="exists-true-matches-doc-with-body"),
-        pytest.param(False, [2], id="exists-false-matches-doc-without-body"),
+        pytest.param(
+            False,
+            [2, 3, 4],
+            id="exists-false-matches-doc-without-body-and-untokenizable-values",
+        ),
     ],
 )
 def test_boolean_exists_non_fast_text_target(value, expected):
