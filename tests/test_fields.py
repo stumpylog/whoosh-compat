@@ -6,12 +6,35 @@ import pytest
 
 from whoosh_compat.fields import ExistsStrategy
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 from whoosh_compat.fields import resolve_exists_strategy
 
 # ============================================================================
-# Test resolve(): canonical names and aliases
+# Test FieldRef: plain data carrier, canonical string form
+# ============================================================================
+
+
+def test_field_ref_str_plain():
+    """str() of a plain FieldRef (no subpath) is just its name."""
+    assert str(FieldRef("created")) == "created"
+
+
+def test_field_ref_str_json_subpath():
+    """str() of a JSON-subpath FieldRef is the canonical dotted form."""
+    assert str(FieldRef("notes", "user")) == "notes.user"
+
+
+def test_field_ref_equality():
+    """FieldRef is a plain, comparable data carrier."""
+    assert FieldRef("notes", "user") == FieldRef("notes", "user")
+    assert FieldRef("notes", "user") != FieldRef("notes", "admin")
+    assert FieldRef("notes") != FieldRef("notes", "user")
+
+
+# ============================================================================
+# Test resolve(): canonical names, aliases, and JSON subpaths
 # ============================================================================
 
 
@@ -19,80 +42,147 @@ def test_resolve_by_canonical_name():
     """resolve() finds a spec by its canonical name."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
     registry = FieldRegistry([spec])
-    assert registry.resolve("title") is spec
+    assert registry.resolve(FieldRef("title")) is spec
 
 
 def test_resolve_by_alias():
-    """resolve() finds a spec by its alias."""
+    """resolve() finds a spec by its alias.
+
+    A ``FieldRef`` naming an alias directly (rather than the alias having
+    already been canonicalized by ``make_ref``) still resolves: ``resolve``
+    itself does exact by-name lookup, alias or canonical, since
+    ``FieldRegistry`` indexes both under the same table.
+    """
     spec = FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("heading", "subject"))
     registry = FieldRegistry([spec])
-    assert registry.resolve("heading") is spec
-    assert registry.resolve("subject") is spec
+    assert registry.resolve(FieldRef("heading")) is spec
+    assert registry.resolve(FieldRef("subject")) is spec
 
 
 def test_resolve_unknown_returns_none():
     """resolve() returns None for unknown names."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
     registry = FieldRegistry([spec])
-    assert registry.resolve("unknown") is None
+    assert registry.resolve(FieldRef("unknown")) is None
 
 
-# ============================================================================
-# Test resolve_json(): dotted path resolution
-# ============================================================================
-
-
-def test_resolve_json_simple_path():
-    """resolve_json() splits on first dot and validates subpath."""
-    spec = FieldSpec(
-        name="notes",
-        kind=FieldKind.JSON,
-        subpaths=("user", "admin"),
-    )
+def test_resolve_json_subpath():
+    """resolve() returns the JSON field's spec for a valid subpath ref."""
+    spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user", "admin"))
     registry = FieldRegistry([spec])
-    result = registry.resolve_json("notes.user")
-    assert result == (spec, "user")
+    assert registry.resolve(FieldRef("notes", "user")) is spec
 
 
-def test_resolve_json_multipart_subpath():
-    """resolve_json() validates only first dot; subpath can have more dots."""
-    spec = FieldSpec(
-        name="notes",
-        kind=FieldKind.JSON,
-        subpaths=("user.name", "admin.role"),
-    )
+def test_resolve_json_invalid_subpath_returns_none():
+    """resolve() returns None when the ref's subpath isn't registered."""
+    spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user",))
     registry = FieldRegistry([spec])
-    result = registry.resolve_json("notes.user.name")
-    assert result == (spec, "user.name")
+    assert registry.resolve(FieldRef("notes", "body")) is None
 
 
-def test_resolve_json_invalid_subpath():
-    """resolve_json() returns None if subpath not in spec.subpaths."""
-    spec = FieldSpec(
-        name="notes",
-        kind=FieldKind.JSON,
-        subpaths=("user",),
-    )
-    registry = FieldRegistry([spec])
-    assert registry.resolve_json("notes.body") is None
-
-
-def test_resolve_json_non_json_spec():
-    """resolve_json() returns None if spec.kind is not JSON."""
+def test_resolve_subpath_on_non_json_spec_returns_none():
+    """resolve() returns None when a subpath ref targets a non-JSON field."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
     registry = FieldRegistry([spec])
-    assert registry.resolve_json("title.user") is None
+    assert registry.resolve(FieldRef("title", "user")) is None
 
 
-def test_resolve_json_no_dot():
-    """resolve_json() returns None if path has no dot."""
-    spec = FieldSpec(
-        name="notes",
-        kind=FieldKind.JSON,
-        subpaths=("user",),
-    )
+def test_resolve_plain_ref_on_json_spec_returns_the_json_spec():
+    """resolve() on a plain (no-subpath) ref to a JSON field still returns
+    that field's spec; whether a *term* can be built against it without a
+    subpath is an emitter-level question (see test_emit_terms.py), not a
+    registry-resolution one.
+    """
+    spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user",))
     registry = FieldRegistry([spec])
-    assert registry.resolve_json("notes") is None
+    assert registry.resolve(FieldRef("notes")) is spec
+
+
+# ============================================================================
+# Test make_ref(): the parse-boundary raw-string -> FieldRef resolver
+# ============================================================================
+
+
+def test_make_ref_canonical_name():
+    """make_ref() resolves a canonical name to a plain FieldRef."""
+    spec = FieldSpec(name="title", kind=FieldKind.TEXT)
+    registry = FieldRegistry([spec])
+    assert registry.make_ref("title") == FieldRef("title")
+
+
+def test_make_ref_alias_canonicalizes():
+    """make_ref() canonicalizes an alias to the spec's own name."""
+    spec = FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("heading",))
+    registry = FieldRegistry([spec])
+    assert registry.make_ref("heading") == FieldRef("title")
+
+
+def test_make_ref_json_subpath():
+    """make_ref() splits on the first dot and validates the subpath."""
+    spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user", "admin"))
+    registry = FieldRegistry([spec])
+    assert registry.make_ref("notes.user") == FieldRef("notes", "user")
+
+
+def test_make_ref_json_subpath_with_extra_dots():
+    """make_ref() only splits on the first dot; the subpath itself may
+    contain further dots, matched verbatim against spec.subpaths.
+    """
+    spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user.name", "admin.role"))
+    registry = FieldRegistry([spec])
+    assert registry.make_ref("notes.user.name") == FieldRef("notes", "user.name")
+
+
+def test_make_ref_json_invalid_subpath_returns_none():
+    """make_ref() returns None for a dotted name whose subpath isn't
+    registered, so the existing FieldsPlugin demotion path (unknown field
+    text merges back into the following word) is unchanged.
+    """
+    spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user",))
+    registry = FieldRegistry([spec])
+    assert registry.make_ref("notes.body") is None
+
+
+def test_make_ref_dotted_name_on_non_json_spec_returns_none():
+    """make_ref() returns None for a dotted name whose base isn't a JSON
+    field (it isn't reinterpreted as anything else).
+    """
+    spec = FieldSpec(name="title", kind=FieldKind.TEXT)
+    registry = FieldRegistry([spec])
+    assert registry.make_ref("title.user") is None
+
+
+def test_make_ref_json_field_name_alone_has_no_subpath():
+    """make_ref() on a JSON field's bare name (no dot at all) resolves it
+    as a plain ref: the direct-name lookup wins before any dotted
+    interpretation is attempted.
+    """
+    spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user",))
+    registry = FieldRegistry([spec])
+    assert registry.make_ref("notes") == FieldRef("notes")
+
+
+def test_make_ref_unknown_returns_none():
+    """make_ref() returns None for a name that resolves neither as a plain
+    field nor as a JSON subpath.
+    """
+    spec = FieldSpec(name="title", kind=FieldKind.TEXT)
+    registry = FieldRegistry([spec])
+    assert registry.make_ref("unknown") is None
+
+
+def test_make_ref_registered_dotted_plain_field_wins_over_json_interpretation():
+    """A registered *plain* field whose own name contains a dot resolves
+    directly, exactly, rather than being reinterpreted as ``base.subpath``
+    against some other JSON field. This is the canary case a previous
+    repair broke: see DIVERGENCES.md and
+    tests/emitter/test_emit_terms.py's dotted-plain-field tests for the
+    emitter-level behavior this registry-level guarantee supports.
+    """
+    dotted = FieldSpec(name="field.with.dots", kind=FieldKind.TEXT)
+    json_spec = FieldSpec(name="field", kind=FieldKind.JSON, subpaths=("with",))
+    registry = FieldRegistry([dotted, json_spec])
+    assert registry.make_ref("field.with.dots") == FieldRef("field.with.dots")
 
 
 # ============================================================================
@@ -240,7 +330,7 @@ def test_validation_boolean_exists_target_text_is_valid():
         exists_target="attachment",
     )
     registry = FieldRegistry([spec1, spec2])
-    assert registry.resolve("has_attachment") is spec2
+    assert registry.resolve(FieldRef("has_attachment")) is spec2
 
 
 def test_validation_boolean_exists_target_keyword_is_valid():
@@ -258,7 +348,7 @@ def test_validation_boolean_exists_target_keyword_is_valid():
         exists_target="tag",
     )
     registry = FieldRegistry([spec1, spec2])
-    assert registry.resolve("has_tag") is spec2
+    assert registry.resolve(FieldRef("has_tag")) is spec2
 
 
 def test_validation_boolean_exists_target_fast_is_valid():
@@ -270,7 +360,7 @@ def test_validation_boolean_exists_target_fast_is_valid():
         exists_target="flag",
     )
     registry = FieldRegistry([spec1, spec2])
-    assert registry.resolve("has_flag") is spec2
+    assert registry.resolve(FieldRef("has_flag")) is spec2
 
 
 # ============================================================================
@@ -324,9 +414,9 @@ def test_every_and_boolean_exists_share_resolved_strategy():
     has_tag = FieldSpec(name="has_tag", kind=FieldKind.BOOLEAN_EXISTS, exists_target="tag")
     registry = FieldRegistry([target, has_tag])
 
-    every_field_strategy = registry.exists_strategy(registry.resolve("tag"))
+    every_field_strategy = registry.exists_strategy(registry.resolve(FieldRef("tag")))
     boolean_exists_target_strategy = registry.exists_strategy(
-        registry.resolve(has_tag.exists_target)
+        registry.resolve(FieldRef(has_tag.exists_target))
     )
     assert every_field_strategy is boolean_exists_target_strategy is ExistsStrategy.TERM_SCAN
 
@@ -347,7 +437,7 @@ def test_validation_json_with_subpaths_is_valid():
     """JSON spec with non-empty subpaths is valid."""
     spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user",))
     registry = FieldRegistry([spec])
-    assert registry.resolve("notes") is spec
+    assert registry.resolve(FieldRef("notes")) is spec
 
 
 # ============================================================================
@@ -359,21 +449,21 @@ def test_validation_comma_values_on_keyword():
     """comma_values=True is valid on KEYWORD."""
     spec = FieldSpec(name="tags", kind=FieldKind.KEYWORD, comma_values=True)
     registry = FieldRegistry([spec])
-    assert registry.resolve("tags") is spec
+    assert registry.resolve(FieldRef("tags")) is spec
 
 
 def test_validation_comma_values_on_u64():
     """comma_values=True is valid on U64."""
     spec = FieldSpec(name="ids", kind=FieldKind.U64, comma_values=True)
     registry = FieldRegistry([spec])
-    assert registry.resolve("ids") is spec
+    assert registry.resolve(FieldRef("ids")) is spec
 
 
 def test_validation_comma_values_on_text():
     """comma_values=True is valid on TEXT."""
     spec = FieldSpec(name="keywords", kind=FieldKind.TEXT, comma_values=True)
     registry = FieldRegistry([spec])
-    assert registry.resolve("keywords") is spec
+    assert registry.resolve(FieldRef("keywords")) is spec
 
 
 def test_validation_comma_values_on_date_invalid():
@@ -404,7 +494,7 @@ def test_validation_date_only_on_date_true():
     """date_only=True on DATE is valid."""
     spec = FieldSpec(name="created", kind=FieldKind.DATE, date_only=True)
     registry = FieldRegistry([spec])
-    resolved = registry.resolve("created")
+    resolved = registry.resolve(FieldRef("created"))
     assert resolved.date_only is True
 
 
@@ -412,7 +502,7 @@ def test_validation_date_only_on_date_false_normalized():
     """DATE spec with date_only=False is normalized to date_only=True."""
     spec = FieldSpec(name="created", kind=FieldKind.DATE, date_only=False)
     registry = FieldRegistry([spec])
-    resolved = registry.resolve("created")
+    resolved = registry.resolve(FieldRef("created"))
     assert resolved.date_only is True
 
 
@@ -447,11 +537,11 @@ def test_registry_with_multiple_specs():
     ]
     registry = FieldRegistry(specs)
 
-    assert registry.resolve("title") is specs[0]
-    assert registry.resolve("categories") is specs[1]
-    assert registry.resolve("created") is specs[2]
+    assert registry.resolve(FieldRef("title")) is specs[0]
+    assert registry.resolve(FieldRef("categories")) is specs[1]
+    assert registry.resolve(FieldRef("created")) is specs[2]
     assert "metadata.author" in registry
-    assert registry.resolve("has_attachment") is specs[4]
+    assert registry.resolve(FieldRef("has_attachment")) is specs[4]
 
 
 # ============================================================================
@@ -463,7 +553,7 @@ def test_empty_registry():
     """Empty registry works."""
     registry = FieldRegistry([])
     assert list(registry) == []
-    assert registry.resolve("anything") is None
+    assert registry.resolve(FieldRef("anything")) is None
     assert "anything" not in registry
 
 

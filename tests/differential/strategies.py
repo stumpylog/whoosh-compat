@@ -42,6 +42,7 @@ from tests.differential.oracle import ORACLE_REGISTRY
 from tests.differential.oracle import _analyze
 from whoosh_compat import ast
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 
 # --------------------------------------------------------------------------
@@ -418,7 +419,7 @@ def zero_token_leaf_count(node: ast.Node, reg: FieldRegistry) -> int:
 
     count = 0
 
-    def analyzer_for(field: str | None) -> object:
+    def analyzer_for(field: FieldRef | None) -> object:
         spec = reg.resolve(field) if field else None
         return spec.analyzer if spec is not None else None
 

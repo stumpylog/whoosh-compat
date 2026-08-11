@@ -6,6 +6,7 @@ import tantivy
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 
@@ -29,7 +30,7 @@ from .conftest import search_ids
     ],
 )
 def test_phrase(tindex, ereg, text, slop, expected):
-    node = ast.Phrase(field="content", text=text, slop=slop)
+    node = ast.Phrase(field=FieldRef("content"), text=text, slop=slop)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
@@ -50,8 +51,8 @@ def test_zero_token_phrase_dropped_as_group_child(tindex, ereg):
     # Term('content', 'foo')).
     grp = ast.And(
         children=(
-            ast.Term(field="content", text="invoice"),
-            ast.Phrase(field="content", text="!!!", slop=1),
+            ast.Term(field=FieldRef("content"), text="invoice"),
+            ast.Phrase(field=FieldRef("content"), text="!!!", slop=1),
         )
     )
     q = emit_ast(grp, tindex, ereg)
@@ -129,6 +130,6 @@ def _gapped_index_fixture():
 )
 def test_phrase_misses_across_index_time_position_gap(slop, expected):
     index, schema, registry = _gapped_index_fixture()
-    node = ast.Phrase(field="content", text="alpha beta", slop=slop)
+    node = ast.Phrase(field=FieldRef("content"), text="alpha beta", slop=slop)
     q = emit_(node, index=index, schema=schema, registry=registry)
     assert search_ids(index, q) == expected

@@ -36,6 +36,7 @@ from whoosh.util.times import timespan
 from whoosh_compat import ast
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 from whoosh_compat.parser.dateparse import DateParserPlugin as CompatDateParserPlugin
@@ -369,25 +370,37 @@ def _adjust_date_hi(hi: datetime | None, incl_hi: bool) -> tuple[datetime | None
     return hi, incl_hi
 
 
+def _field_ref(name: str | None) -> FieldRef | None:
+    """Wrap a real-whoosh fieldname string as a plain :class:`FieldRef`.
+
+    Real whoosh has no JSON field concept, so every fieldname coming out of
+    a whoosh query object is always a plain (non-subpath) reference.
+    """
+    return FieldRef(name) if name is not None else None
+
+
 def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
     if isinstance(q, wq.Term):
         fieldname = q.fieldname
-        spec = reg.resolve(fieldname) if fieldname else None
+        ref = _field_ref(fieldname)
+        spec = reg.resolve(ref) if ref is not None else None
         if spec is not None and spec.kind in (FieldKind.DATE, FieldKind.DATETIME):
             # A single exact instant: whoosh's DateTimeNode.query() encodes
             # it as a Term of the field's to_bytes() representation instead
             # of a DateRange (see whoosh.qparser.dateparse.DateTimeNode).
             dt = _decode_date_term(fieldname, q.text)
-            return ast.DateRange(field=fieldname, lo=dt, hi=dt, incl_lo=True, incl_hi=True)
+            return ast.DateRange(
+                field=FieldRef(fieldname), lo=dt, hi=dt, incl_lo=True, incl_hi=True
+            )
         if spec is not None and spec.kind is FieldKind.U64:
             # NUMERIC fields self-encode term text into sortable byte keys
             # too (whoosh.fields.NUMERIC.to_bytes); decode back to int.
             n = _SCHEMA[fieldname].from_bytes(q.text)
-            return ast.Term(field=fieldname, text=int(n))
+            return ast.Term(field=ref, text=int(n))
         text: object = q.text
         if isinstance(text, bytes):
             text = text.decode("utf-8", "replace")
-        return ast.Term(field=fieldname, text=cast("str | int | bool", text))
+        return ast.Term(field=ref, text=cast("str | int | bool", text))
 
     if isinstance(q, wq.And):
         and_subs = [s for s in (_to_ast(c, reg) for c in q.subqueries) if s is not None]
@@ -425,17 +438,17 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
         return ast.Require(scored=scored, filter_only=filter_only)
 
     if isinstance(q, wq.Phrase):
-        return ast.Phrase(field=q.fieldname, text=" ".join(q.words), slop=q.slop)
+        return ast.Phrase(field=_field_ref(q.fieldname), text=" ".join(q.words), slop=q.slop)
 
     if isinstance(q, wq.Prefix):
-        return ast.Prefix(field=q.fieldname, text=q.text)
+        return ast.Prefix(field=_field_ref(q.fieldname), text=q.text)
 
     if isinstance(q, wq.Wildcard):
-        return ast.Wildcard(field=q.fieldname, pattern=q.text)
+        return ast.Wildcard(field=_field_ref(q.fieldname), pattern=q.text)
 
     if isinstance(q, wq.TermRange):
         return ast.TermRange(
-            field=q.fieldname,
+            field=_field_ref(q.fieldname),
             lo=q.start,
             hi=q.end,
             incl_lo=not q.startexcl,
@@ -450,11 +463,13 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
             lo = lo if lo.tzinfo is not None else lo.replace(tzinfo=UTC)
         if hi is not None:
             hi = hi if hi.tzinfo is not None else hi.replace(tzinfo=UTC)
-        return ast.DateRange(field=q.fieldname, lo=lo, hi=hi, incl_lo=incl_lo, incl_hi=incl_hi)
+        return ast.DateRange(
+            field=FieldRef(q.fieldname), lo=lo, hi=hi, incl_lo=incl_lo, incl_hi=incl_hi
+        )
 
     if isinstance(q, wq.NumericRange):
         return ast.NumericRange(
-            field=q.fieldname,
+            field=FieldRef(q.fieldname),
             lo=q.start,
             hi=q.end,
             incl_lo=not q.startexcl,
@@ -462,7 +477,7 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
         )
 
     if isinstance(q, wq.Every):
-        return ast.Every(field=q.fieldname)
+        return ast.Every(field=_field_ref(q.fieldname))
 
     if _is_null(q):
         return ast.Nothing()
@@ -512,7 +527,7 @@ def unmapped_reason(q: wq.Query) -> str:
 # --------------------------------------------------------------------------
 
 
-def _analyzed_term(field: str | None, text: object, reg: FieldRegistry) -> ast.Node | None:
+def _analyzed_term(field: FieldRef | None, text: object, reg: FieldRegistry) -> ast.Node | None:
     spec = reg.resolve(field) if field else None
     if spec is None or spec.kind not in (FieldKind.TEXT, FieldKind.KEYWORD):
         return ast.Term(field=field, text=cast("str | int | bool", text))

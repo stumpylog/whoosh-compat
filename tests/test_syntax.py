@@ -8,6 +8,7 @@ import pytest
 from whoosh_compat import ast
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.parser import syntax
 from whoosh_compat.parser.common import attach
 
@@ -20,7 +21,7 @@ class StubParser:
         self.range_calls: list[tuple[Any, ...]] = []
 
     def term_query(self, fieldname: Any, text: Any, boost: float = 1.0, **kw: Any) -> ast.Node:
-        n = ast.Term(field=fieldname, text=text)
+        n = ast.Term(field=FieldRef(fieldname) if fieldname is not None else None, text=text)
         return ast.Boosted(n, boost) if boost != 1.0 else n
 
     def range_query(
@@ -34,8 +35,9 @@ class StubParser:
         node: Any = None,
     ) -> ast.Node:
         self.range_calls.append((fieldname, start, end, startexcl, endexcl, boost, node))
+        ref = FieldRef(fieldname) if fieldname is not None else None
         return ast.TermRange(
-            field=fieldname, lo=start, hi=end, incl_lo=not startexcl, incl_hi=not endexcl
+            field=ref, lo=start, hi=end, incl_lo=not startexcl, incl_hi=not endexcl
         )
 
     def report(self, diagnostic: Diagnostic) -> None:
@@ -158,7 +160,13 @@ def test_rangenode_calls_parser_range_query() -> None:
 
     assert parser.range_calls == [("content", "a", "z", False, True, 1.0, node)]
     assert q == ast.TermRange(
-        field="content", lo="a", hi="z", incl_lo=True, incl_hi=False, startchar=0, endchar=10
+        field=FieldRef("content"),
+        lo="a",
+        hi="z",
+        incl_lo=True,
+        incl_hi=False,
+        startchar=0,
+        endchar=10,
     )
 
 
@@ -183,7 +191,7 @@ def test_wordnode_uses_own_fieldname_over_parsers() -> None:
 
     q = node.query(parser)
 
-    assert q == ast.Term(field="title", text="dog")
+    assert q == ast.Term(field=FieldRef("title"), text="dog")
 
 
 def test_wordnode_passes_tokenize_and_removestops_flags() -> None:

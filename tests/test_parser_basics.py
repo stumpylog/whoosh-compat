@@ -3,6 +3,7 @@ import pytest
 
 import whoosh_compat as wc
 from whoosh_compat import ast
+from whoosh_compat.fields import FieldRef
 
 
 def parse(q, reg, **kw):
@@ -14,14 +15,14 @@ def test_implicit_and(reg):
         children=(
             ast.Or(
                 children=(
-                    ast.Term(field="content", text="aaa"),
-                    ast.Term(field="title", text="aaa"),
+                    ast.Term(field=FieldRef("content"), text="aaa"),
+                    ast.Term(field=FieldRef("title"), text="aaa"),
                 )
             ),
             ast.Or(
                 children=(
-                    ast.Term(field="content", text="bbb"),
-                    ast.Term(field="title", text="bbb"),
+                    ast.Term(field=FieldRef("content"), text="bbb"),
+                    ast.Term(field=FieldRef("title"), text="bbb"),
                 )
             ),
         )
@@ -31,7 +32,10 @@ def test_implicit_and(reg):
 def test_explicit_or(reg):
     t = parse("title:aaa OR title:bbb", reg)
     assert t == ast.Or(
-        children=(ast.Term(field="title", text="aaa"), ast.Term(field="title", text="bbb"))
+        children=(
+            ast.Term(field=FieldRef("title"), text="aaa"),
+            ast.Term(field=FieldRef("title"), text="bbb"),
+        )
     )
 
 
@@ -45,25 +49,28 @@ def test_not_group_parens(reg):
     # parens flatten under normalize(), matching whoosh (see task-9 ruling)
     assert t == ast.And(
         children=(
-            ast.Term(field="title", text="a"),
-            ast.Not(ast.Term(field="title", text="b")),
-            ast.Not(ast.Term(field="title", text="c")),
+            ast.Term(field=FieldRef("title"), text="a"),
+            ast.Not(ast.Term(field=FieldRef("title"), text="b")),
+            ast.Not(ast.Term(field=FieldRef("title"), text="c")),
         )
     )
 
 
 def test_comma_values(reg):
     assert parse("tag:foo,bar", reg) == ast.And(
-        children=(ast.Term(field="tag", text="foo"), ast.Term(field="tag", text="bar"))
+        children=(
+            ast.Term(field=FieldRef("tag"), text="foo"),
+            ast.Term(field=FieldRef("tag"), text="bar"),
+        )
     )
 
 
 def test_quoted_comma_not_expanded(reg):
-    assert parse("tag:'foo,bar'", reg) == ast.Term(field="tag", text="foo,bar")
+    assert parse("tag:'foo,bar'", reg) == ast.Term(field=FieldRef("tag"), text="foo,bar")
 
 
 def test_alias(reg):
-    assert parse("type:invoice", reg) == ast.Term(field="document_type", text="invoice")
+    assert parse("type:invoice", reg) == ast.Term(field=FieldRef("document_type"), text="invoice")
 
 
 def test_unknown_field_demotes(reg):
@@ -74,29 +81,33 @@ def test_unknown_field_demotes(reg):
 
 def test_phrase(reg):
     assert parse('title:"exact words"', reg) == ast.Phrase(
-        field="title", text="exact words", slop=1
+        field=FieldRef("title"), text="exact words", slop=1
     )
 
 
 def test_phrase_slop(reg):
     assert parse('title:"exact words"~3', reg) == ast.Phrase(
-        field="title", text="exact words", slop=3
+        field=FieldRef("title"), text="exact words", slop=3
     )
 
 
 def test_wildcard(reg):
-    assert parse("title:produ*name", reg) == ast.Wildcard(field="title", pattern="produ*name")
+    assert parse("title:produ*name", reg) == ast.Wildcard(
+        field=FieldRef("title"), pattern="produ*name"
+    )
 
 
 def test_trailing_star_prefix(reg):
-    assert parse("title:produ*", reg) == ast.Prefix(field="title", text="produ")
+    assert parse("title:produ*", reg) == ast.Prefix(field=FieldRef("title"), text="produ")
 
 
 def test_bracket_class_blocks_prefix_fold(reg):
     # paperless-ngx#13568. Real whoosh folds this to Prefix('202[0-3]'): a
     # *literal* prefix: silently reinterpreting the character class as
     # ordinary text. whoosh-compat keeps it a Wildcard so the class survives.
-    assert parse("title:202[0-3]*", reg) == ast.Wildcard(field="title", pattern="202[0-3]*")
+    assert parse("title:202[0-3]*", reg) == ast.Wildcard(
+        field=FieldRef("title"), pattern="202[0-3]*"
+    )
 
 
 @pytest.mark.parametrize(
@@ -111,33 +122,35 @@ def test_bracket_class_blocks_prefix_fold(reg):
 def test_bracket_class_wildcard_never_folds_to_term(reg, pattern):
     # Any wildcard-tagged text containing "[" stays a pattern node, never a
     # plain Term (and never a literal-text Prefix).
-    assert parse(f"title:{pattern}", reg) == ast.Wildcard(field="title", pattern=pattern)
+    assert parse(f"title:{pattern}", reg) == ast.Wildcard(field=FieldRef("title"), pattern=pattern)
 
 
 def test_bracket_only_text_is_a_term(reg):
     # WildcardPlugin only tags text containing "*"/"?", so a bare bracket
     # class is an ordinary term: same as whoosh. (Not folded *down* from a
     # Wildcard; never tagged as one to begin with.)
-    assert parse("title:202[0-3]", reg) == ast.Term(field="title", text="202[0-3]")
+    assert parse("title:202[0-3]", reg) == ast.Term(field=FieldRef("title"), text="202[0-3]")
 
 
 def test_field_star_every(reg):
-    assert parse("title:*", reg) == ast.Every(field="title")
+    assert parse("title:*", reg) == ast.Every(field=FieldRef("title"))
 
 
 def test_boost(reg):
-    assert parse("title:aaa^2.5", reg) == ast.Boosted(ast.Term(field="title", text="aaa"), 2.5)
+    assert parse("title:aaa^2.5", reg) == ast.Boosted(
+        ast.Term(field=FieldRef("title"), text="aaa"), 2.5
+    )
 
 
 def test_andnot_andmaybe_require(reg):
     assert parse("title:a ANDNOT title:b", reg) == ast.AndNot(
-        ast.Term(field="title", text="a"), ast.Term(field="title", text="b")
+        ast.Term(field=FieldRef("title"), text="a"), ast.Term(field=FieldRef("title"), text="b")
     )
     assert parse("title:a ANDMAYBE title:b", reg) == ast.AndMaybe(
-        ast.Term(field="title", text="a"), ast.Term(field="title", text="b")
+        ast.Term(field=FieldRef("title"), text="a"), ast.Term(field=FieldRef("title"), text="b")
     )
     assert parse("title:a REQUIRE title:b", reg) == ast.Require(
-        ast.Term(field="title", text="a"), ast.Term(field="title", text="b")
+        ast.Term(field=FieldRef("title"), text="a"), ast.Term(field=FieldRef("title"), text="b")
     )
 
 

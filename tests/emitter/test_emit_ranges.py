@@ -7,6 +7,7 @@ import pytest
 
 from whoosh_compat import ast
 from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.fields import FieldRef
 
 from .conftest import emit_ast
 from .conftest import search_ids
@@ -44,7 +45,7 @@ def utc(y, m, d):
     ],
 )
 def test_date_range(tindex, ereg, lo, hi, incl_lo, incl_hi, expected):
-    node = ast.DateRange(field="created", lo=lo, hi=hi, incl_lo=incl_lo, incl_hi=incl_hi)
+    node = ast.DateRange(field=FieldRef("created"), lo=lo, hi=hi, incl_lo=incl_lo, incl_hi=incl_hi)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
@@ -63,13 +64,13 @@ def test_date_range_parsed(tindex, ereg, parse):
     ],
 )
 def test_numeric_range(tindex, ereg, lo, hi, incl_lo, incl_hi, expected):
-    node = ast.NumericRange(field="asn", lo=lo, hi=hi, incl_lo=incl_lo, incl_hi=incl_hi)
+    node = ast.NumericRange(field=FieldRef("asn"), lo=lo, hi=hi, incl_lo=incl_lo, incl_hi=incl_hi)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
 
 def test_text_range_raises(tindex, ereg):
-    node = ast.TermRange(field="title", lo="a", hi="z", incl_lo=True, incl_hi=True)
+    node = ast.TermRange(field=FieldRef("title"), lo="a", hi="z", incl_lo=True, incl_hi=True)
     with pytest.raises(UnsupportedQueryError, match="text ranges"):
         emit_ast(node, tindex, ereg)
 
@@ -78,7 +79,7 @@ def test_date_range_naive_bounds_pass_through(tindex, ereg):
     # _to_naive_utc()'s passthrough branch: bounds that are already naive
     # (no tzinfo) are used as-is rather than converted.
     node = ast.DateRange(
-        field="created",
+        field=FieldRef("created"),
         lo=datetime(2020, 1, 1),
         hi=datetime(2021, 1, 1),
         incl_lo=True,
@@ -96,6 +97,6 @@ def test_range_open_on_both_sides_means_field_exists(tindex, ereg):
     # has some value", exactly what visit_every's `field:*` already answers,
     # so _range_query now delegates to the same _exists_query helper instead
     # of erroring on a query nothing told the caller was invalid.
-    node = ast.NumericRange(field="asn", lo=None, hi=None, incl_lo=True, incl_hi=True)
+    node = ast.NumericRange(field=FieldRef("asn"), lo=None, hi=None, incl_lo=True, incl_hi=True)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1, 2, 3, 4, 5]

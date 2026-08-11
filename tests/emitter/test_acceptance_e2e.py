@@ -55,6 +55,7 @@ from whoosh_compat import parse as wc_parse
 from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 
@@ -126,7 +127,7 @@ _SCENARIO_WORDS = [
 
 def test_00_analyzer_parity_precondition(ereg):
     whoosh_analyzer = StandardAnalyzer()
-    our_analyzer = ereg.resolve("content").analyzer
+    our_analyzer = ereg.resolve(FieldRef("content")).analyzer
     for word in _SCENARIO_WORDS:
         whoosh_tokens = [t.text for t in whoosh_analyzer(word)]
         our_tokens = our_analyzer(word)

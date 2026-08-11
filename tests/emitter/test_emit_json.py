@@ -14,6 +14,7 @@ import pytest
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import TantivyEmitter
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 from whoosh_compat.fields import Multitoken
@@ -33,7 +34,7 @@ from .conftest import search_ids
     ],
 )
 def test_json_subpath_term(tindex, ereg, text, expected):
-    node = ast.Term(field="notes.user", text=text)
+    node = ast.Term(field=FieldRef("notes", "user"), text=text)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
@@ -51,8 +52,8 @@ def test_json_subpath_term_as_group_child(tindex, ereg):
     # Doc 1 has notes.user == "alice" and content contains "invoice".
     node = ast.And(
         children=(
-            ast.Term(field="notes.user", text="alice"),
-            ast.Term(field="content", text="invoice"),
+            ast.Term(field=FieldRef("notes", "user"), text="alice"),
+            ast.Term(field=FieldRef("content"), text="invoice"),
         )
     )
     q = emit_ast(node, tindex, ereg)
@@ -66,8 +67,8 @@ def test_json_subpath_zero_token_term_dropped_as_group_child(tindex, ereg):
     # matching nothing.
     node = ast.And(
         children=(
-            ast.Term(field="notes.user", text=""),
-            ast.Term(field="content", text="invoice"),
+            ast.Term(field=FieldRef("notes", "user"), text=""),
+            ast.Term(field=FieldRef("content"), text="invoice"),
         )
     )
     q = emit_ast(node, tindex, ereg)
@@ -81,7 +82,7 @@ def test_json_subpath_multitoken_and(tindex, ereg):
     # module docstring / emitters/tantivy_.py). Doc 1's notes.note is
     # "check this" (two tokens); AND resolution requires both, so only doc 1
     # matches, mirroring test_emit_terms.py's test_multitoken_and.
-    node = ast.Term(field="notes.note", text="check this")
+    node = ast.Term(field=FieldRef("notes", "note"), text="check this")
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
 
@@ -91,14 +92,14 @@ def test_json_subpath_matches_index_parse_query_directly(tindex, ereg):
     # index.parse_query call for the same subpath finds, regardless of
     # whether the emitter took the term_query or parse_query branch.
     index, _schema = tindex
-    node = ast.Term(field="notes.user", text="alice")
+    node = ast.Term(field=FieldRef("notes", "user"), text="alice")
     q = emit_ast(node, tindex, ereg)
     reference = index.parse_query('notes.user:"alice"', default_field_names=["notes"])
     assert search_ids(index, q) == search_ids(index, reference)
 
 
 def test_json_subpath_zero_tokens_matches_nothing(tindex, ereg):
-    node = ast.Term(field="notes.user", text="")
+    node = ast.Term(field=FieldRef("notes", "user"), text="")
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == []
 
@@ -111,7 +112,7 @@ def test_dotted_field_that_is_not_a_json_subpath_falls_back_to_resolve(tindex, e
     # being demoted by the parser first).
     from whoosh_compat.errors import QueryEmitError
 
-    node = ast.Term(field="notes.bogus", text="x")
+    node = ast.Term(field=FieldRef("notes", "bogus"), text="x")
     with pytest.raises(QueryEmitError, match="unknown field"):
         emit_ast(node, tindex, ereg)
 
@@ -135,7 +136,7 @@ def test_json_subpath_parse_query_fallback_honors_multitoken_first(tindex):
             ),
         ]
     )
-    node = ast.Term(field="notes.user", text="alice extra garbage")
+    node = ast.Term(field=FieldRef("notes", "user"), text="alice extra garbage")
     q = emit_ast(node, tindex, ereg_first)
     assert search_ids(tindex[0], q) == [1]
 
@@ -167,4 +168,4 @@ def test_json_subpath_unknown_subpath_falls_back_to_plain_field(tindex, ereg, pa
     # Exact demotion shape: the unrecognized "notes.bogus:" fieldname prefix
     # is merged back onto the word as plain text and searched as an
     # unfielded term against the parse fixture's default field ("content").
-    assert node == ast.Term(field="content", text="notes.bogus:alice")
+    assert node == ast.Term(field=FieldRef("content"), text="notes.bogus:alice")

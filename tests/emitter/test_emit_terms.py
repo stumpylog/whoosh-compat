@@ -5,6 +5,7 @@ from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 from whoosh_compat.fields import Multitoken
@@ -22,21 +23,21 @@ def test_multitoken_and(tindex, ereg):
     # A single field value with multiple tokens, combined per Multitoken
     # resolution (DEFAULT -> enclosing group semantics; top level == AND).
     # docs 2 and 4 both contain "shopname" and "product1" in content.
-    node = ast.Term(field="content", text="shopname product1")
+    node = ast.Term(field=FieldRef("content"), text="shopname product1")
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [2, 4]
 
 
 def test_u64(tindex, ereg):
-    q = emit_ast(ast.Term(field="asn", text=100), tindex, ereg)
+    q = emit_ast(ast.Term(field=FieldRef("asn"), text=100), tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
 
 
 def test_zero_token_term_dropped(tindex, ereg):
     grp = ast.And(
         children=(
-            ast.Term(field="content", text="invoice"),
-            ast.Term(field="content", text="!!!"),
+            ast.Term(field=FieldRef("content"), text="invoice"),
+            ast.Term(field=FieldRef("content"), text="!!!"),
         )
     )
     q = emit_ast(grp, tindex, ereg)
@@ -44,7 +45,7 @@ def test_zero_token_term_dropped(tindex, ereg):
 
 
 def test_zero_token_term_standalone_matches_nothing(tindex, ereg):
-    q = emit_ast(ast.Term(field="content", text="!!!"), tindex, ereg)
+    q = emit_ast(ast.Term(field=FieldRef("content"), text="!!!"), tindex, ereg)
     assert search_ids(tindex[0], q) == []
 
 
@@ -55,8 +56,8 @@ def test_zero_token_term_dropped_through_boosted(tindex, ereg):
     # wrongly zero out the whole group.
     grp = ast.And(
         children=(
-            ast.Term(field="content", text="invoice"),
-            ast.Boosted(child=ast.Term(field="content", text="!!!"), boost=2.0),
+            ast.Term(field=FieldRef("content"), text="invoice"),
+            ast.Boosted(child=ast.Term(field=FieldRef("content"), text="!!!"), boost=2.0),
         )
     )
     q = emit_ast(grp, tindex, ereg)
@@ -66,9 +67,10 @@ def test_zero_token_term_dropped_through_boosted(tindex, ereg):
 def test_zero_token_term_dropped_through_nested_boosted(tindex, ereg):
     grp = ast.And(
         children=(
-            ast.Term(field="content", text="invoice"),
+            ast.Term(field=FieldRef("content"), text="invoice"),
             ast.Boosted(
-                child=ast.Boosted(child=ast.Term(field="content", text="!!!"), boost=1.5), boost=2.0
+                child=ast.Boosted(child=ast.Term(field=FieldRef("content"), text="!!!"), boost=1.5),
+                boost=2.0,
             ),
         )
     )
@@ -77,7 +79,9 @@ def test_zero_token_term_dropped_through_nested_boosted(tindex, ereg):
 
 
 def test_all_dropped_through_boosted_is_empty(tindex, ereg):
-    grp = ast.And(children=(ast.Boosted(child=ast.Term(field="content", text="!!!"), boost=2.0),))
+    grp = ast.And(
+        children=(ast.Boosted(child=ast.Term(field=FieldRef("content"), text="!!!"), boost=2.0),)
+    )
     q = emit_ast(grp, tindex, ereg)
     assert search_ids(tindex[0], q) == []
 
@@ -101,7 +105,7 @@ def test_zero_token_term_dropped_through_boosted_parsed(tindex, ereg, parse):
     ],
 )
 def test_boolean_exists_raw_string_text(tindex, ereg, text, expected):
-    node = ast.Term(field="has_tag", text=text)
+    node = ast.Term(field=FieldRef("has_tag"), text=text)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
@@ -116,12 +120,12 @@ def test_unfielded_term_raises(tindex, ereg):
 
 def test_unknown_field_raises(tindex, ereg):
     with pytest.raises(QueryEmitError, match="unknown field"):
-        emit_ast(ast.Term(field="nosuchfield", text="x"), tindex, ereg)
+        emit_ast(ast.Term(field=FieldRef("nosuchfield"), text="x"), tindex, ereg)
 
 
 def test_json_field_term_without_subpath_raises(tindex, ereg):
     with pytest.raises(QueryEmitError, match="JSON field"):
-        emit_ast(ast.Term(field="notes", text="x"), tindex, ereg)
+        emit_ast(ast.Term(field=FieldRef("notes"), text="x"), tindex, ereg)
 
 
 #: multitoken resolution: FIRST / PHRASE / OR (DEFAULT/AND is covered by
@@ -156,7 +160,7 @@ def _multitoken_registry(mode):
 )
 def test_multitoken_modes(tindex, mode, text, expected):
     ereg = _multitoken_registry(mode)
-    node = ast.Term(field="content", text=text)
+    node = ast.Term(field=FieldRef("content"), text=text)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
@@ -213,8 +217,8 @@ def test_dotted_plain_field_zero_token_term_dropped():
     index, schema, registry = _dotted_plain_field_fixture()
     grp = ast.And(
         children=(
-            ast.Term(field="content", text="invoice"),
-            ast.Term(field="field.with.dots", text="!!!"),
+            ast.Term(field=FieldRef("content"), text="invoice"),
+            ast.Term(field=FieldRef("field.with.dots"), text="!!!"),
         )
     )
     q = emit_(grp, index=index, schema=schema, registry=registry)
@@ -224,7 +228,7 @@ def test_dotted_plain_field_zero_token_term_dropped():
 def test_dotted_plain_field_term_with_tokens_still_emits():
     index, schema, registry = _dotted_plain_field_fixture()
     q = emit_(
-        ast.Term(field="field.with.dots", text="anything"),
+        ast.Term(field=FieldRef("field.with.dots"), text="anything"),
         index=index,
         schema=schema,
         registry=registry,
@@ -241,5 +245,5 @@ def test_prefix_without_normalizer(tindex):
     ereg = FieldRegistry(
         [FieldSpec("content", FieldKind.TEXT, analyzer=lambda t: t.lower().split())]
     )
-    q = emit_ast(ast.Prefix(field="content", text="shopn"), tindex, ereg)
+    q = emit_ast(ast.Prefix(field=FieldRef("content"), text="shopn"), tindex, ereg)
     assert search_ids(tindex[0], q) == [2, 4]

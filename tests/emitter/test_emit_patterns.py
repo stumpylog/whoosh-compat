@@ -14,6 +14,7 @@ from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import glob_to_regex
 from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 
@@ -97,7 +98,7 @@ def test_glob_to_regex_escapes_class_internal_set_operators(tindex, ereg):
     assert glob_to_regex("[a[]", None) == "[a\\[]"
     assert glob_to_regex("[a&]", None) == "[a\\&]"
     # ...and tantivy must actually accept the result.
-    q = emit_ast(ast.Wildcard(field="title", pattern="[a[]"), tindex, ereg)
+    q = emit_ast(ast.Wildcard(field=FieldRef("title"), pattern="[a[]"), tindex, ereg)
     assert search_ids(tindex[0], q) == []
 
 
@@ -134,7 +135,7 @@ def test_glob_to_regex_escapes_class_internal_set_operators(tindex, ereg):
 def test_wildcard_emission(tindex, ereg, field, tokens, pattern, expected):
     # Keep the fnmatch oracle result honest alongside the emitter's result.
     assert fnmatch_ids(tokens, pattern) == expected
-    q = emit_ast(ast.Wildcard(field=field, pattern=pattern), tindex, ereg)
+    q = emit_ast(ast.Wildcard(field=FieldRef(field), pattern=pattern), tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
 
@@ -144,16 +145,16 @@ def test_wildcard_emission(tindex, ereg, field, tokens, pattern, expected):
 def test_prefix(tindex, ereg):
     expected = fnmatch_ids(CONTENT_TOKENS, "shopn*")
     assert expected == [2, 4]
-    q = emit_ast(ast.Prefix(field="content", text="shopn"), tindex, ereg)
+    q = emit_ast(ast.Prefix(field=FieldRef("content"), text="shopn"), tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
 
 def test_prefix_normalizes_and_escapes(tindex, ereg):
     # Prefix text is a *literal*: it is normalized then regex-escaped, so a
     # "[" in it matches only a real "[" (nothing in the fixture).
-    q = emit_ast(ast.Prefix(field="title", text="Wär"), tindex, ereg)
+    q = emit_ast(ast.Prefix(field=FieldRef("title"), text="Wär"), tindex, ereg)
     assert search_ids(tindex[0], q) == [3]
-    q = emit_ast(ast.Prefix(field="title", text="202[0-3]"), tindex, ereg)
+    q = emit_ast(ast.Prefix(field=FieldRef("title"), text="202[0-3]"), tindex, ereg)
     assert search_ids(tindex[0], q) == []
 
 
@@ -171,7 +172,8 @@ def test_prefix_normalizes_and_escapes(tindex, ereg):
     ],
 )
 def test_every_field(tindex, ereg, field, expected):
-    q = emit_ast(ast.Every(field=field), tindex, ereg)
+    ref = FieldRef(field) if field is not None else None
+    q = emit_ast(ast.Every(field=ref), tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
 
@@ -188,4 +190,4 @@ def test_every_field_non_fast_non_text_raises(tindex, ereg):
         + [spec for spec in ereg if spec.name != "asn"]
     )
     with pytest.raises(UnsupportedQueryError, match="fast"):
-        emit_ast(ast.Every(field="asn"), tindex, non_fast_registry)
+        emit_ast(ast.Every(field=FieldRef("asn")), tindex, non_fast_registry)

@@ -6,6 +6,7 @@ import tantivy
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 
@@ -16,8 +17,8 @@ from .conftest import search_ids
 def test_implicit_and(tindex, ereg):
     node = ast.And(
         children=(
-            ast.Term(field="content", text="shopname"),
-            ast.Term(field="content", text="product2"),
+            ast.Term(field=FieldRef("content"), text="shopname"),
+            ast.Term(field=FieldRef("content"), text="product2"),
         )
     )
     q = emit_ast(node, tindex, ereg)
@@ -27,8 +28,8 @@ def test_implicit_and(tindex, ereg):
 def test_or_min_should(tindex, ereg):
     node = ast.Or(
         children=(
-            ast.Term(field="content", text="invoice"),
-            ast.Term(field="content", text="receipt"),
+            ast.Term(field=FieldRef("content"), text="invoice"),
+            ast.Term(field=FieldRef("content"), text="receipt"),
         )
     )
     q = emit_ast(node, tindex, ereg)
@@ -38,8 +39,8 @@ def test_or_min_should(tindex, ereg):
 def test_or_all_children_dropped_is_empty(tindex, ereg):
     node = ast.Or(
         children=(
-            ast.Term(field="content", text="!!!"),
-            ast.Term(field="content", text="???"),
+            ast.Term(field=FieldRef("content"), text="!!!"),
+            ast.Term(field=FieldRef("content"), text="???"),
         )
     )
     q = emit_ast(node, tindex, ereg)
@@ -49,8 +50,8 @@ def test_or_all_children_dropped_is_empty(tindex, ereg):
 def test_or_single_surviving_child_returned_unwrapped(tindex, ereg):
     node = ast.Or(
         children=(
-            ast.Term(field="content", text="invoice"),
-            ast.Term(field="content", text="!!!"),
+            ast.Term(field=FieldRef("content"), text="invoice"),
+            ast.Term(field=FieldRef("content"), text="!!!"),
         )
     )
     q = emit_ast(node, tindex, ereg)
@@ -58,7 +59,7 @@ def test_or_single_surviving_child_returned_unwrapped(tindex, ereg):
 
 
 def test_not_padded(tindex, ereg):
-    node = ast.Not(child=ast.Term(field="content", text="invoice"))
+    node = ast.Not(child=ast.Term(field=FieldRef("content"), text="invoice"))
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [2, 3, 4, 5]
 
@@ -69,11 +70,11 @@ def test_nested_all_negative(tindex, ereg):
     # both at the inner And and if it ever bubbles up unpadded.
     node = ast.And(
         children=(
-            ast.Term(field="tag", text="billing"),
+            ast.Term(field=FieldRef("tag"), text="billing"),
             ast.And(
                 children=(
-                    ast.Not(child=ast.Term(field="title", text="2019")),
-                    ast.Not(child=ast.Term(field="title", text="2018")),
+                    ast.Not(child=ast.Term(field=FieldRef("title"), text="2019")),
+                    ast.Not(child=ast.Term(field=FieldRef("title"), text="2018")),
                 )
             ),
         )
@@ -84,8 +85,8 @@ def test_nested_all_negative(tindex, ereg):
 
 def test_andnot(tindex, ereg):
     node = ast.AndNot(
-        positive=ast.Term(field="content", text="shopname"),
-        negative=ast.Term(field="content", text="product2"),
+        positive=ast.Term(field=FieldRef("content"), text="shopname"),
+        negative=ast.Term(field=FieldRef("content"), text="product2"),
     )
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [2]
@@ -93,8 +94,8 @@ def test_andnot(tindex, ereg):
 
 def test_andmaybe(tindex, ereg):
     node = ast.AndMaybe(
-        required=ast.Term(field="tag", text="billing"),
-        optional=ast.Term(field="content", text="invoice"),
+        required=ast.Term(field=FieldRef("tag"), text="billing"),
+        optional=ast.Term(field=FieldRef("content"), text="invoice"),
     )
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1, 2]
@@ -102,8 +103,8 @@ def test_andmaybe(tindex, ereg):
 
 def test_require_filters_not_scores(tindex, ereg):
     node = ast.Require(
-        scored=ast.Term(field="tag", text="billing"),
-        filter_only=ast.Term(field="title", text="2020"),
+        scored=ast.Term(field=FieldRef("tag"), text="billing"),
+        filter_only=ast.Term(field=FieldRef("title"), text="2020"),
     )
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
@@ -158,7 +159,7 @@ def test_not_zero_token_term_matches_everything(tindex, ereg, parse):
     ],
 )
 def test_boolean_exists(tindex, ereg, value, expected):
-    node = ast.Term(field="has_tag", text=value)
+    node = ast.Term(field=FieldRef("has_tag"), text=value)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
@@ -225,7 +226,7 @@ def _non_fast_text_target_fixture():
 )
 def test_boolean_exists_non_fast_text_target(value, expected):
     index, schema, registry = _non_fast_text_target_fixture()
-    node = ast.Term(field="has_body", text=value)
+    node = ast.Term(field=FieldRef("has_body"), text=value)
     q = emit_(node, index=index, schema=schema, registry=registry)
     assert search_ids(index, q) == expected
 
@@ -282,7 +283,7 @@ def _non_fast_keyword_target_fixture():
 )
 def test_boolean_exists_non_fast_keyword_target(value, expected):
     index, schema, registry = _non_fast_keyword_target_fixture()
-    node = ast.Term(field="has_label", text=value)
+    node = ast.Term(field=FieldRef("has_label"), text=value)
     q = emit_(node, index=index, schema=schema, registry=registry)
     assert search_ids(index, q) == expected
 
@@ -313,8 +314,8 @@ def test_every_field_and_boolean_exists_agree(tindex, ereg):
     resolved for that field (``ereg``'s ``has_tag_kw`` targets ``tag``
     itself), not two independently-derived answers.
     """
-    every_q = emit_ast(ast.Every(field="tag"), tindex, ereg)
-    boolean_exists_q = emit_ast(ast.Term(field="has_tag_kw", text=True), tindex, ereg)
+    every_q = emit_ast(ast.Every(field=FieldRef("tag")), tindex, ereg)
+    boolean_exists_q = emit_ast(ast.Term(field=FieldRef("has_tag_kw"), text=True), tindex, ereg)
     assert search_ids(tindex[0], every_q) == search_ids(tindex[0], boolean_exists_q) == [1, 2, 4]
 
 
@@ -325,8 +326,8 @@ def test_every_field_and_boolean_exists_agree_across_targets(tindex, ereg):
     KEYWORD ``tag`` field -> TERM_SCAN), still agrees on the document set:
     both answer the same real-world question about the same docs.
     """
-    every_q = emit_ast(ast.Every(field="tag"), tindex, ereg)
-    boolean_exists_q = emit_ast(ast.Term(field="has_tag", text=True), tindex, ereg)
+    every_q = emit_ast(ast.Every(field=FieldRef("tag")), tindex, ereg)
+    boolean_exists_q = emit_ast(ast.Term(field=FieldRef("has_tag"), text=True), tindex, ereg)
     assert search_ids(tindex[0], every_q) == search_ids(tindex[0], boolean_exists_q) == [1, 2, 4]
 
 
@@ -341,7 +342,7 @@ def test_every(tindex, ereg):
 
 
 def test_boosted(tindex, ereg):
-    node = ast.Boosted(child=ast.Term(field="content", text="invoice"), boost=2.0)
+    node = ast.Boosted(child=ast.Term(field=FieldRef("content"), text="invoice"), boost=2.0)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
 
@@ -352,8 +353,8 @@ def test_boosted_group_child_with_tokens_is_wrapped(tindex, ereg):
     # zero-token-drop case covered in test_emit_terms.py.
     node = ast.And(
         children=(
-            ast.Term(field="content", text="invoice"),
-            ast.Boosted(child=ast.Term(field="content", text="total"), boost=2.0),
+            ast.Term(field=FieldRef("content"), text="invoice"),
+            ast.Boosted(child=ast.Term(field=FieldRef("content"), text="total"), boost=2.0),
         )
     )
     q = emit_ast(node, tindex, ereg)
@@ -386,11 +387,11 @@ def test_nested_or_all_dropped_is_dropped_from_and(tindex):
     ereg = _stopword_registry()
     node = ast.And(
         children=(
-            ast.Term(field="content", text="invoice"),
+            ast.Term(field=FieldRef("content"), text="invoice"),
             ast.Or(
                 children=(
-                    ast.Term(field="content", text="the"),
-                    ast.Term(field="content", text="a"),
+                    ast.Term(field=FieldRef("content"), text="the"),
+                    ast.Term(field=FieldRef("content"), text="a"),
                 )
             ),
         )
@@ -403,11 +404,11 @@ def test_nested_and_all_dropped_is_dropped_from_or(tindex):
     ereg = _stopword_registry()
     node = ast.Or(
         children=(
-            ast.Term(field="content", text="invoice"),
+            ast.Term(field=FieldRef("content"), text="invoice"),
             ast.And(
                 children=(
-                    ast.Term(field="content", text="the"),
-                    ast.Term(field="content", text="a"),
+                    ast.Term(field=FieldRef("content"), text="the"),
+                    ast.Term(field=FieldRef("content"), text="a"),
                 )
             ),
         )
@@ -421,13 +422,13 @@ def test_deeply_nested_group_all_dropped_is_dropped(tindex):
     ereg = _stopword_registry()
     node = ast.And(
         children=(
-            ast.Term(field="content", text="invoice"),
+            ast.Term(field=FieldRef("content"), text="invoice"),
             ast.Or(
                 children=(
                     ast.And(
                         children=(
-                            ast.Term(field="content", text="the"),
-                            ast.Term(field="content", text="a"),
+                            ast.Term(field=FieldRef("content"), text="the"),
+                            ast.Term(field=FieldRef("content"), text="a"),
                         )
                     ),
                 )
@@ -445,12 +446,12 @@ def test_nested_group_all_dropped_through_boosted_composes(tindex):
     ereg = _stopword_registry()
     node = ast.And(
         children=(
-            ast.Term(field="content", text="invoice"),
+            ast.Term(field=FieldRef("content"), text="invoice"),
             ast.Boosted(
                 child=ast.Or(
                     children=(
-                        ast.Term(field="content", text="the"),
-                        ast.Term(field="content", text="a"),
+                        ast.Term(field=FieldRef("content"), text="the"),
+                        ast.Term(field=FieldRef("content"), text="a"),
                     )
                 ),
                 boost=2.0,
@@ -467,11 +468,11 @@ def test_nested_group_with_surviving_child_is_not_dropped(tindex):
     ereg = _stopword_registry()
     node = ast.And(
         children=(
-            ast.Term(field="content", text="invoice"),
+            ast.Term(field=FieldRef("content"), text="invoice"),
             ast.Or(
                 children=(
-                    ast.Term(field="content", text="the"),
-                    ast.Term(field="content", text="total"),
+                    ast.Term(field=FieldRef("content"), text="the"),
+                    ast.Term(field=FieldRef("content"), text="total"),
                 )
             ),
         )
@@ -486,8 +487,8 @@ def test_non_text_term_as_direct_group_child(tindex, ereg):
     # applies to TEXT/KEYWORD; other kinds fall straight through to visit()).
     node = ast.And(
         children=(
-            ast.Term(field="asn", text=100),
-            ast.Term(field="content", text="invoice"),
+            ast.Term(field=FieldRef("asn"), text=100),
+            ast.Term(field=FieldRef("content"), text="invoice"),
         )
     )
     q = emit_ast(node, tindex, ereg)

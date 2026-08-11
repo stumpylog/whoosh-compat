@@ -15,6 +15,7 @@ import pytest
 from whoosh_compat import ast
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 from whoosh_compat.parser import plugins
@@ -36,17 +37,29 @@ class StubParser:
     def group(self) -> syntax.GroupNode:
         return syntax.OrGroup()
 
+    def field_ref(self, fieldname: Any) -> FieldRef | None:
+        """Mirrors ``QueryParser.field_ref``: resolve against the stub's own
+        registry when given one, otherwise just wrap the raw name.
+        """
+        if fieldname is None:
+            return None
+        if self.registry is not None:
+            ref = self.registry.make_ref(fieldname)
+            if ref is not None:
+                return ref
+        return FieldRef(fieldname)
+
     def term_query(self, fieldname: Any, text: Any, boost: float = 1.0, **kw: Any) -> ast.Node:
-        n = ast.Term(field=fieldname, text=text)
+        n = ast.Term(field=self.field_ref(fieldname), text=text)
         return ast.Boosted(n, boost) if boost != 1.0 else n
 
     def wildcard_query(self, fieldname: Any, text: Any, boost: float = 1.0) -> ast.Node:
         self.wildcard_calls.append((fieldname, text, boost))
-        return ast.Wildcard(field=fieldname, pattern=text)
+        return ast.Wildcard(field=self.field_ref(fieldname), pattern=text)
 
     def prefix_query(self, fieldname: Any, text: Any, boost: float = 1.0) -> ast.Node:
         self.prefix_calls.append((fieldname, text, boost))
-        return ast.Prefix(field=fieldname, text=text)
+        return ast.Prefix(field=self.field_ref(fieldname), text=text)
 
     def range_query(
         self,
@@ -59,7 +72,11 @@ class StubParser:
         node: Any = None,
     ) -> ast.Node:
         return ast.TermRange(
-            field=fieldname, lo=start, hi=end, incl_lo=not startexcl, incl_hi=not endexcl
+            field=self.field_ref(fieldname),
+            lo=start,
+            hi=end,
+            incl_lo=not startexcl,
+            incl_hi=not endexcl,
         )
 
     def report(self, diagnostic: Diagnostic) -> None:
@@ -381,7 +398,7 @@ def test_phrase_node_query_is_direct_ast() -> None:
     node = plugins.PhrasePlugin.PhraseNode("exact words", textstartchar=0, slop=3)
     node.set_fieldname("title", override=True)
     parser = StubParser(None)
-    assert node.query(parser) == ast.Phrase(field="title", text="exact words", slop=3)
+    assert node.query(parser) == ast.Phrase(field=FieldRef("title"), text="exact words", slop=3)
 
 
 def test_phrase_node_query_applies_boost() -> None:
@@ -390,7 +407,7 @@ def test_phrase_node_query_applies_boost() -> None:
     node.set_boost(2.0)
     parser = StubParser(None)
     q = node.query(parser)
-    assert q == ast.Boosted(ast.Phrase(field="title", text="exact words", slop=1), 2.0)
+    assert q == ast.Boosted(ast.Phrase(field=FieldRef("title"), text="exact words", slop=1), 2.0)
 
 
 # --- FieldAliasPlugin --------------------------------------------------------

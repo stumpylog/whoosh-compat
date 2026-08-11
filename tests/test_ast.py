@@ -24,34 +24,35 @@ from whoosh_compat.ast import Visitor
 from whoosh_compat.ast import Wildcard
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.fields import FieldRef
 
 
 # Step 1: Test construction of each node type
 class TestNodeConstruction:
     def test_term_construction(self):
-        t = Term(field="title", text="hello")
-        assert t.field == "title"
+        t = Term(field=FieldRef("title"), text="hello")
+        assert t.field == FieldRef("title")
         assert t.text == "hello"
         assert t.startchar is None
         assert t.endchar is None
 
     def test_term_with_numeric_text(self):
-        t = Term(field="id", text=42)
-        assert t.field == "id"
+        t = Term(field=FieldRef("id"), text=42)
+        assert t.field == FieldRef("id")
         assert t.text == 42
 
     def test_term_with_bool_text(self):
-        t = Term(field="flag", text=True)
-        assert t.field == "flag"
+        t = Term(field=FieldRef("flag"), text=True)
+        assert t.field == FieldRef("flag")
         assert t.text is True
 
     def test_term_with_span(self):
-        t = Term(field="title", text="hello", startchar=0, endchar=5)
+        t = Term(field=FieldRef("title"), text="hello", startchar=0, endchar=5)
         assert t.startchar == 0
         assert t.endchar == 5
 
     def test_and_construction(self):
-        a = And(children=(Term(field=None, text="a"), Term(field="title", text="b")))
+        a = And(children=(Term(field=None, text="a"), Term(field=FieldRef("title"), text="b")))
         assert len(a.children) == 2
         assert a.children[0].text == "a"
         assert a.children[1].text == "b"
@@ -84,61 +85,61 @@ class TestNodeConstruction:
         assert r.filter_only.text == "filter"
 
     def test_phrase_construction(self):
-        p = Phrase(field="content", text="hello world")
-        assert p.field == "content"
+        p = Phrase(field=FieldRef("content"), text="hello world")
+        assert p.field == FieldRef("content")
         assert p.text == "hello world"
         assert p.slop == 1
 
     def test_phrase_with_slop(self):
-        p = Phrase(field="content", text="hello world", slop=5)
+        p = Phrase(field=FieldRef("content"), text="hello world", slop=5)
         assert p.slop == 5
 
     def test_prefix_construction(self):
-        pf = Prefix(field="title", text="auto")
-        assert pf.field == "title"
+        pf = Prefix(field=FieldRef("title"), text="auto")
+        assert pf.field == FieldRef("title")
         assert pf.text == "auto"
 
     def test_wildcard_construction(self):
-        w = Wildcard(field="name", pattern="he*lo")
-        assert w.field == "name"
+        w = Wildcard(field=FieldRef("name"), pattern="he*lo")
+        assert w.field == FieldRef("name")
         assert w.pattern == "he*lo"
 
     def test_termrange_construction(self):
-        tr = TermRange(field="tags", lo="a", hi="z", incl_lo=True, incl_hi=False)
-        assert tr.field == "tags"
+        tr = TermRange(field=FieldRef("tags"), lo="a", hi="z", incl_lo=True, incl_hi=False)
+        assert tr.field == FieldRef("tags")
         assert tr.lo == "a"
         assert tr.hi == "z"
         assert tr.incl_lo is True
         assert tr.incl_hi is False
 
     def test_termrange_with_none(self):
-        tr = TermRange(field="tags", lo=None, hi="z", incl_lo=False, incl_hi=True)
+        tr = TermRange(field=FieldRef("tags"), lo=None, hi="z", incl_lo=False, incl_hi=True)
         assert tr.lo is None
         assert tr.hi == "z"
 
     def test_numericrange_construction(self):
-        nr = NumericRange(field="age", lo=18, hi=65, incl_lo=True, incl_hi=True)
-        assert nr.field == "age"
+        nr = NumericRange(field=FieldRef("age"), lo=18, hi=65, incl_lo=True, incl_hi=True)
+        assert nr.field == FieldRef("age")
         assert nr.lo == 18
         assert nr.hi == 65
         assert nr.incl_lo is True
         assert nr.incl_hi is True
 
     def test_numericrange_with_none(self):
-        nr = NumericRange(field="count", lo=None, hi=100, incl_lo=False, incl_hi=False)
+        nr = NumericRange(field=FieldRef("count"), lo=None, hi=100, incl_lo=False, incl_hi=False)
         assert nr.lo is None
         assert nr.hi == 100
 
     def test_daterange_construction(self):
         start = datetime(2020, 1, 1)
         end = datetime(2020, 12, 31)
-        dr = DateRange(field="date", lo=start, hi=end, incl_lo=True, incl_hi=True)
-        assert dr.field == "date"
+        dr = DateRange(field=FieldRef("date"), lo=start, hi=end, incl_lo=True, incl_hi=True)
+        assert dr.field == FieldRef("date")
         assert dr.lo == start
         assert dr.hi == end
 
     def test_daterange_with_none(self):
-        dr = DateRange(field="created", lo=None, hi=None, incl_lo=False, incl_hi=False)
+        dr = DateRange(field=FieldRef("created"), lo=None, hi=None, incl_lo=False, incl_hi=False)
         assert dr.lo is None
         assert dr.hi is None
 
@@ -147,8 +148,8 @@ class TestNodeConstruction:
         assert e.field is None
 
     def test_every_construction_with_field(self):
-        e = Every(field="published")
-        assert e.field == "published"
+        e = Every(field=FieldRef("published"))
+        assert e.field == FieldRef("published")
 
     def test_nothing_construction(self):
         n = Nothing()
@@ -169,13 +170,13 @@ class TestNodeConstruction:
 # Step 2: Test equality and identity
 class TestEquality:
     def test_term_equality(self):
-        t1 = Term(field="t", text="x")
-        t2 = Term(field="t", text="x")
+        t1 = Term(field=FieldRef("t"), text="x")
+        t2 = Term(field=FieldRef("t"), text="x")
         assert t1 == t2
 
     def test_term_inequality(self):
-        t1 = Term(field="t", text="x")
-        t2 = Term(field="t", text="y")
+        t1 = Term(field=FieldRef("t"), text="x")
+        t2 = Term(field=FieldRef("t"), text="y")
         assert t1 != t2
 
     def test_and_equality(self):
@@ -185,8 +186,8 @@ class TestEquality:
         assert a1 == a2
 
     def test_complex_equality(self):
-        t1 = Term(field="f", text="x")
-        t2 = Term(field="f", text="x")
+        t1 = Term(field=FieldRef("f"), text="x")
+        t2 = Term(field=FieldRef("f"), text="x")
         b1 = Boosted(child=t1, boost=1.5)
         b2 = Boosted(child=t2, boost=1.5)
         assert b1 == b2
@@ -195,7 +196,7 @@ class TestEquality:
 # Step 3: Test frozen instances
 class TestFrozen:
     def test_term_frozen(self):
-        t = Term(field="title", text="hello")
+        t = Term(field=FieldRef("title"), text="hello")
         with pytest.raises(FrozenInstanceError):
             t.field = "other"
 
@@ -234,7 +235,7 @@ class TestVisitor:
         assert Counter().visit(t) == 1
 
     def test_visitor_dispatch_and(self):
-        tree = And(children=(Term(field=None, text="a"), Term(field="title", text="b")))
+        tree = And(children=(Term(field=None, text="a"), Term(field=FieldRef("title"), text="b")))
         assert Counter().visit(tree) == 2
 
     def test_visitor_dispatch_nested(self):
@@ -259,7 +260,7 @@ class TestVisitor:
         assert "Nothing" in str(exc_info.value)
 
     def test_visitor_missing_phrase(self):
-        p = Phrase(field="content", text="hello world")
+        p = Phrase(field=FieldRef("content"), text="hello world")
         with pytest.raises(NotImplementedError) as exc_info:
             Counter().visit(p)
         assert "Phrase" in str(exc_info.value)
