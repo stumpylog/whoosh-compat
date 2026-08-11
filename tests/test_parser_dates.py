@@ -373,6 +373,23 @@ def test_years_outside_the_representable_range_diagnose(reg, query):
     assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
 
 
+@pytest.mark.parametrize(
+    "query, bad_bound",
+    [
+        pytest.param("created:[2020 TO 9999]", "9999", id="end-bound-overflow-named-correctly"),
+        pytest.param("created:[0000 TO 2020]", "0000", id="start-bound-underflow-named-correctly"),
+    ],
+)
+def test_range_out_of_range_diagnostic_names_the_failing_bound(reg, query, bad_bound):
+    # Regression: range_to_node's exception handler used to always report
+    # `node.start or node.end`, so a range failing on its END bound (e.g.
+    # year 9999's exclusive ceiling overflowing datetime.max) incorrectly
+    # named the START bound in the diagnostic message.
+    res = dparse(query, reg)
+    assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert bad_bound in res.diagnostics[0].message
+
+
 def test_range_bad_start_diagnostic(reg):
     res = dparse("added:[notadate TO 2020]", reg)
     assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE

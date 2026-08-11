@@ -988,7 +988,17 @@ class DateParserPlugin(Plugin):
         except (ValueError, OverflowError):
             # See text_to_node: a bound at the edge of datetime's range
             # fails in the arithmetic, and must diagnose rather than raise.
-            return self._error(node, node.start or node.end or "")
+            # _range_to_node itself catches and attributes failures on a
+            # single, identifiable bound (its own date_from() call, or the
+            # bound-specific +1-microsecond/timezone conversion steps); this
+            # is only a fallback for whatever those local catches don't
+            # cover (e.g. the joint start+end disambiguation step, where the
+            # failure genuinely can't be attributed to one bound over the
+            # other). Prefer naming the end bound there, since a joint
+            # disambiguation failure most commonly comes from the exclusive-
+            # ceiling arithmetic on the end side (see the +1 microsecond
+            # step just below _range_to_node's combine branch).
+            return self._error(node, node.end or node.start or "")
 
     def _range_to_node(self, node: syntax.RangeNode, spec: FieldSpec) -> syntax.SyntaxNode:
         local_now = self._local_now()
@@ -1004,11 +1014,17 @@ class DateParserPlugin(Plugin):
         raw_start: Any = None
         raw_end: Any = None
         if node.start:
-            raw_start = self.dateparser.date_from(node.start, local_now)
+            try:
+                raw_start = self.dateparser.date_from(node.start, local_now)
+            except (ValueError, OverflowError):
+                return self._error(node, node.start)
             if raw_start is None:
                 return self._error(node, node.start)
         if node.end:
-            raw_end = self.dateparser.date_from(node.end, local_now)
+            try:
+                raw_end = self.dateparser.date_from(node.end, local_now)
+            except (ValueError, OverflowError):
+                return self._error(node, node.end)
             if raw_end is None:
                 return self._error(node, node.end)
 
@@ -1039,13 +1055,25 @@ class DateParserPlugin(Plugin):
                 hi_naive = cast(datetime, ed.end if isinstance(ed, timespan) else ed)
 
         if hi_naive is not None and not end_exact:
-            hi_naive = hi_naive + timedelta(microseconds=1)
+            try:
+                hi_naive = hi_naive + timedelta(microseconds=1)
+            except OverflowError:
+                # The exclusive-ceiling adjustment is end-bound-only
+                # arithmetic (e.g. year 9999's last microsecond plus one
+                # lands past datetime.max): always the end bound's fault.
+                return self._error(node, node.end)
             incl_hi = False
         if lo_naive is not None and not start_exact:
             incl_lo = True
 
-        lo = self._to_utc(lo_naive, spec.date_only) if lo_naive is not None else None
-        hi = self._to_utc(hi_naive, spec.date_only) if hi_naive is not None else None
+        try:
+            lo = self._to_utc(lo_naive, spec.date_only) if lo_naive is not None else None
+        except (ValueError, OverflowError):
+            return self._error(node, node.start)
+        try:
+            hi = self._to_utc(hi_naive, spec.date_only) if hi_naive is not None else None
+        except (ValueError, OverflowError):
+            return self._error(node, node.end)
         return DateRangeSyntaxNode(spec.name, lo, hi, incl_lo, incl_hi, node.boost)
 
 
