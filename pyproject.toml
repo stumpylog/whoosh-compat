@@ -28,7 +28,7 @@ dependencies = ["python-dateutil>=2.8"]
 Repository = "https://github.com/stumpylog/whoosh-compat"
 
 [project.optional-dependencies]
-tantivy = ["tantivy>=0.24"]
+tantivy = ["tantivy>=0.26.0"]
 
 [dependency-groups]
 dev = [
