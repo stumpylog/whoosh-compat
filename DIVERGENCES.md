@@ -144,7 +144,8 @@ parse-then-emit pipeline).
     schema this library's oracle clones had `notes`/`custom_fields` as
     plain `TEXT()` fields instead. There is no query a whoosh user could
     type that reaches "the note left by a specific user" the structured way
-    whoosh-compat's JSON subpath (`FieldRegistry.resolve_json`) does. On
+    whoosh-compat's JSON subpath (`FieldRegistry.make_ref`/`resolve`, which
+    produce and resolve a `FieldRef` carrying the subpath) does. On
     both sides the dotted name is technically "unknown" to a plain-TEXT
     schema, but the two parsers' fieldname taggers handle an unregistered
     dotted name differently: whoosh-compat's `FieldsPlugin` tagger is

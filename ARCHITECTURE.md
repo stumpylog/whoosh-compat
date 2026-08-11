@@ -135,10 +135,27 @@ BOOLEAN_EXISTS, JSON), `Multitoken` (how multi-token field values combine:
 DEFAULT/AND/OR/PHRASE/FIRST), `FieldSpec` (one field's parse/emit
 characteristics: name, kind, aliases, `comma_values`, `analyzer`,
 `pattern_normalizer`, `multitoken`, `exists_target`, `subpaths`,
-`date_only`, `fast`), and `FieldRegistry` (validates and indexes a
-collection of specs by canonical name and alias). This is the
+`date_only`, `fast`), `FieldRef` (a typed, canonical reference to a field,
+carrying an optional JSON subpath), and `FieldRegistry` (validates and
+indexes a collection of specs by canonical name and alias). This is the
 host-integration seam: nothing in `parser/` or `emitters/` hard-codes field
 names or behavior, it all comes from the registry a caller constructs.
+
+Every AST leaf that carries a field (`Term`, `Phrase`, `Prefix`, `Wildcard`,
+`TermRange`, `NumericRange`, `DateRange`, `Every`) holds a `FieldRef`, not a
+raw field-name string. `FieldRegistry.make_ref(raw: str) -> FieldRef | None`
+is the single place a dotted parser-level fieldname (`"notes.user"`) is
+interpreted: it resolves an alias to its canonical name and decides, once,
+whether the name addresses a plain field or a registered JSON field's
+subpath, returning `None` for a name that resolves as neither (the case
+`FieldsPlugin` already demotes back to text before it can reach an AST
+leaf). Once a `FieldRef` exists, `FieldRegistry.resolve(ref)` is the single
+resolver for it, plain or JSON subpath alike: nothing downstream of
+`make_ref`, including the emitter, inspects a field name for a literal `.`
+again. A registered *plain* field whose own name happens to contain a dot
+(e.g. `"field.with.dots"`) still resolves directly and exactly, since
+`make_ref` tries an exact-name match before ever attempting a dotted-subpath
+split; see DIVERGENCES.md entry 14.
 
 **`emitters/`**: `base.py` defines a minimal `Emitter` protocol; the actual
 work is `tantivy_.py`'s `TantivyEmitter(ast.Visitor[tantivy.Query])`, whose
@@ -150,12 +167,15 @@ startchar, endchar, field, raw_value)` is a plain data record; `DiagnosticKind`
 currently has `BAD_DATE`/`BAD_NUMBER`/`UNKNOWN`. `field` and `raw_value`
 default to `None` and are populated wherever a `Diagnostic` is constructed
 against a known field (`DateParserPlugin._error()` in `dateparse.py`, and
-both `BAD_NUMBER` sites in `default.py`'s `QueryParser`): `field` is the
-field name the diagnostic concerns, `raw_value` is the offending text as the
-user typed it. A host that wants a typed exception (e.g. paperless-ngx's
-`InvalidDateQuery(field, value)`) reads these two fields directly instead of
-regex-parsing `message`, which stays human-readable and can change wording
-without notice. Parsing never raises for bad input:
+both `BAD_NUMBER` sites in `default.py`'s `QueryParser`): `field` is a
+`FieldRef` naming the field the diagnostic concerns (always the canonical
+name, since a `Diagnostic` is only ever built once a field has resolved to
+a spec), `raw_value` is the offending text as the user typed it. A host
+that wants a typed exception (e.g. paperless-ngx's `InvalidDateQuery(field,
+value)`) reads these two fields directly instead of regex-parsing
+`message`, which stays human-readable and can change wording without
+notice; a host that just wants the field's display name calls
+`str(diag.field)`. Parsing never raises for bad input:
 `QueryParser` accumulates `Diagnostic`s onto `self.diagnostics` as it goes
 (see `default.py`'s `report()`), and bad fragments become
 `ast.ErrorLeaf(diagnostic)` nodes in the tree rather than raising. This
