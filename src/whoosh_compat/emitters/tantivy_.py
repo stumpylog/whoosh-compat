@@ -345,8 +345,21 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         tantivy-py cannot address JSON subpaths via ``term_query`` (see
         ``_json_paths_supported``), falls back to ``index.parse_query``:
         the only route currently able to reach a JSON subpath: quoting the
-        value and escaping backslashes/quotes so it round-trips through the
-        query-string grammar.
+        analyzed tokens and escaping backslashes/quotes so they round-trip
+        through the query-string grammar.
+
+        The fallback honors ``spec.analyzer``'s output (not the raw text)
+        and, for ``Multitoken.FIRST``, searches only the first token. It
+        cannot honor AND/OR/PHRASE fully: ``index.parse_query``'s carve-out
+        here is deliberately a single quoted leaf (see module docstring),
+        with no programmatic way to build a JSON-subpath boolean/phrase
+        query the way ``_text_term_query`` does for every other field kind,
+        so an AND/OR-mode multi-token value still collapses to one quoted
+        (phrase-like) leaf instead of true AND/OR combinator semantics.
+        This is a known, narrow limitation of the fallback path itself
+        (see DIVERGENCES.md), expected to retire once
+        https://github.com/quickwit-oss/tantivy-py/pull/716 ships and
+        ``_json_paths_supported()`` starts returning True.
         """
         full = f"{spec.name}.{subpath}"
         tokens = self._tokens(spec, text)
@@ -356,21 +369,51 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         if self._json_paths_supported():
             return self._text_term_query(spec, tokens, field_name=full)
 
-        escaped = str(text).replace("\\", "\\\\").replace('"', '\\"')
+        mode = spec.multitoken
+        if mode is Multitoken.DEFAULT:
+            mode = self._group_stack[-1]
+        query_text = tokens[0] if mode is Multitoken.FIRST else " ".join(tokens)
+
+        escaped = query_text.replace("\\", "\\\\").replace('"', '\\"')
         return self.index.parse_query(f'{full}:"{escaped}"', default_field_names=[spec.name])
+
+    def _term_drop_tokens(self, node: ast.Term) -> list[str] | None:
+        """Tokens ``node`` analyzes to, for the zero-token-drop check only.
+
+        Returns ``None`` when ``node``'s field kind is not subject to the
+        drop policy (its emission should just run normally, including
+        raising for an unresolvable field). Reuses the exact same
+        JSON-subpath resolution (``registry.resolve_json``) and
+        tokenization (``_tokens``) that ``visit_term``/``_emit_json_term``
+        use, so this is a read-only preview of what emission will do, not a
+        second implementation of it.
+        """
+        if node.field is not None and "." in node.field:
+            resolved = self.registry.resolve_json(node.field)
+            if resolved is None:
+                # Not a registered JSON subpath: let visit()/visit_term's
+                # own _resolve() raise the "unknown field" error.
+                return None
+            spec, _subpath = resolved
+            return self._tokens(spec, node.text)
+        spec = self._resolve(node.field)
+        if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
+            return self._tokens(spec, node.text)
+        return None
 
     def _group_child(self, child: ast.Node) -> tantivy.Query | None:
         """Visit a direct child of an And/Or group.
 
         Returns ``None`` when the child: possibly wrapped in one or more
         transparent ``Boosted`` layers: is a zero-token analyzed TEXT/
-        KEYWORD term: such a term is dropped from its enclosing group
-        entirely (whoosh's own behavior when a field's analyzer consumes a
-        token completely, e.g. an all-stopword value). ``Boosted`` is
-        unwrapped recursively (rather than only checking a
-        direct ``ast.Term`` child) so ``Boosted(Boosted(Term(...)))`` and
-        similar shapes are still dropped correctly instead of turning into
-        a live-but-unmatchable ``boost_query(empty_query(), ...)`` clause
+        KEYWORD term (plain or JSON subpath), or a zero-token analyzed
+        Phrase: such a node is dropped from its enclosing group entirely
+        (whoosh's own behavior when a field's analyzer consumes a value
+        completely, e.g. an all-stopword value). ``Boosted`` is unwrapped
+        recursively (rather than only checking a direct ``ast.Term``/
+        ``ast.Phrase`` child) so ``Boosted(Boosted(Term(...)))`` and similar
+        shapes are still dropped correctly instead of turning into a
+        live-but-unmatchable ``boost_query(empty_query(), ...)`` clause
         that would wrongly restrict an enclosing And.
         """
         if isinstance(child, ast.Boosted):
@@ -379,11 +422,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 return None
             return tantivy.Query.boost_query(inner, child.boost)
         if isinstance(child, ast.Term):
+            tokens = self._term_drop_tokens(child)
+            if tokens is not None and not tokens:
+                return None
+        elif isinstance(child, ast.Phrase):
             spec = self._resolve(child.field)
-            if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
-                tokens = self._tokens(spec, child.text)
-                if not tokens:
-                    return None
+            if not self._tokens(spec, child.text):
+                return None
         return self.visit(child)
 
     # -- leaves --------------------------------------------------------
@@ -391,10 +436,16 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     def visit_nothing(self, node: ast.Nothing) -> tantivy.Query:
         return tantivy.Query.empty_query()
 
-    def visit_every(self, node: ast.Every) -> tantivy.Query:
-        if node.field is None:
-            return tantivy.Query.all_query()
-        spec = self._resolve(node.field)
+    def _exists_query(self, spec) -> tantivy.Query:
+        """Build an "exists" query for ``spec``: does this field have a value
+        at all on a given document?
+
+        Shared by ``visit_every`` (a bare ``field:*``) and BOOLEAN_EXISTS
+        term emission (``visit_term``, for a field whose ``exists_target``
+        is ``spec``), so the two stay consistent about what "exists" means
+        for a given field kind rather than drifting into two answers for
+        the same question.
+        """
         if spec.fast:
             # exists_query is a cheap fast-field presence check, but it only
             # works on fast fields (tantivy errors out otherwise).
@@ -413,6 +464,12 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             f" 'exists' while non-fast: mark it fast=True to support"
             f" '{spec.name}:*'"
         )
+
+    def visit_every(self, node: ast.Every) -> tantivy.Query:
+        if node.field is None:
+            return tantivy.Query.all_query()
+        spec = self._resolve(node.field)
+        return self._exists_query(spec)
 
     def visit_errorleaf(self, node: ast.ErrorLeaf) -> tantivy.Query:
         raise QueryEmitError(
@@ -452,7 +509,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             return tantivy.Query.term_query(self.schema, spec.name, int(node.text))
 
         if spec.kind is FieldKind.BOOLEAN_EXISTS:
-            exists = tantivy.Query.exists_query(spec.exists_target)
+            target = self._resolve(spec.exists_target)
+            exists = self._exists_query(target)
             if _is_truthy(node.text):
                 return exists
             return _boolean_query([(tantivy.Occur.MustNot, exists)])

@@ -16,6 +16,7 @@ from whoosh_compat.emitters.tantivy_ import TantivyEmitter
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
+from whoosh_compat.fields import Multitoken
 
 from .conftest import emit_ast
 from .conftest import search_ids
@@ -39,6 +40,37 @@ def test_json_subpath_term(tindex, ereg, text, expected):
 
 def test_json_subpath_term_parsed(tindex, ereg, parse):
     q = emit_ast(parse("notes.user:alice"), tindex, ereg)
+    assert search_ids(tindex[0], q) == [1]
+
+
+def test_json_subpath_term_as_group_child(tindex, ereg):
+    # Regression: a JSON subpath term as a direct child of an And group used
+    # to raise QueryEmitError("unknown field 'notes.user'") because
+    # _group_child called self._resolve(child.field) directly instead of
+    # going through the JSON-subpath-aware dispatch visit_term already uses.
+    # Doc 1 has notes.user == "alice" and content contains "invoice".
+    node = ast.And(
+        children=(
+            ast.Term(field="notes.user", text="alice"),
+            ast.Term(field="content", text="invoice"),
+        )
+    )
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1]
+
+
+def test_json_subpath_zero_token_term_dropped_as_group_child(tindex, ereg):
+    # The zero-token drop policy must apply to JSON subpath terms exactly
+    # like ordinary TEXT/KEYWORD terms: a JSON subpath term that analyzes to
+    # zero tokens is dropped from the enclosing group rather than raising or
+    # matching nothing.
+    node = ast.And(
+        children=(
+            ast.Term(field="notes.user", text=""),
+            ast.Term(field="content", text="invoice"),
+        )
+    )
+    q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
 
 
@@ -82,6 +114,30 @@ def test_dotted_field_that_is_not_a_json_subpath_falls_back_to_resolve(tindex, e
     node = ast.Term(field="notes.bogus", text="x")
     with pytest.raises(QueryEmitError, match="unknown field"):
         emit_ast(node, tindex, ereg)
+
+
+def test_json_subpath_parse_query_fallback_honors_multitoken_first(tindex):
+    # Regression: the older-tantivy JSON fallback (index.parse_query) used
+    # to discard the analyzed tokens entirely and quote the raw text
+    # verbatim, ignoring the field's configured Multitoken policy. With
+    # Multitoken.FIRST, only the first analyzed token should be searched:
+    # a value with a trailing garbage token must still match a document
+    # whose notes.user is exactly the first token, which a raw-text quoted
+    # phrase query ("alice extra garbage") would not.
+    ereg_first = FieldRegistry(
+        [
+            FieldSpec(
+                "notes",
+                FieldKind.JSON,
+                subpaths=("note", "user"),
+                analyzer=lambda t: t.lower().split(),
+                multitoken=Multitoken.FIRST,
+            ),
+        ]
+    )
+    node = ast.Term(field="notes.user", text="alice extra garbage")
+    q = emit_ast(node, tindex, ereg_first)
+    assert search_ids(tindex[0], q) == [1]
 
 
 def test_json_paths_supported_false_when_no_json_field_registered(tindex):
