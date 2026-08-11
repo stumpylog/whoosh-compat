@@ -283,6 +283,15 @@ parse-then-emit pipeline).
     real, allowlisted AST-level divergence, not a whoosh bug to avoid
     reproducing.
 
+    The "both sides agree on the value" part holds for zero-padded values,
+    which is what the corpus covers. It does not extend to every string the
+    allowlist regex can match: whoosh's fallback slices the separator-
+    stripped digits by position, so an unpadded `created:2020-1-1` becomes
+    `202011`, read as November 2020, while whoosh-compat reports it as an
+    unrecognizable date. The harness never compares that case (a
+    diagnostic skips it first), so the allowlist entry stays broad rather
+    than enumerating padding variants.
+
     Test references: `tests/differential/allowlist.py`'s bare
     separated-ISO-date entry; `tests/differential/corpus_paperless.txt`'s
     `created:2020-01-01` / `created:2020-01` / `created:'2020.01.01'`
@@ -330,3 +339,20 @@ parse-then-emit pipeline).
 
     Test references: `tests/differential/allowlist.py`'s `:\*(?:\s|$)`
     entry; `tests/emitter/test_emit_patterns.py`'s `test_every_field`.
+
+21. **A year followed by a colon-separated time reads as a calendar date
+    (design).** Value text like `added:'2020 12:30'` is ambiguous: the
+    trailing digits can be read as a time of day, or as the month and day
+    of a separator-separated calendar date. Real whoosh reads it as a
+    time, producing "12:30 on every day of 2020". whoosh-compat's date
+    grammar tries its separated-date alternative first (the ordering that
+    makes `created:2020-01-01` parse at all, see entry 18), and that
+    alternative accepts `:` among its separators, so the same text reads
+    as 30 December 2020.
+
+    Only this shape is affected: a year plus a time that carries an
+    explicit meridiem or an unambiguous marker (`added:'2020 5pm'`) still
+    reads as a time on both sides, because the separated-date alternative
+    cannot match it. Forms with no time component are unaffected.
+
+    Test references: `tests/test_parser_dates.py`'s year-plus-time case.

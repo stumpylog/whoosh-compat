@@ -83,17 +83,19 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(r"\bcustom_fields\.(value|name)\b"),
         (
-            "design: dot-inclusive FieldsPlugin tagger ([\\w.]+: vs whoosh's"
-            " \\w+:) tags an unregistered dotted name differently than whoosh's"
-            " tagger even though neither side has the field registered"
+            "DIVERGENCES.md entry 14 (design): dot-inclusive FieldsPlugin"
+            " tagger ([\\w.]+: vs whoosh's \\w+:) tags an unregistered dotted"
+            " name differently than whoosh's tagger even though neither side"
+            " has the field registered"
         ),
     ),
     (
         re.compile(r"\bnotes\.(user|note)\b"),
         (
-            "design: dot-inclusive FieldsPlugin tagger ([\\w.]+: vs whoosh's"
-            " \\w+:) tags an unregistered dotted name differently than whoosh's"
-            " tagger even though neither side has the field registered"
+            "DIVERGENCES.md entry 14 (design): dot-inclusive FieldsPlugin"
+            " tagger ([\\w.]+: vs whoosh's \\w+:) tags an unregistered dotted"
+            " name differently than whoosh's tagger even though neither side"
+            " has the field registered"
         ),
     ),
     # NOTE: DIVERGENCES.md entry 8 ("attached -foo searches for foo") describes

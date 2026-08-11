@@ -936,6 +936,19 @@ class DateParserPlugin(Plugin):
 
     def text_to_node(self, node: syntax.SyntaxNode, spec: FieldSpec) -> syntax.SyntaxNode:
         text: str = node.text  # type: ignore[attr-defined]
+        try:
+            return self._text_to_node(node, spec, text)
+        except (ValueError, OverflowError):
+            # Years at the edges of what datetime can represent (year 0, or
+            # year 9999 whose exclusive ceiling lands past datetime.max)
+            # fail in the arithmetic rather than in the grammar. Parsing
+            # reports bad input through diagnostics, so treat these as an
+            # unrecognizable date like any other.
+            return self._error(node, text)
+
+    def _text_to_node(
+        self, node: syntax.SyntaxNode, spec: FieldSpec, text: str
+    ) -> syntax.SyntaxNode:
         local_now = self._local_now()
         result = self.dateparser.date_from(text, local_now)
         if result is None:
@@ -970,6 +983,14 @@ class DateParserPlugin(Plugin):
         return DateRangeSyntaxNode(spec.name, lo, hi, incl_lo, incl_hi, boost)
 
     def range_to_node(self, node: syntax.RangeNode, spec: FieldSpec) -> syntax.SyntaxNode:
+        try:
+            return self._range_to_node(node, spec)
+        except (ValueError, OverflowError):
+            # See text_to_node: a bound at the edge of datetime's range
+            # fails in the arithmetic, and must diagnose rather than raise.
+            return self._error(node, node.start or node.end or "")
+
+    def _range_to_node(self, node: syntax.RangeNode, spec: FieldSpec) -> syntax.SyntaxNode:
         local_now = self._local_now()
 
         # Use the dateparser's own date_from (which wraps the grammar in

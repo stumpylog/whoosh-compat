@@ -328,6 +328,51 @@ def test_range_both_sides_are_periods_cannot_combine(reg):
     assert r.lo == datetime(2026, 7, 1, tzinfo=BERLIN).astimezone(UTC)
 
 
+@pytest.mark.parametrize(
+    ("query", "expected_lo"),
+    [
+        # A year plus a colon-separated time is ambiguous. The separated-date
+        # grammar alternative accepts ":" as a separator and is tried first,
+        # so this reads as a calendar day, not a time of day. See
+        # DIVERGENCES.md entry 21.
+        # Berlin is UTC+1 in December, so the day starts at 23:00 the day before.
+        pytest.param(
+            "added:'2020 12:30'", datetime(2020, 12, 29, 23, 0), id="year-plus-time-is-a-date"
+        ),
+        # A time the separated-date alternative cannot match still reads as a
+        # time on every day of the year, matching whoosh.
+        pytest.param(
+            "added:'2020 5pm'", datetime(2020, 1, 1, 16, 0), id="year-plus-meridiem-is-a-time"
+        ),
+    ],
+)
+def test_year_followed_by_time(reg, query, expected_lo):
+    r = dparse(query, reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == expected_lo.replace(tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("created:9999", id="max-year-single"),
+        pytest.param("created:99991231", id="max-year-compact-day"),
+        pytest.param("created:'dec 9999'", id="max-year-named-month"),
+        pytest.param("created:[2020 TO 9999]", id="max-year-range-end"),
+        pytest.param("created:0000", id="zero-year-single"),
+        pytest.param("created:00000101", id="zero-year-compact-day"),
+        pytest.param("created:[0000 TO 2020]", id="zero-year-range-start"),
+    ],
+)
+def test_years_outside_the_representable_range_diagnose(reg, query):
+    # Year 0 has no datetime representation, and year 9999's exclusive
+    # ceiling would land past datetime.max. Both blow up in the arithmetic
+    # rather than the grammar, so they need catching: parsing reports bad
+    # input through diagnostics, it does not raise.
+    res = dparse(query, reg)
+    assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+
+
 def test_range_bad_start_diagnostic(reg):
     res = dparse("added:[notadate TO 2020]", reg)
     assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE

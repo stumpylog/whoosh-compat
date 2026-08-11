@@ -85,6 +85,10 @@ def test_parse_never_raises(q):
 _meta = st.sampled_from(
     list("()[]{}\"'*?^~:,-+ ")
     + ["AND", "OR", "NOT", "TO", "title:", "created:", "tag:", "notes.user:"]
+    # Years at the edges of what datetime can represent: their arithmetic
+    # (a year-0 floor, a year-9999 exclusive ceiling) is a place parsing has
+    # failed before, and the alphabet above cannot reach them on its own.
+    + ["0000", "9999"]
 )
 _wild = st.lists(st.one_of(st.text(max_size=12), _meta), min_size=0, max_size=40).map("".join)
 
