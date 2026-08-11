@@ -109,7 +109,7 @@ def test_require_filters_not_scores(tindex, ereg):
     assert search_ids(tindex[0], q) == [1]
 
 
-# -- DIVERGENCES.md entry 23: zero-token TERM operands of REQUIRE/ANDMAYBE/
+# -- DIVERGENCES.md entry 24: zero-token TERM operands of REQUIRE/ANDMAYBE/
 # ANDNOT diverge from whoosh in three binary-operator shapes, pinning
 # current (divergent) behavior. Verified against a live whoosh oracle: the
 # operand orders marked "diverges" return [1] in whoosh but [] here; the
@@ -172,7 +172,7 @@ def test_andnot_zero_token_negative_mirror_agrees(tindex, ereg, parse):
     assert search_ids(tindex[0], q) == [1]
 
 
-# -- DIVERGENCES.md entry 24: NOT of a zero-token term matches every
+# -- DIVERGENCES.md entry 23: NOT of a zero-token term matches every
 # document here; whoosh normalizes Not(NullQuery) to NullQuery and matches
 # none.
 
