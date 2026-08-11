@@ -87,6 +87,25 @@ modified:20231201
 created:"previous quarter"
 added:"previous quarter"
 
+# --- KNOWN DIVERGENCE (design, allowlist.py): bare (non-bracketed)
+# dashed/dotted/space-separated single-value ISO dates on a date field.
+# whoosh's DateParserPlugin.text_to_dt fails to fully parse these (its
+# grammar has the same "datetime" Bag before "simple" Choice ordering
+# whoosh-compat fixed, see dateparse.py's English.setup()), but
+# ErrorNode.query() falls back to running the *original* wrapped node's
+# query() method regardless (query.error_query just annotates an .error
+# attribute onto whatever query that produces), which for a DATE/DATETIME
+# field is DATETIME.parse_query's own separator-stripping self-parse
+# (fields.py): the value comes out numerically correct, but as a
+# query.NumericRange, a completely different mechanism/AST shape than
+# whoosh-compat's uniform DateParserPlugin-grammar-only architecture (see
+# module docstring, parser/dateparse.py) ever produces. whoosh-compat has
+# no field-level self-parse fallback concept to replicate: fixing the same
+# bundle-ordering bug makes its *single* grammar path parse these directly.
+created:2020-01-01
+created:2020-01
+created:'2020.01.01'
+
 # --- KNOWN DIVERGENCE (DIVERGENCES.md entry 6, structural not pattern-based): bad
 # date: test_differential.py skips on any non-empty diagnostics list.
 # (month=13 in the 8-digit compact form.)
@@ -101,6 +120,15 @@ added:20231340
 created:[2020 TO 2021],added:[2022 TO 2023]
 created:[20200101 TO 20201231]
 created:[2020-01-01 TO 2020-12-31]
+# This bound pair also exercises a second, distinct symptom of the same
+# range_to_dt root cause (no ToEnd around the bare grammar's date_from):
+# real whoosh silently collapses both bounds to the whole of 2020 instead of
+# June 15-20 (confirmed directly against the oracle: verify with
+# oracle_parse("created:[2020-06-15 TO 2020-06-20]", ...) -> NumericRange
+# spans all of 2020). whoosh-compat's range_to_node now requires full
+# consumption of each bound (matching text_to_node's existing ToEnd usage)
+# and does not reproduce the collapse.
+created:[2020-06-15 TO 2020-06-20]
 created:[2020 to]
 created:[to 2020]
 title:x,created:[2020 TO 2021]

@@ -25,8 +25,17 @@ BASE = datetime(2026, 8, 4, 10, 30, tzinfo=BERLIN)
 words = st.text(
     alphabet=st.characters(whitelist_categories=("Ll", "Lu", "Nd")), min_size=1, max_size=8
 )
+# A separate "dash inside a word" strategy so hyphenated/dashed-ISO-date-like
+# atoms (e.g. "created:2020-01-01") are exercised by the parity fuzzer too
+# (the plain `words` alphabet above has no way to generate a "-" at all).
+# The dash is deliberately confined to *between* two non-empty runs of
+# `words`-alphabet characters, never leading: a leading "-" is a dangling
+# NOT-operator-prefix concern (a different, already-covered grammar area),
+# not something this date-grammar-focused addition is meant to fuzz, and
+# generating it here would just produce noisy, unrelated divergences.
+dashed_word = st.builds(lambda a, b: f"{a}-{b}", words, words)
 fields = st.sampled_from(["", "title:", "tag:", "asn:", "created:", "type:", "zzz:"])
-atom = st.builds(lambda f, w: f + w, fields, words)
+atom = st.builds(lambda f, w: f + w, fields, st.one_of(words, dashed_word))
 clause = st.recursive(
     atom,
     lambda inner: st.builds(

@@ -60,7 +60,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     # whoosh bug: whoosh simply never had this feature to begin with.
     (
         re.compile(r"tag:'foo,bar'"),
-        "design: comma_values quote-escape is a whoosh-compat-only feature",
+        "DIVERGENCES.md entry 17: comma_values quote-escape is a whoosh-compat-only feature",
     ),
     # design: JSON dotted-path fields (custom_fields.value, notes.user, ...)
     # aren't registered in the v2 oracle schema/registry (v2 whoosh has no
@@ -133,6 +133,33 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " instead of reproducing the bug"
         ),
     ),
+    # design (DIVERGENCES.md entry 18): a bare (non-bracketed) separated-ISO
+    # date value on a date field ("created:2020-01-01", "created:2020-01")
+    # is numerically correct on both sides but structurally different: real
+    # whoosh's DateParserPlugin.text_to_dt fails to fully parse it (the same
+    # grammar-ordering limitation entry 12 describes for range bounds), but
+    # ErrorNode.query() falls back to running the original node's own
+    # query() method anyway, which for an ordinary fielded term reaches
+    # DATETIME.parse_query's field-level self-parse (fields.py) instead:
+    # numerically correct, but a query.NumericRange, not the
+    # DateTimeNode/DateRangeNode shape a successful text_to_dt would have
+    # produced. whoosh-compat has no equivalent field-level fallback
+    # architecture (DateParserPlugin's grammar is the only date-parsing
+    # path, see parser/dateparse.py's module docstring); after fixing the
+    # bundle Choice's alternative order, its single grammar path parses
+    # these directly into a DateRange. Scoped to a bare value only (no "[" right
+    # after the colon, optionally single-quoted) so it doesn't also swallow
+    # the bracketed-range corpus lines above (those are covered by the
+    # broader "\[" entry regardless).
+    (
+        re.compile(r"\b(?:created|modified|added):'?\d{4}[-. /]\d"),
+        (
+            "DIVERGENCES.md entry 18: bare separated-ISO date value parses"
+            " correctly on both sides but via a different mechanism/AST"
+            " shape (whoosh's ErrorNode-falls-back-to-field.parse_query vs"
+            " whoosh-compat's single DateParserPlugin grammar path)"
+        ),
+    ),
     # design: whoosh-compat's date grammar adds new keywords (previous week/
     # month/quarter/year) directly to the English grammar (see
     # parser.dateparse module docstring), usable as a single quoted phrase
@@ -157,9 +184,9 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             r"(?:previous (?:week|month|quarter|year)|this (?:month|year))\b"
         ),
         (
-            "design: unquoted multi-word date keywords need paperless's"
-            " app-level rewrite_natural_date_keywords preprocessing, out of"
-            " whoosh-compat's parser scope"
+            "DIVERGENCES.md entry 19: unquoted multi-word date keywords need"
+            " paperless's app-level rewrite_natural_date_keywords"
+            " preprocessing, out of whoosh-compat's parser scope"
         ),
     ),
     # design: a bare "*" wildcard on a field (`title:*`) whoosh-compat
@@ -174,8 +201,8 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(r":\*(?:\s|$)"),
         (
-            "design: bare field:* simplifies to Every(field) in whoosh-compat vs"
-            " a literal Wildcard('*') in whoosh"
+            "DIVERGENCES.md entry 20: bare field:* simplifies to Every(field) in"
+            " whoosh-compat vs a literal Wildcard('*') in whoosh"
         ),
     ),
     # whoosh-bug (DIVERGENCES.md entry 13): real whoosh's WildcardPlugin.do_wildcards

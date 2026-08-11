@@ -82,6 +82,31 @@ parse-then-emit pipeline).
     (see that test module's docstring for why an AST-level divergence
     doesn't always imply a different final result set).
 
+    The same missing-`ToEnd` root cause has a second, distinct symptom
+    beyond the tz bypass: `range_to_dt` accepts whatever prefix of a bound
+    string the first successful `Choice` alternative happens to consume,
+    instead of requiring the whole bound to match. For a separated bound
+    like `2020-06-15`, the `bundle` grammar's `datetime` Bag partial-matches
+    just the bare year `2020` (its `dmy` sub-choice's lone `self.year`
+    fallback, since the following `-` satisfies `year`'s
+    `(?=(\W|$))` lookahead) and `range_to_dt` silently accepts that partial
+    match instead of failing, so `created:[2020-06-15 TO 2020-06-20]`
+    collapses to the whole of 2020 in real whoosh (confirmed directly
+    against the oracle, see `tests/differential/corpus_paperless.txt`'s
+    comment on that corpus line). whoosh-compat's `range_to_node` now calls
+    `self.dateparser.date_from` (the `ToEnd`-wrapped form `text_to_node`
+    already used) instead of the bare grammar object's `date_from`, so a
+    partial match on either bound correctly fails (surfacing a `BAD_DATE`
+    diagnostic) rather than silently collapsing to whatever coarser
+    precision the first alternative happened to match. Combined with a
+    separate whoosh-compat bug fix to the `bundle` Choice's alternative
+    order (`simple` is now tried before `datetime`, so a partial `dmy`
+    year-only match can no longer starve the separated-numeric grammar of
+    input it needs; see `parser/dateparse.py`'s `English.__init__`), a
+    separated bound like `2020-06-15` now matches `simple` in full on the
+    first try, so this case parses correctly rather than erroring: see
+    `tests/test_parser_dates.py::test_range_bounds_do_not_collapse_to_year`.
+
 13. **`Wildcard.normalize()` bracket fold drops character classes (whoosh
     bug, not reproduced).** Real whoosh's `SPECIAL_CHARS` constant
     (`whoosh/query/terms.py`) is `"*?["`, but `Wildcard.normalize()` (same
@@ -168,8 +193,8 @@ parse-then-emit pipeline).
 
 16. **Several AST-level divergences above do not change final search
     results for this project's fixtures (a finding, not a new divergence of
-    its own).** Entries 2 (wildcard case-folding order), the
-    `tag:'foo,bar'` comma-quote-literal design entry, and entry 12
+    its own).** Entries 2 (wildcard case-folding order), entry 17
+    (the `tag:'foo,bar'` comma-quote-literal design entry), and entry 12
     (date-range tz bypass) are all real at the *parsed-AST* level (what
     `tests/differential` compares) but were found, while building
     `tests/emitter/test_acceptance_e2e.py`, to not change the final doc-id
@@ -197,9 +222,111 @@ parse-then-emit pipeline).
 
     See `tests/emitter/test_acceptance_e2e.py`'s module docstring for the
     specific evidence (each case was verified by actually running both
-    pipelines, not by inspection). This does not mean entries 2/12/the
-    comma-quote entry are wrong or should be removed: they are still real,
-    reproducible AST-level divergences that a different fixture (e.g. dates
+    pipelines, not by inspection). This does not mean entries 2/12/17 are
+    wrong or should be removed: they are still real, reproducible
+    AST-level divergences that a different fixture (e.g. dates
     near a local-midnight boundary) could absolutely turn into a
     result-level divergence too; it just means none of *this* project's
     specific test data happens to expose that.
+
+17. **`tag:'foo,bar'` comma-quote-literal handling (design, formalizing what
+    entries 12/16 above already referred to by description before this
+    entry existed).** whoosh-compat's `CommaValuesPlugin` treats a *quoted*
+    comma-values field value as a single literal (`SingleQuotePlugin` marks
+    it `is_quoted`); real whoosh has no such plugin at all: a
+    `KEYWORD(commas=True)` field's analyzer always splits on commas at
+    *analysis* time, quoted or not, so `tag:'foo,bar'` still expands to
+    `tag:foo AND tag:bar` upstream in real whoosh. This is a whoosh-compat
+    feature whoosh never had, not a whoosh bug.
+
+    Test references: `tests/differential/allowlist.py`'s `tag:'foo,bar'`
+    entry; `tests/differential/corpus_docs.txt`'s `tag:'foo,bar'` line;
+    entry 16 above (this AST-level divergence doesn't change this
+    project's fixture's actual search results, since the emitter re-runs
+    the field's own comma-splitting `analyzer` over the quoted literal's
+    text at *emit* time anyway).
+
+18. **Bare (non-bracketed) separated-ISO date field values structurally
+    diverge from whoosh, even once numerically correct on both sides
+    (design).** Fixing the `bundle` Choice's alternative order (it tried the
+    `datetime` Bag before `simple`, so a separated date like `2020-01-01`
+    never reached `simple`, the only alternative built to handle
+    separators; see `parser/dateparse.py`'s `English.__init__`) makes
+    whoosh-compat's single date grammar parse `created:2020-01-01`
+    correctly and directly, producing a `DateRange` node the same way it
+    handles every other date value.
+
+    Real whoosh takes a different route to the same numeric answer:
+    `DateParserPlugin.text_to_dt` has the *same* grammar-ordering
+    limitation (confirmed directly: `LocalDateParser(tz).date_from
+    ("2020-01-01", basedate)` returns `None`, same partial-year-match
+    problem entry 12 describes for ranges), so it wraps the term node in an
+    `ErrorNode`. But `ErrorNode.query()` (`whoosh/qparser/syntax.py`) does
+    not give up: it calls the *original* wrapped node's own `.query()`
+    method regardless, which for an ordinary fielded term is
+    `FieldsPlugin`'s normal path straight to `DATETIME.parse_query`
+    (`whoosh/fields.py`), whoosh's field-level self-parse that strips
+    separators and slices the resulting digit string positionally. That
+    fallback computes the numerically correct day/month-precision range,
+    just as a `query.NumericRange`, not the `DateTimeNode`/`DateRangeNode`
+    shape `text_to_dt` would have produced had its own grammar succeeded.
+    `query.error_query` only *annotates* an `.error` attribute onto that
+    working query; it does not replace it.
+
+    whoosh-compat has no equivalent two-path architecture to replicate:
+    its `DateParserPlugin` is the *only* date-parsing mechanism (see
+    `parser/dateparse.py`'s module docstring), with no field-level
+    self-parse fallback behind it, so once the ordering bug is fixed its single grammar
+    path simply parses these values directly. The end value is the same
+    (both sides agree on the day/month the value denotes), but the AST
+    shape genuinely differs (`DateRange` vs. `NumericRange`), so this is a
+    real, allowlisted AST-level divergence, not a whoosh bug to avoid
+    reproducing.
+
+    Test references: `tests/differential/allowlist.py`'s bare
+    separated-ISO-date entry; `tests/differential/corpus_paperless.txt`'s
+    `created:2020-01-01` / `created:2020-01` / `created:'2020.01.01'`
+    lines; `tests/test_parser_dates.py::test_separated_iso_date_precision`
+    (direct unit coverage of whoosh-compat's own corrected value, decoupled
+    from the oracle comparison).
+
+19. **Unquoted multi-word natural-date keywords (`created:previous month`)
+    are out of whoosh-compat's parser scope (design).** whoosh-compat's
+    date grammar adds new keywords (`previous week`/`month`/`quarter`/
+    `year`) directly to the English grammar, usable as a single quoted
+    phrase value like whoosh's own multi-word values always require
+    (`created:"previous week"`). Real paperless-ngx v2 instead relied on an
+    *app-level* regex preprocessing pass in `DelayedFullTextQuery`
+    (`rewrite_natural_date_keywords`, `index.py`) that rewrites e.g.
+    `created:previous week` (unquoted) into an explicit bracket range
+    *before* whoosh ever sees the string; real whoosh's own grammar has no
+    native "previous week" support at all (not a whoosh bug: it never
+    claimed to have this feature). That preprocessing hack is
+    paperless-app-specific, not part of whoosh's (or whoosh-compat's)
+    parser proper, so it is out of scope for whoosh-compat's `parse()`:
+    unquoted multi-word keywords behave like any other unquoted
+    multi-word value (split at the first whitespace, one token per field).
+    The README's syntax table documents only the quoted form
+    (`created:'previous month'`) for exactly this reason.
+
+    Test references: `tests/differential/allowlist.py`'s
+    `previous (?:week|month|quarter|year)|this (?:month|year)` entry (the
+    oracle harness replicates the app-level rewrite, so only the
+    *unquoted* form is allowlisted; the quoted form is directly compared
+    and passes); `README.md`'s date syntax row.
+
+20. **A bare `field:*` wildcard simplifies to `Every(field)` rather than a
+    literal `Wildcard('*')` (design).** whoosh-compat's
+    `QueryParser.wildcard_query` treats the text being exactly `"*"` as a
+    special case that builds `ast.Every(field)` instead of an
+    `ast.Wildcard(field, "*")`; real whoosh's `WildcardPlugin` always
+    builds a literal `Wildcard` query object, with no such simplification.
+    Functionally equivalent (both match every document with a value in the
+    field), but a different AST shape, and a deliberately cheaper emitted
+    query on the tantivy side (`Every(field)` -> a fast-field
+    `exists_query`, or a `regex(".*")` fallback for non-fast TEXT/KEYWORD
+    fields, both cheaper than a literal wildcard scan; see
+    `emitters/tantivy_.py`'s `visit_every`).
+
+    Test references: `tests/differential/allowlist.py`'s `:\*(?:\s|$)`
+    entry; `tests/emitter/test_emit_patterns.py`'s `test_every_field`.
