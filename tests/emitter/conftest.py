@@ -149,6 +149,7 @@ def ereg():
             FieldSpec("created", FieldKind.DATE, date_only=True, fast=True),
             FieldSpec("added", FieldKind.DATETIME, fast=True),
             FieldSpec("has_tag", FieldKind.BOOLEAN_EXISTS, exists_target="tag_id"),
+            FieldSpec("has_tag_kw", FieldKind.BOOLEAN_EXISTS, exists_target="tag"),
             FieldSpec("notes", FieldKind.JSON, subpaths=("note", "user")),
         ]
     )

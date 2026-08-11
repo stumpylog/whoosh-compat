@@ -230,6 +230,106 @@ def test_boolean_exists_non_fast_text_target(value, expected):
     assert search_ids(index, q) == expected
 
 
+# -- BOOLEAN_EXISTS targeting a non-fast KEYWORD field (end-to-end) ---------
+
+
+def _non_fast_keyword_target_fixture():
+    """A standalone tantivy index/registry: a BOOLEAN_EXISTS field whose
+    exists_target is a non-fast KEYWORD field, actually searched.
+
+    Companion to ``_non_fast_text_target_fixture``: KEYWORD was already
+    handled by ``_exists_query``'s term-scan fallback at emit time before
+    this field's execution strategy was resolved once at registry
+    construction, but ``FieldRegistry`` only accepted fast=True or kind=TEXT
+    exists_target values, so this exact shape (non-fast KEYWORD) used to be
+    *rejected* at construction despite being fully executable at emit time.
+    It is now explicitly accepted.
+    """
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_text_field("label", stored=True)  # non-fast KEYWORD field
+    schema = sb.build()
+    index = tantivy.Index(schema)
+    w = index.writer()
+    for id_, label in [(1, "urgent"), (2, ""), (3, "!!!"), (4, "   ")]:
+        doc = tantivy.Document()
+        doc.add_unsigned("id", id_)
+        if label:
+            doc.add_text("label", label)
+        w.add_document(doc)
+    w.commit()
+    index.reload()
+
+    registry = FieldRegistry(
+        [
+            FieldSpec("label", FieldKind.KEYWORD),
+            FieldSpec("has_label", FieldKind.BOOLEAN_EXISTS, exists_target="label"),
+        ]
+    )
+    return index, schema, registry
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        pytest.param(True, [1], id="exists-true-matches-doc-with-label"),
+        pytest.param(
+            False,
+            [2, 3, 4],
+            id="exists-false-matches-doc-without-label-and-untokenizable-values",
+        ),
+    ],
+)
+def test_boolean_exists_non_fast_keyword_target(value, expected):
+    index, schema, registry = _non_fast_keyword_target_fixture()
+    node = ast.Term(field="has_label", text=value)
+    q = emit_(node, index=index, schema=schema, registry=registry)
+    assert search_ids(index, q) == expected
+
+
+def test_registry_rejects_non_fast_non_text_non_keyword_exists_target():
+    """A non-fast, non-TEXT, non-KEYWORD exists_target (e.g. a non-fast U64
+    field) has no way to answer 'exists' at all: regex_query only matches a
+    text/string field, and exists_query requires a fast field. This is now
+    rejected at registry construction rather than surfacing later as an
+    UnsupportedQueryError (or an opaque tantivy error) at emit/search time.
+    """
+    with pytest.raises(ValueError, match="has_pages"):
+        FieldRegistry(
+            [
+                FieldSpec("page_count", FieldKind.U64),  # not fast, not TEXT/KEYWORD
+                FieldSpec("has_pages", FieldKind.BOOLEAN_EXISTS, exists_target="page_count"),
+            ]
+        )
+
+
+# -- Every(field) and BOOLEAN_EXISTS agree on the same field -----------------
+
+
+def test_every_field_and_boolean_exists_agree(tindex, ereg):
+    """``field:*`` (Every(field)) and a BOOLEAN_EXISTS field targeting the
+    *same* field return the exact same document set, because both go
+    through ``_exists_query`` reading the single strategy the registry
+    resolved for that field (``ereg``'s ``has_tag_kw`` targets ``tag``
+    itself), not two independently-derived answers.
+    """
+    every_q = emit_ast(ast.Every(field="tag"), tindex, ereg)
+    boolean_exists_q = emit_ast(ast.Term(field="has_tag_kw", text=True), tindex, ereg)
+    assert search_ids(tindex[0], every_q) == search_ids(tindex[0], boolean_exists_q) == [1, 2, 4]
+
+
+def test_every_field_and_boolean_exists_agree_across_targets(tindex, ereg):
+    """The same "has tags" condition, reached through two different targets
+    with two different resolved strategies (``has_tag`` -> the fast U64
+    ``tag_id`` presence marker -> FAST_FIELD, ``tag:*`` -> the non-fast
+    KEYWORD ``tag`` field -> TERM_SCAN), still agrees on the document set:
+    both answer the same real-world question about the same docs.
+    """
+    every_q = emit_ast(ast.Every(field="tag"), tindex, ereg)
+    boolean_exists_q = emit_ast(ast.Term(field="has_tag", text=True), tindex, ereg)
+    assert search_ids(tindex[0], every_q) == search_ids(tindex[0], boolean_exists_q) == [1, 2, 4]
+
+
 def test_nothing(tindex, ereg):
     q = emit_ast(ast.Nothing(), tindex, ereg)
     assert search_ids(tindex[0], q) == []

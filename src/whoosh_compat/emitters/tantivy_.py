@@ -30,6 +30,7 @@ import tantivy
 from whoosh_compat import ast
 from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.fields import ExistsStrategy
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import Multitoken
@@ -457,21 +458,27 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         term emission (``visit_term``, for a field whose ``exists_target``
         is ``spec``), so the two stay consistent about what "exists" means
         for a given field kind rather than drifting into two answers for
-        the same question.
+        the same question. Dispatches purely on the strategy resolved by
+        ``FieldRegistry`` at construction time; this method contains no
+        field-kind or fastness logic of its own. A registry that accepted a
+        BOOLEAN_EXISTS spec guarantees its target resolves to a strategy,
+        since ``FieldRegistry`` rejects one whose target has none.
         """
-        if spec.fast:
-            # exists_query is a cheap fast-field presence check, but it only
-            # works on fast fields (tantivy errors out otherwise).
+        strategy = self.registry.exists_strategy(spec)
+        if strategy is ExistsStrategy.FAST_FIELD:
+            # exists_query is a cheap fast-field presence check.
             return tantivy.Query.exists_query(spec.name)
-        if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
+        if strategy is ExistsStrategy.TERM_SCAN:
             # Non-fast TEXT/KEYWORD fields: "has any term at all" via a
             # regex that matches every term in the field's dictionary.
             return tantivy.Query.regex_query(self.schema, spec.name, ".*")
-        # Any other non-fast kind (U64, DATE, DATETIME, BOOLEAN_EXISTS, ...):
-        # regex_query only matches against a tantivy text/string field, so
-        # this fallback would build a query that dies at tantivy search
-        # time rather than emit time. Report it clearly instead of letting
-        # that surface later as an opaque tantivy error.
+        # No resolved strategy (a non-fast field of any other kind, e.g.
+        # U64, DATE, DATETIME, BOOLEAN_EXISTS, ...): regex_query only
+        # matches against a tantivy text/string field, so a fallback here
+        # would build a query that dies at tantivy search time rather than
+        # emit time. Report it clearly instead. Only reachable via
+        # ``_range_query``'s open-both-sides delegation (a spec that hasn't
+        # gone through BOOLEAN_EXISTS's registry check).
         raise UnsupportedQueryError(
             f"field {spec.name!r} ({spec.kind.name}) has no way to match"
             f" 'exists' while non-fast: mark it fast=True to support"
