@@ -403,7 +403,13 @@ class QueryParser:
                 return ast.Boosted(node, boost) if boost != 1.0 else node
 
             if spec.kind is FieldKind.BOOLEAN_EXISTS:
-                truthy = text.lower() not in ("f", "false", "no", "0")
+                # Stripped to agree with the emitter's _is_truthy (issue
+                # #24): without this, a quoted value with padding
+                # whitespace (e.g. "'  false  '") parsed as truthy here but
+                # would read as falsy if the same text reached _is_truthy
+                # directly (a hand-built ast.Term), a silent disagreement
+                # between the two.
+                truthy = text.strip().lower() not in ("f", "false", "no", "0")
                 node = ast.Term(field=ref, text=truthy)
                 return ast.Boosted(node, boost) if boost != 1.0 else node
 

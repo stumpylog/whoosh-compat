@@ -6,6 +6,7 @@ from datetime import datetime
 import pytest
 
 from whoosh_compat import ast
+from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.fields import FieldRef
 
@@ -100,3 +101,25 @@ def test_range_open_on_both_sides_means_field_exists(tindex, ereg):
     node = ast.NumericRange(field=FieldRef("asn"), lo=None, hi=None, incl_lo=True, incl_hi=True)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1, 2, 3, 4, 5]
+
+
+# -- issue #24: a hand-built (not just parsed) AST node with a bad bound
+# -- must never let a raw exception escape emit(); parsed input can't reach
+# -- these shapes (the parser always diagnoses a bad numeric bound), but a
+# -- host constructing ast.NumericRange/ast.DateRange directly can.
+
+
+def test_numeric_range_non_numeric_bound_raises_query_emit_error(tindex, ereg):
+    node = ast.NumericRange(
+        field=FieldRef("asn"), lo="notanumber", hi=None, incl_lo=True, incl_hi=True
+    )
+    with pytest.raises(QueryEmitError, match="notanumber"):
+        emit_ast(node, tindex, ereg)
+
+
+def test_date_range_non_datetime_bound_raises_query_emit_error(tindex, ereg):
+    node = ast.DateRange(
+        field=FieldRef("created"), lo="not-a-datetime", hi=None, incl_lo=True, incl_hi=True
+    )
+    with pytest.raises(QueryEmitError, match="not-a-datetime"):
+        emit_ast(node, tindex, ereg)

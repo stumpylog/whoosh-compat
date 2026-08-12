@@ -141,6 +141,17 @@ def test_bool_words(reg):
     )  # truthy fallback
 
 
+def test_bool_word_truthy_check_strips_whitespace(reg):
+    # issue #24: term_query's own truthy coercion didn't strip whitespace,
+    # while the emitter's _is_truthy (used for hand-built AST nodes) did:
+    # a parsed "  false  " (quoted, so whitespace survives into the term
+    # text) incorrectly parsed as truthy, disagreeing with what emit()
+    # would say about the identical text handed to it directly. Made to
+    # agree by stripping in both places.
+    assert parse("has_tag:'  false  '", reg) == ast.Term(field=FieldRef("has_tag"), text=False)
+    assert parse("has_tag:'  yes  '", reg) == ast.Term(field=FieldRef("has_tag"), text=True)
+
+
 def test_json_subpath(reg):
     assert parse("notes.user:alice", reg) == ast.Term(field=FieldRef("notes", "user"), text="alice")
 

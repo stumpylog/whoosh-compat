@@ -257,7 +257,26 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         self._json_paths_ok: bool | None = None
 
     def emit(self, node: ast.Node) -> tantivy.Query:
-        return self.visit(node)
+        """Emit ``node``, guaranteeing the documented exception contract.
+
+        Most invalid-input shapes get a specific, well-messaged
+        ``QueryEmitError``/``UnsupportedQueryError`` from the ``visit_*``
+        method that first notices them. This is the backstop for the rest:
+        a hand-built (not just parsed) AST can carry a value of the wrong
+        type or shape for its field's kind in ways no single ``visit_*``
+        method specifically checks for (e.g. a non-numeric ``Boosted.boost``,
+        which every kind can carry, or a future tantivy-py call this doesn't
+        yet special-case); the underlying tantivy-py call then raises a
+        bare ``ValueError``/``TypeError``/``AttributeError`` instead of one
+        of the two documented types (issue #24). Converting here, once,
+        keeps every individual ``visit_*`` method free to just let its own
+        tantivy-py calls raise naturally rather than needing its own
+        try/except for cases already covered by this backstop.
+        """
+        try:
+            return self.visit(node)
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise QueryEmitError(f"cannot emit query: {exc}") from exc
 
     # -- helpers -----------------------------------------------------
 
@@ -548,7 +567,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             return self._text_term_query(spec, tokens)
 
         if spec.kind is FieldKind.U64:
-            return tantivy.Query.term_query(self.schema, spec.name, int(node.text))
+            try:
+                value = int(node.text)
+            except (TypeError, ValueError) as exc:
+                raise QueryEmitError(
+                    f"{node.text!r} is not a valid number for {spec.name!r}"
+                ) from exc
+            return tantivy.Query.term_query(self.schema, spec.name, value)
 
         if spec.kind is FieldKind.BOOLEAN_EXISTS:
             # exists_target is always a plain (non-JSON) canonical field
@@ -565,8 +590,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 f"address a subpath (e.g. {spec.name}.<subpath>)"
             )
 
-        raise NotImplementedError(
-            f"Term emission for field kind {spec.kind.name} is not implemented"
+        raise UnsupportedQueryError(
+            f"term emission for field kind {spec.kind.name} is not implemented"
         )
 
     def visit_phrase(self, node: ast.Phrase) -> tantivy.Query:
@@ -630,8 +655,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 f"address a subpath (e.g. {spec.name}.<subpath>)"
             )
 
-        raise NotImplementedError(
-            f"Phrase emission for field kind {spec.kind.name} is not implemented"
+        raise UnsupportedQueryError(
+            f"phrase emission for field kind {spec.kind.name} is not implemented"
         )
 
     def visit_prefix(self, node: ast.Prefix) -> tantivy.Query:
@@ -682,15 +707,26 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
     def visit_numericrange(self, node: ast.NumericRange) -> tantivy.Query:
         spec = self._resolve(node.field)
-        lo = None if node.lo is None else int(node.lo)
-        hi = None if node.hi is None else int(node.hi)
+        try:
+            lo = None if node.lo is None else int(node.lo)
+            hi = None if node.hi is None else int(node.hi)
+        except (TypeError, ValueError) as exc:
+            raise QueryEmitError(
+                f"numeric range bound is not a valid number for {spec.name!r}: {exc}"
+            ) from exc
         # Currently numeric fields are U64 only.
         return self._range_query(spec, tantivy.FieldType.Unsigned, lo, hi, node)
 
     def visit_daterange(self, node: ast.DateRange) -> tantivy.Query:
         spec = self._resolve(node.field)
-        lo = None if node.lo is None else _to_naive_utc(node.lo)
-        hi = None if node.hi is None else _to_naive_utc(node.hi)
+        try:
+            lo = None if node.lo is None else _to_naive_utc(node.lo)
+            hi = None if node.hi is None else _to_naive_utc(node.hi)
+        except AttributeError as exc:
+            bad = node.lo if node.lo is not None and not hasattr(node.lo, "tzinfo") else node.hi
+            raise QueryEmitError(
+                f"date range bound {bad!r} is not a valid datetime for {spec.name!r}"
+            ) from exc
         return self._range_query(spec, tantivy.FieldType.Date, lo, hi, node)
 
     # -- boolean combinators --------------------------------------------

@@ -6,6 +6,7 @@ import tantivy
 
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import emit as emit_
+from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -387,6 +388,20 @@ def test_boosted(tindex, ereg):
     node = ast.Boosted(child=ast.Term(field=FieldRef("content"), text="invoice"), boost=2.0)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
+
+
+def test_boosted_bad_boost_type_raises_query_emit_error(tindex, ereg):
+    # issue #24: a safety-net case, not one of the individually-fixed
+    # branches: tantivy.Query.boost_query itself raises a bare TypeError
+    # for a non-numeric boost (only reachable via a hand-built AST; the
+    # parser's own BoostPlugin only ever produces a float). Caught by
+    # TantivyEmitter.emit()'s top-level (ValueError, TypeError,
+    # AttributeError) -> QueryEmitError conversion, which exists precisely
+    # to guarantee the "never a bare exception" contract for shapes that
+    # don't have (and don't need) their own specific handling.
+    node = ast.Boosted(child=ast.Term(field=FieldRef("content"), text="invoice"), boost="bad")
+    with pytest.raises(QueryEmitError):
+        emit_ast(node, tindex, ereg)
 
 
 def test_boosted_group_child_with_tokens_is_wrapped(tindex, ereg):

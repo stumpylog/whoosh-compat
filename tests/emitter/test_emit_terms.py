@@ -4,6 +4,7 @@ import tantivy
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.errors import QueryEmitError
+from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -42,6 +43,25 @@ def test_multitoken_and(tindex, ereg):
 def test_u64(tindex, ereg):
     q = emit_ast(ast.Term(field=FieldRef("asn"), text=100), tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
+
+
+def test_u64_term_non_numeric_text_raises_query_emit_error(tindex, ereg):
+    # issue #24: parsed input can't reach this (term_query diagnoses a bad
+    # U64 value at parse time), but a hand-built ast.Term can. visit_phrase's
+    # U64 branch already wrapped int(); visit_term's didn't.
+    node = ast.Term(field=FieldRef("asn"), text="notanumber")
+    with pytest.raises(QueryEmitError, match="notanumber"):
+        emit_ast(node, tindex, ereg)
+
+
+def test_date_kind_term_raises_unsupported_query_error(tindex, ereg):
+    # issue #24: DATE/DATETIME term emission was never implemented (the
+    # parser always converts these via DateParserPlugin first), but a
+    # hand-built ast.Term addressing a DATE field bypasses that; it used to
+    # raise a bare NotImplementedError.
+    node = ast.Term(field=FieldRef("created"), text="2020-01-01")
+    with pytest.raises(UnsupportedQueryError, match="DATE"):
+        emit_ast(node, tindex, ereg)
 
 
 def test_zero_token_term_dropped(tindex, ereg):

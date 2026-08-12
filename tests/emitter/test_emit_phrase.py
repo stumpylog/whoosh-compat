@@ -260,6 +260,14 @@ def test_phrase_on_bare_json_field_raises_query_emit_error(tindex, ereg):
         emit_ast(node, tindex, ereg)
 
 
+def test_date_kind_phrase_raises_unsupported_query_error(tindex, ereg):
+    # issue #24: same NotImplementedError -> UnsupportedQueryError fix as
+    # visit_term's DATE/DATETIME fallback.
+    node = ast.Phrase(field=FieldRef("created"), text="2020-01-01", slop=1)
+    with pytest.raises(UnsupportedQueryError, match="DATE"):
+        emit_ast(node, tindex, ereg)
+
+
 # -- exception contract: every field kind x quoted (Phrase) input either
 # -- emits or raises a documented exception type, never a bare ValueError ---
 
