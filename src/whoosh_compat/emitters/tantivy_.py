@@ -405,45 +405,51 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             return self._tokens(spec, node.text)
         return None
 
+    def _node_drops(self, node: ast.Node) -> bool:
+        """Whether ``node`` would drop entirely from an enclosing And/Or
+        group: a zero-token analyzed TEXT/KEYWORD term (plain or JSON
+        subpath), a zero-token analyzed Phrase, a nested And/Or group whose
+        own children all drop, or any of those under one or more
+        transparent ``Boosted`` layers.
+
+        A pure predicate: it only tokenizes (``_term_drop_tokens``/
+        ``_tokens``), never builds a query, so ``_group_child`` can check
+        drop-ness without paying for a full, discarded emission of the
+        subtree first (issue #6: the previous approach re-emitted every
+        surviving subtree once per enclosing nesting level, doubling work
+        per level of alternating And/Or nesting, exponential in depth).
+        Every node is still visited/emitted at most once overall: this
+        predicate only tokenizes, and ``_group_child`` calls ``self.visit``
+        at most once, for the (at most one) top-level call on a given node.
+        """
+        if isinstance(node, ast.Boosted):
+            return self._node_drops(node.child)
+        if isinstance(node, ast.Term):
+            tokens = self._term_drop_tokens(node)
+            return tokens is not None and not tokens
+        if isinstance(node, ast.Phrase):
+            spec = self._resolve(node.field)
+            return not self._tokens(spec, node.text)
+        if isinstance(node, (ast.And, ast.Or)):
+            return all(self._node_drops(c) for c in node.children)
+        return False
+
     def _group_child(self, child: ast.Node) -> tantivy.Query | None:
         """Visit a direct child of an And/Or group.
 
-        Returns ``None`` when the child: possibly wrapped in one or more
-        transparent ``Boosted`` layers: is a zero-token analyzed TEXT/
-        KEYWORD term (plain or JSON subpath), a zero-token analyzed Phrase,
-        or a nested And/Or group whose own children all dropped: such a
-        node is dropped from its enclosing group entirely (whoosh's own
-        behavior when a field's analyzer consumes a value completely, e.g.
-        an all-stopword value). Without the nested-group case, a group like
-        ``invoice AND ("the" OR "a")`` under a stopword analyzer would emit
-        the inner ``Or`` as a live ``Query.empty_query()`` (see
-        ``visit_or``'s "no children survived" branch) which, as a required
-        clause of the outer ``And``, would wrongly match nothing instead of
-        just dropping out and leaving "invoice" to match on its own.
-        ``Boosted`` is unwrapped recursively (rather than only checking a
-        direct ``ast.Term``/``ast.Phrase``/``ast.And``/``ast.Or`` child) so
-        ``Boosted(Boosted(Term(...)))``, ``Boosted(Or(all-dropped))`` and
-        similar shapes at any nesting depth are still dropped correctly
-        instead of turning into a live-but-unmatchable
-        ``boost_query(empty_query(), ...)`` clause that would wrongly
-        restrict an enclosing And.
+        Returns ``None`` when ``child`` drops entirely (see
+        ``_node_drops``): such a node is dropped from its enclosing group
+        entirely (whoosh's own behavior when a field's analyzer consumes a
+        value completely, e.g. an all-stopword value). Without the
+        nested-group case, a group like ``invoice AND ("the" OR "a")``
+        under a stopword analyzer would emit the inner ``Or`` as a live
+        ``Query.empty_query()`` (see ``visit_or``'s "no children survived"
+        branch) which, as a required clause of the outer ``And``, would
+        wrongly match nothing instead of just dropping out and leaving
+        "invoice" to match on its own.
         """
-        if isinstance(child, ast.Boosted):
-            inner = self._group_child(child.child)
-            if inner is None:
-                return None
-            return tantivy.Query.boost_query(inner, child.boost)
-        if isinstance(child, ast.Term):
-            tokens = self._term_drop_tokens(child)
-            if tokens is not None and not tokens:
-                return None
-        elif isinstance(child, ast.Phrase):
-            spec = self._resolve(child.field)
-            if not self._tokens(spec, child.text):
-                return None
-        elif isinstance(child, (ast.And, ast.Or)):
-            if not any(self._group_child(c) is not None for c in child.children):
-                return None
+        if self._node_drops(child):
+            return None
         return self.visit(child)
 
     # -- leaves --------------------------------------------------------

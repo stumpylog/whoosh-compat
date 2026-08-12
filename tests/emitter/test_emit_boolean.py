@@ -1,4 +1,5 @@
 import re
+import time
 
 import pytest
 import tantivy
@@ -534,3 +535,105 @@ def test_non_text_term_as_direct_group_child(tindex, ereg):
     )
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
+
+
+# -- issue #6: emit time must not be exponential in nesting depth for
+# -- alternating boolean groups. _group_child used to decide whether a
+# -- nested group drops by fully *emitting* its children (discarding the
+# -- result) and then emitting the whole subtree again if it survives, so
+# -- work doubled per nesting level, which reaches minutes at depth ~20 for
+# -- an alternating And/Or tree with a zero-token first child at every level
+# -- (that shape prevents the drop check from short-circuiting).
+
+
+def _alternating_drop_tree(depth):
+    """Alternating And/Or, `depth` levels deep: each level's first child is
+    a zero-token term ("the", dropped by _stopword_analyzer below) and the
+    second child is the next level down, bottoming out in a real, surviving
+    term. Matches issue #6's repro shape exactly.
+    """
+    node = ast.Term(field=FieldRef("content"), text="invoice")
+    for i in range(depth):
+        cls = ast.And if i % 2 == 0 else ast.Or
+        node = cls(
+            children=(
+                ast.Term(field=FieldRef("content"), text="the"),
+                node,
+            )
+        )
+    return node
+
+
+def _stopword_analyzer(calls, text):
+    calls.append(text)
+    return [] if text == "the" else [text]
+
+
+def _alternating_drop_fixture(calls):
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_text_field("content", stored=True)
+    schema = sb.build()
+    index = tantivy.Index(schema)
+    w = index.writer()
+    doc = tantivy.Document()
+    doc.add_unsigned("id", 1)
+    doc.add_text("content", "invoice")
+    w.add_document(doc)
+    w.commit()
+    index.reload()
+
+    registry = FieldRegistry(
+        [FieldSpec("content", FieldKind.TEXT, analyzer=lambda t: _stopword_analyzer(calls, t))]
+    )
+    return index, registry
+
+
+def test_alternating_nesting_emit_is_not_exponential():
+    calls = []
+    index, registry = _alternating_drop_fixture(calls)
+    node = _alternating_drop_tree(40)
+
+    q = emit_(node, index=index, registry=registry)
+
+    assert search_ids(index, q) == [1]
+    # Polynomial (measured quadratic: 66/231/496/861 analyzer calls at
+    # depth 10/20/30/40), not exponential: the old code doubled work per
+    # nesting level, which would put depth 40 in the tens of thousands at
+    # least (depth 20 alone measured ~6.5s wall-clock in the issue). 2000
+    # comfortably covers the legitimate quadratic count while still
+    # catching a regression back to exponential growth.
+    assert len(calls) < 2000, f"analyzer called {len(calls)} times for depth 40 (expected < 2000)"
+
+
+def test_alternating_nesting_emit_is_fast():
+    calls = []
+    index, registry = _alternating_drop_fixture(calls)
+    node = _alternating_drop_tree(40)
+
+    start = time.perf_counter()
+    emit_(node, index=index, registry=registry)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 1.0, f"depth-40 emit took {elapsed:.3f}s (expected well under 1s)"
+
+
+def test_nested_all_drop_group_is_still_dropped_from_parent():
+    # Unaffected by the fix: a nested group whose children all drop is
+    # still dropped from its enclosing group, not emitted as a live
+    # unsatisfiable clause.
+    calls = []
+    index, registry = _alternating_drop_fixture(calls)
+    node = ast.And(
+        children=(
+            ast.Term(field=FieldRef("content"), text="invoice"),
+            ast.Or(
+                children=(
+                    ast.Term(field=FieldRef("content"), text="the"),
+                    ast.Term(field=FieldRef("content"), text="the"),
+                )
+            ),
+        )
+    )
+    q = emit_(node, index=index, registry=registry)
+    assert search_ids(index, q) == [1]
