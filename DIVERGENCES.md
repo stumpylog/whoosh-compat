@@ -664,3 +664,33 @@ parse-then-emit pipeline).
     `tests/emitter/test_emit_boolean.py`'s
     `test_every_field_on_the_boolean_exists_field_itself` cover the
     double-quoted and bare-star forms directly, without the oracle.
+
+29. **A wildcard/prefix pattern on a numeric field is diagnosed at parse
+    time, not silently mangled (whoosh-bug, not reproduced; issue #17).**
+    Real whoosh's `WildcardPlugin`, for a NUMERIC field, silently drops the
+    wildcard character(s) and searches whatever's left as a literal exact
+    value: confirmed directly against the oracle, `type_id:1*` parses to
+    `Term('type_id', <bytes for the int 1>)`, not a rejected query and not
+    an actual wildcard search. A user typing `asn:1*` almost certainly
+    means "starts with 1", and getting silently narrowed to "is exactly 1"
+    with no error is a defect, not intended semantics, so it is not
+    reproduced. whoosh-compat instead reports a `DiagnosticKind.UNKNOWN`
+    diagnostic and an `ErrorLeaf`, the same shape `BAD_NUMBER`/`BAD_DATE`
+    already use for other invalid-input-on-parse cases, so a host can
+    surface it as a 400 instead of a wildcard that quietly means something
+    else, or later dies at tantivy search time (`regex_query` doesn't work
+    against a numeric field at all).
+
+    A bare `field:*` (the "*"-alone existence-match special case, entry 20
+    and issue #16) is unaffected: this entry is specifically about a
+    genuine wildcard *pattern* (`?`, multiple/leading `*`, or a bracket
+    class), checked only after the "*"-alone case has already been
+    handled.
+
+    Test references: `tests/test_parser_fields.py`'s
+    `test_wildcard_on_u64_field_is_diagnosed` (trailing-star prefix fold,
+    `?`, a bracket-class wildcard, and a leading star) and
+    `test_bare_star_on_u64_field_is_still_an_existence_match`;
+    `tests/differential/corpus_docs.txt`'s issue #17 section (skips via the
+    existing entry 6 diagnostics-present check, same as any other
+    parse-time diagnostic).

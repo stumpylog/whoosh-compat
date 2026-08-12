@@ -173,7 +173,8 @@ class WildcardPlugin(TaggingPlugin):
 
         def query(self, parser: Any) -> ast.Node:
             fieldname = self.fieldname or getattr(parser, "fieldname", None)
-            q = parser.prefix_query(fieldname, self.text, boost=self.boost)
+            q = parser.prefix_query(fieldname, self.text, boost=self.boost,
+                                     startchar=self.startchar, endchar=self.endchar)
             return attach(q, self)
 
     class WildcardNode(syntax.TextNode):
@@ -191,7 +192,8 @@ class WildcardPlugin(TaggingPlugin):
 
         def query(self, parser: Any) -> ast.Node:
             fieldname = self.fieldname or getattr(parser, "fieldname", None)
-            q = parser.wildcard_query(fieldname, self.text, boost=self.boost)
+            q = parser.wildcard_query(fieldname, self.text, boost=self.boost,
+                                       startchar=self.startchar, endchar=self.endchar)
             return attach(q, self)
 
     nodetype = WildcardNode

@@ -502,8 +502,42 @@ class QueryParser:
         )
         return ast.Boosted(result, boost) if boost != 1.0 else result
 
+    def _wildcard_kind_diagnostic(
+        self, ref: FieldRef | None, text: str, startchar: int | None, endchar: int | None
+    ) -> ast.ErrorLeaf | None:
+        """Diagnoses a wildcard/prefix pattern on a field kind that can't
+        support one, or ``None`` if the field is fine with it.
+
+        Real whoosh silently drops the wildcard character and searches the
+        (mangled) literal prefix instead on a NUMERIC field (verified
+        against the oracle: ``type_id:1*`` parses to ``Term('type_id',
+        <bytes for int 1>)``, not a rejected query or a wildcard search):
+        a whoosh defect, not intended semantics, so it is not reproduced
+        here (issue #17). Diagnosing at parse time instead of letting it
+        fail at tantivy search time matches the rest of this parser's
+        invalid-input contract (BAD_NUMBER, BAD_DATE).
+
+        Scoped to U64 only: this is called after the ``text == "*"``
+        existence-match special case (issue #16) has already been handled,
+        so it only ever sees a genuine wildcard *pattern*.
+        """
+
+        spec = self.registry.resolve(ref) if ref is not None else None
+        if spec is None or spec.kind is not FieldKind.U64:
+            return None
+        d = Diagnostic(
+            message=f"wildcard patterns are not supported on numeric field {ref}",
+            kind=DiagnosticKind.UNKNOWN,
+            startchar=startchar,
+            endchar=endchar,
+            field=ref,
+            raw_value=text,
+        )
+        self.report(d)
+        return ast.ErrorLeaf(diagnostic=d)
+
     def wildcard_query(
-        self, fieldname: str | None, text: str, boost: float = 1.0
+        self, fieldname: str | None, text: str, boost: float = 1.0, **kw: object
     ) -> ast.Node:
         """Returns the AST node for a wildcard query, applying whoosh's
         wildcard-simplification rules:
@@ -522,25 +556,42 @@ class QueryParser:
         """
 
         if not any(ch in text for ch in "*?"):
-            return self.term_query(fieldname, text, boost=boost)
+            return self.term_query(fieldname, text, boost=boost, **kw)
 
         ref = self.field_ref(fieldname)
         node: ast.Node
         if text == "*":
             node = ast.Every(field=ref)
-        elif _TRAILING_STAR_RE.match(text):
-            node = ast.Prefix(field=ref, text=text[:-1])
         else:
-            node = ast.Wildcard(field=ref, pattern=text)
+            err = self._wildcard_kind_diagnostic(
+                ref,
+                text,
+                kw.get("startchar"),  # type: ignore[arg-type]
+                kw.get("endchar"),  # type: ignore[arg-type]
+            )
+            if err is not None:
+                return err
+            if _TRAILING_STAR_RE.match(text):
+                node = ast.Prefix(field=ref, text=text[:-1])
+            else:
+                node = ast.Wildcard(field=ref, pattern=text)
 
         return ast.Boosted(node, boost) if boost != 1.0 else node
 
     def prefix_query(
-        self, fieldname: str | None, text: str, boost: float = 1.0
+        self, fieldname: str | None, text: str, boost: float = 1.0, **kw: object
     ) -> ast.Node:
         """Returns the AST node for a prefix query."""
 
         ref = self.field_ref(fieldname)
+        err = self._wildcard_kind_diagnostic(
+            ref,
+            text,
+            kw.get("startchar"),  # type: ignore[arg-type]
+            kw.get("endchar"),  # type: ignore[arg-type]
+        )
+        if err is not None:
+            return err
         node: ast.Node = ast.Prefix(field=ref, text=text)
         return ast.Boosted(node, boost) if boost != 1.0 else node
 

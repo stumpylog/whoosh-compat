@@ -89,6 +89,41 @@ def test_u64_boundary_range_bounds_still_parse(reg):
     )
 
 
+# -- issue #17: a wildcard/prefix pattern on a numeric field is diagnosed
+# -- at parse time rather than failing at search time. Real whoosh silently
+# -- drops the wildcard character and searches the (mangled) literal prefix
+# -- instead (verified against the oracle: `type_id:1*` parses to
+# -- `Term('type_id', <bytes for int 1>)`), which is a whoosh defect, not
+# -- intended semantics, so it is not reproduced here.
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("asn:1*", id="trailing-star-prefix-fold"),
+        pytest.param("asn:1?", id="question-mark-wildcard"),
+        pytest.param("asn:1[2-3]*", id="bracket-class-wildcard"),
+        pytest.param("asn:*1", id="leading-star-wildcard"),
+    ],
+)
+def test_wildcard_on_u64_field_is_diagnosed(reg, query):
+    r = wc.parse(query, registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics and r.diagnostics[0].kind is DiagnosticKind.UNKNOWN
+    assert r.diagnostics[0].field == FieldRef("asn")
+    # "1*" arrives here as "1": do_wildcards folds a trailing-star-only
+    # wildcard into a literal Prefix *before* query()/prefix_query ever run
+    # (the fold strips the "*", same as it would for a supported field kind).
+    assert r.diagnostics[0].raw_value in ("1", "1?", "1[2-3]*", "*1")
+
+
+def test_bare_star_on_u64_field_is_still_an_existence_match(reg):
+    # The "*"-alone case (issue #16, Every/existence) is unaffected: this
+    # entry is about a genuine wildcard *pattern*, not the bare-star
+    # simplification.
+    assert parse("asn:*", reg) == ast.Every(field=FieldRef("asn"))
+
+
 def test_bool_words(reg):
     for word in ("t", "TRUE", "yes", "1"):
         assert parse(f"has_tag:{word}", reg) == ast.Term(field=FieldRef("has_tag"), text=True)

@@ -53,11 +53,11 @@ class StubParser:
         n = ast.Term(field=self.field_ref(fieldname), text=text)
         return ast.Boosted(n, boost) if boost != 1.0 else n
 
-    def wildcard_query(self, fieldname: Any, text: Any, boost: float = 1.0) -> ast.Node:
+    def wildcard_query(self, fieldname: Any, text: Any, boost: float = 1.0, **kw: Any) -> ast.Node:
         self.wildcard_calls.append((fieldname, text, boost))
         return ast.Wildcard(field=self.field_ref(fieldname), pattern=text)
 
-    def prefix_query(self, fieldname: Any, text: Any, boost: float = 1.0) -> ast.Node:
+    def prefix_query(self, fieldname: Any, text: Any, boost: float = 1.0, **kw: Any) -> ast.Node:
         self.prefix_calls.append((fieldname, text, boost))
         return ast.Prefix(field=self.field_ref(fieldname), text=text)
 

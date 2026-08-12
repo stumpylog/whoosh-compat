@@ -45,6 +45,13 @@ type_id:'*'
 type_id:"*"
 has_tag:'*'
 
+# --- issue #17: a wildcard/prefix pattern on a numeric field is diagnosed
+# at parse time (DIVERGENCES.md entry 29); these skip via the existing
+# entry 6 diagnostics-present check like any other parse-time diagnostic.
+type_id:1*
+type_id:1?
+type_id:1[2-3]*
+
 # --- KNOWN DIVERGENCE (whoosh-bug, allowlist.py): bracketed date ranges
 # (see corpus_paperless.txt's matching section for the root cause).
 created:[2005 to 2009]
