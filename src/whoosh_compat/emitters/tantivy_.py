@@ -574,6 +574,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     def visit_wildcard(self, node: ast.Wildcard) -> tantivy.Query:
         spec = self._resolve(node.field)
         regex = glob_to_regex(str(node.pattern), spec.pattern_normalizer)
+        if "(?!)" in regex:
+            return tantivy.Query.empty_query()
         return tantivy.Query.regex_query(self.schema, spec.name, regex)
 
     def visit_termrange(self, node: ast.TermRange) -> tantivy.Query:

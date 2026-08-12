@@ -124,6 +124,11 @@ def test_glob_to_regex_escapes_class_internal_set_operators(tindex, ereg):
         # The exact wildcard shape from paperless-ngx issue #13568.
         pytest.param("title", TITLE_TOKENS, "*202[0-3]", [1, 4], id="13568-leading-star-class"),
         pytest.param("title", TITLE_TOKENS, "*201[0-9]", [2], id="13568-negated"),
+        # Reversed character range; produces empty regex pattern (?!) which
+        # tantivy doesn't support. Should emit a query matching nothing, not raise.
+        pytest.param("title", TITLE_TOKENS, "x[z-a]*", [], id="reversed-char-class-raises"),
+        # Other empty-class forms.
+        pytest.param("title", TITLE_TOKENS, "[]", [], id="empty-bracket-class"),
     ],
 )
 def test_wildcard_emission(tindex, ereg, field, tokens, pattern, expected):
