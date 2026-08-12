@@ -6,9 +6,17 @@ import pytest
 
 import whoosh_compat as wc
 from whoosh_compat import ast
+from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.fields import FieldRef
+from whoosh_compat.parser import dateparse as dp
+from whoosh_compat.parser import syntax
+from whoosh_compat.parser.dateparse import DateErrorNode
 from whoosh_compat.parser.dateparse import DateParserPlugin
+from whoosh_compat.parser.dateparse import DateRangeSyntaxNode
+from whoosh_compat.parser.dateparse import English
+from whoosh_compat.parser.times import adatetime
+from whoosh_compat.parser.times import timespan
 
 BERLIN = ZoneInfo("Europe/Berlin")
 BASE = datetime(2026, 8, 4, 10, 30, tzinfo=BERLIN)
@@ -459,9 +467,6 @@ def test_dateparser_parse_method_direct() -> None:
     # plugin's perspective (only .date_from() is called there too). It's
     # still a documented, non-trivial public method of the grammar classes,
     # so it's covered here directly rather than deleted.
-    from whoosh_compat.parser.dateparse import English
-    from whoosh_compat.parser.times import timespan
-
     parser = English()
     result, pos = parser.parse("2020", datetime(2026, 1, 1))
     # Unlike DateParserPlugin (which turns a period into an exclusive
@@ -479,8 +484,6 @@ def test_dateparser_parse_method_direct() -> None:
 
 
 def test_dateparse_internals_repr_and_debug() -> None:
-    from whoosh_compat.parser import dateparse as dp
-
     props = dp.Props(year=2020)
     assert repr(props) == repr({"year": 2020})
     with pytest.raises(AttributeError):
@@ -503,17 +506,12 @@ def test_parserbase_date_from_defaults_dt_to_now() -> None:
     # no dt is given. Production code (DateParserPlugin) always passes an
     # explicit basedate through DateParser.date_from(), so this default is
     # only reachable by calling a low-level element directly.
-    from whoosh_compat.parser import dateparse as dp
-
     regex = dp.Regex(r"(?P<year>[0-9]{4})", lambda p, dt: dt)
     result = regex.date_from("2020")
     assert result is not None
 
 
 def test_regex_props_to_date_default_uses_all_units() -> None:
-    from whoosh_compat.parser import dateparse as dp
-    from whoosh_compat.parser.times import adatetime
-
     regex = dp.Regex(r"(?P<year>[0-9]{4})")
     result, _ = regex.parse("2020", datetime(2026, 1, 1))
     assert result == adatetime(year=2020)
@@ -523,8 +521,6 @@ def test_dateparser_parse_exact_datetime_skips_disambiguation() -> None:
     # DateParser.parse()'s `if isinstance(d, (adatetime, timespan))` branch
     # is skipped when the grammar already resolves to an exact datetime
     # ("now"), rather than an ambiguous adatetime/timespan.
-    from whoosh_compat.parser.dateparse import English
-
     parser = English()
     dt = datetime(2026, 1, 1, 10, 30)
     result, _ = parser.parse("now", dt)
@@ -532,8 +528,6 @@ def test_dateparser_parse_exact_datetime_skips_disambiguation() -> None:
 
 
 def test_dateparser_date_from_defaults_and_toend_false() -> None:
-    from whoosh_compat.parser.dateparse import English
-
     parser = English()
     # basedate=None -> falls back to datetime.utcnow() internally.
     result = parser.date_from("2020")
@@ -545,11 +539,6 @@ def test_dateparser_date_from_defaults_and_toend_false() -> None:
 
 
 def test_daterangesyntaxnode_and_dateerrornode_r() -> None:
-    from whoosh_compat.errors import Diagnostic
-    from whoosh_compat.errors import DiagnosticKind
-    from whoosh_compat.parser.dateparse import DateErrorNode
-    from whoosh_compat.parser.dateparse import DateRangeSyntaxNode
-
     node = DateRangeSyntaxNode("added", datetime(2020, 1, 1), datetime(2020, 1, 2), True, False)
     assert node.r() == f"DateRange {datetime(2020, 1, 1)!r}-{datetime(2020, 1, 2)!r}"
 
@@ -592,8 +581,6 @@ def test_do_dates_leaves_non_range_non_text_date_field_node_untouched(reg) -> No
     # plugin set: FieldnameNode/RangeNode/TextNode are the only
     # has_fieldname=True node types, and FieldnameNode never survives as a
     # leaf. Exercised directly against a minimal stub node.
-    from whoosh_compat.parser import syntax
-
     class FieldOnlyNode(syntax.SyntaxNode):
         has_fieldname = True
 

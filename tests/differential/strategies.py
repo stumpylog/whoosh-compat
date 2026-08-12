@@ -34,6 +34,7 @@ drop path, wherever in the tree it lands.
 from __future__ import annotations
 
 import dataclasses
+import pathlib
 from collections.abc import Iterable
 
 from hypothesis import strategies as st
@@ -446,8 +447,6 @@ def seed_corpus(*paths: str) -> Iterable[str]:
 
     Used to build ``@example()`` seeds without duplicating the corpus.
     """
-
-    import pathlib
 
     here = pathlib.Path(__file__).parent
     for name in paths:

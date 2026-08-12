@@ -13,6 +13,7 @@ import pytest
 
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import TantivyEmitter
+from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -110,8 +111,6 @@ def test_dotted_field_that_is_not_a_json_subpath_falls_back_to_resolve(tindex, e
     # test_json_subpath_unknown_subpath_falls_back_to_plain_field, this
     # constructs the AST directly so it reaches the emitter rather than
     # being demoted by the parser first).
-    from whoosh_compat.errors import QueryEmitError
-
     node = ast.Term(field=FieldRef("notes", "bogus"), text="x")
     with pytest.raises(QueryEmitError, match="unknown field"):
         emit_ast(node, tindex, ereg)
