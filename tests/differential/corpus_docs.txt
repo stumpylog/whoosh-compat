@@ -25,6 +25,12 @@ tag:foo,bar
 has_tag:false
 -foo
 
+# --- issue #10: empty groups are dropped at parse time rather than
+# annihilating the enclosing query.
+shopname ()
+NOT ()
+shopname (() ())
+
 # --- KNOWN DIVERGENCE (whoosh-bug, allowlist.py): bracketed date ranges
 # (see corpus_paperless.txt's matching section for the root cause).
 created:[2005 to 2009]

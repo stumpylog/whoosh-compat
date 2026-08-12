@@ -313,6 +313,11 @@ def _bool_exists_atom(draw: st.DrawFn) -> str:
 
 _every_atom = st.sampled_from(["*", "*:*"] + [f"{f}:*" for f in TEXT_FIELDS + KEYWORD_FIELDS])
 
+# issue #10: a literal empty group, so _extend's combinators below can place
+# it (and nest it, and pair it with other leaves) anywhere in the tree, same
+# as any other awkward leaf this module generates.
+_empty_group_atom = st.just("()")
+
 
 def _leaves() -> st.SearchStrategy[str]:
     strategies: list[st.SearchStrategy[str]] = [
@@ -325,6 +330,7 @@ def _leaves() -> st.SearchStrategy[str]:
         _date_range_atom(),
         _bool_exists_atom(),
         _every_atom,
+        _empty_group_atom,
     ]
     if KEYWORD_FIELDS:
         strategies.append(_comma_atom())

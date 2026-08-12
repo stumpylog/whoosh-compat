@@ -366,6 +366,28 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " whoosh's grammar only supports this syntax inside a bracketed range"
         ),
     ),
+    # design (DIVERGENCES.md entry 27, found by the property-based fuzzer
+    # while fixing issue #10): ANDNOT/ANDMAYBE/REQUIRE whose positive/
+    # required/scored side analyzes to zero tokens, nested inside further
+    # grouping alongside a sibling clause, poisons the whole enclosing And
+    # on whoosh-compat's side but real whoosh drops it. Both sides agree
+    # the degenerate AndNot/AndMaybe/Require itself resolves to "match
+    # nothing"; the divergence is only in whether that Nothing propagates
+    # through an *enclosing* And (whoosh-compat's ast.normalize() "Nothing
+    # propagates through And" rule, deliberately kept as-is per issue #10)
+    # or gets dropped from it (real whoosh's And.normalize(), which drops a
+    # NullQuery child instead of poisoning). No corpus line uses ANDNOT/
+    # ANDMAYBE/REQUIRE at all (grep-verified), so this only affects the
+    # hypothesis fuzzers, which generate these operators freely.
+    (
+        re.compile(r"\bANDNOT\b|\bANDMAYBE\b|\bREQUIRE\b"),
+        (
+            "DIVERGENCES.md entry 27: ANDNOT/ANDMAYBE/REQUIRE with a"
+            " zero-token positive/required/scored side poisons an enclosing"
+            " And on whoosh-compat's side (Nothing-propagation algebra) but"
+            " is dropped on whoosh's"
+        ),
+    ),
 ]
 
 

@@ -593,3 +593,49 @@ parse-then-emit pipeline).
     `test_phrase_reversed_pair_slop_boundary` (pins the reversed-pair
     over-match boundary and confirms the default and slop=2 still agree
     with whoosh).
+
+27. **A degenerate `ANDNOT`/`ANDMAYBE`/`REQUIRE` operand poisons an
+    enclosing `And` on whoosh-compat's side but is dropped on whoosh's
+    (design, found by the property-based fuzzer while fixing issue #10).**
+    Issue #10 restored the rule that an empty group (`()`) drops out of the
+    tree at parse time instead of becoming a live `Nothing()`. Once a
+    literal empty group can appear as an `ANDNOT`/`ANDMAYBE`/`REQUIRE`
+    operand, so can a group whose only content analyzes to zero tokens
+    (e.g. `(0)`, a single character below `StandardAnalyzer`'s
+    `minsize=2`): both parse to the same "this operand resolves to
+    nothing" shape by the time `ast.normalize()` runs. Real whoosh's
+    `AndNot`/`AndMaybe`/`Require.normalize()` (`whoosh/query/compound.py`)
+    already implement the correct per-operator rule for that shape
+    (`AndNot`/`AndMaybe`: positive/required null -> `NullQuery`, negative/
+    optional null -> the other side; `Require`: either side null ->
+    `NullQuery`), which whoosh-compat's own `ast.normalize()` also
+    implements identically (see its `AndNot`/`AndMaybe`/`Require`
+    branches). The divergence is one level up: real whoosh's
+    `And.normalize()` drops a `NullQuery` child from an enclosing `And`
+    (verified directly: `And([Term('tag', '0'), And([])]).normalize() ==
+    Term('tag', '0')`), while whoosh-compat's `ast.normalize()` And rule
+    poisons instead (`any(isinstance(c, Nothing) ...) -> Nothing()`). This
+    is the same kind of deliberate divergence as entry 23's `Not(Nothing)
+    -> Every` (there, confirmed as "not a parity-preserving fallback"):
+    `tests/test_normalize.py` already pins the asymmetry directly (`And`
+    poisons on a `Nothing` child, `Or` drops one, `or-drops-nothing-child`),
+    which only makes sense as an intentional choice (AND with a provably
+    impossible clause is itself impossible; OR with one clause impossible
+    still has the others), not an oversight. Issue #10 explicitly keeps
+    this algebra rather than reproducing whoosh's fully transitive
+    drop-not-poison behavior for every compound type; this entry documents
+    the one new place (a literal empty group as an `ANDNOT`/`ANDMAYBE`/
+    `REQUIRE` operand) where that existing, deliberate rule now applies.
+
+    No line in `tests/differential/corpus_paperless.txt` or
+    `corpus_docs.txt` uses `ANDNOT`/`ANDMAYBE`/`REQUIRE` at all
+    (grep-verified), so this is only reachable through the property-based
+    fuzzers (`tests/differential/test_hypothesis.py`), which generate these
+    operators freely with arbitrary short (down to one character) words.
+
+    Test references: `tests/differential/allowlist.py`'s
+    `\bANDNOT\b|\bANDMAYBE\b|\bREQUIRE\b` entry; `tests/test_syntax.py`'s
+    `test_binarygroup_left_none_becomes_nothing_positive` and
+    `test_binarygroup_right_none_becomes_nothing_negative` pin the
+    corrected (and now real-whoosh-matching) per-node behavior at the
+    parser level directly.

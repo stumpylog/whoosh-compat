@@ -102,8 +102,12 @@ def test_notgroup() -> None:
     assert g.query(StubParser()) == ast.Not(ast.Term(field=None, text="a"))
 
 
-def test_empty_group_is_nothing() -> None:
-    assert syntax.AndGroup([]).query(StubParser()) == ast.Nothing()
+def test_empty_group_query_is_none() -> None:
+    # An empty group contributes nothing (issue #10): the caller drops it
+    # from an enclosing And/Or's subs exactly as if it had never been
+    # typed, rather than building a live ast.Nothing() that would then
+    # propagate through normalize()'s And/Not algebra.
+    assert syntax.AndGroup([]).query(StubParser()) is None
 
 
 def test_group_boost_wraps_in_boosted() -> None:
@@ -509,33 +513,53 @@ def test_groupnode_node_after_last_element_returns_none() -> None:
 
 
 # --- BinaryGroup / Wrapper edge branches -----------------------------------
+#
+# A missing operand (both here via a stub, or in practice via an empty
+# group, issue #10) becomes an explicit ast.Nothing() rather than falling
+# back to the other operand: ast.normalize() already implements each
+# node type's own real-whoosh null-operand rule (AndNot/AndMaybe: a null ->
+# Nothing, b null -> a; Require: either null -> Nothing), so query() builds
+# the raw node and leaves the reduction to normalize() rather than
+# duplicating (and, for the positive/required/scored side, getting wrong)
+# that algebra here.
 
 
-def test_binarygroup_both_none_is_nothing() -> None:
+def test_binarygroup_both_none_drops_like_group() -> None:
     class NoneNode(syntax.SyntaxNode):
         def query(self, parser: Any) -> ast.Node | None:
             return None
 
     group = syntax.AndNotGroup([NoneNode(), NoneNode()])
-    assert group.query(StubParser()) == ast.Nothing()
+    # Neither operand contributed anything: nothing to build, so this drops
+    # out entirely (like GroupNode's own empty case) rather than building a
+    # live AndNot(Nothing, Nothing) node.
+    assert group.query(StubParser()) is None
 
 
-def test_binarygroup_left_none_returns_right() -> None:
+def test_binarygroup_left_none_becomes_nothing_positive() -> None:
     class NoneNode(syntax.SyntaxNode):
         def query(self, parser: Any) -> ast.Node | None:
             return None
 
     group = syntax.AndNotGroup([NoneNode(), syntax.WordNode("b")])
-    assert group.query(StubParser()) == ast.Term(field=None, text="b")
+    q = group.query(StubParser())
+    assert q == ast.AndNot(positive=ast.Nothing(), negative=ast.Term(field=None, text="b"))
+    # Real whoosh: AndNot with an empty positive matches nothing, regardless
+    # of the negative side, not "just the negative side" (verified directly
+    # against whoosh.query.compound.AndNot.normalize).
+    assert ast.normalize(q) == ast.Nothing()
 
 
-def test_binarygroup_right_none_returns_left() -> None:
+def test_binarygroup_right_none_becomes_nothing_negative() -> None:
     class NoneNode(syntax.SyntaxNode):
         def query(self, parser: Any) -> ast.Node | None:
             return None
 
     group = syntax.AndNotGroup([syntax.WordNode("a"), NoneNode()])
-    assert group.query(StubParser()) == ast.Term(field=None, text="a")
+    q = group.query(StubParser())
+    assert q == ast.AndNot(positive=ast.Term(field=None, text="a"), negative=ast.Nothing())
+    # "a ANDNOT nothing" == "a".
+    assert ast.normalize(q) == ast.Term(field=None, text="a")
 
 
 def test_wrapper_returns_none_when_child_is_none() -> None:

@@ -157,3 +157,20 @@ def test_andnot_andmaybe_require(reg):
 def test_dangling_minus_tolerated(reg):
     t = parse("title:a - title:b", reg)  # '-' becomes a bare term, not an error
     assert isinstance(t, ast.And)
+
+
+# -- empty groups (issue #10): dropped at parse time, never entering the
+# -- tree, rather than becoming a live Nothing() that then propagates -------
+
+
+def test_empty_group_dropped_matches_bare_term(reg):
+    assert parse("foo ()", reg) == parse("foo", reg)
+
+
+def test_not_of_empty_group_matches_nothing(reg):
+    assert parse("NOT ()", reg) == ast.Nothing()
+
+
+def test_nested_and_repeated_empty_groups_behave_consistently(reg):
+    assert parse("foo (() ())", reg) == parse("foo", reg)
+    assert parse("(())", reg) == ast.Nothing()

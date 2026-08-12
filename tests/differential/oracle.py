@@ -404,10 +404,23 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
 
     if isinstance(q, wq.And):
         and_subs = [s for s in (_to_ast(c, reg) for c in q.subqueries) if s is not None]
+        # An empty And (whoosh's own raw parse of an empty group, e.g. the
+        # "()" in "foo ()") has no meaningful mapping on its own: real
+        # whoosh's And.normalize() drops a NullQuery/empty-compound child
+        # from an enclosing compound rather than annihilating it (verified
+        # directly: And([Term, And([])]).normalize() == Term), matching
+        # whoosh-compat's own parser, which now drops an empty group before
+        # it ever becomes a live AST node (issue #10). Building
+        # ast.And(children=()) here instead would resurrect the same
+        # annihilation this fix is about, purely as a harness artifact.
+        if not and_subs:
+            return None
         return ast.And(children=tuple(and_subs))
 
     if isinstance(q, wq.Or):
         or_subs = [s for s in (_to_ast(c, reg) for c in q.subqueries) if s is not None]
+        if not or_subs:  # see the And branch above
+            return None
         return ast.Or(children=tuple(or_subs))
 
     if isinstance(q, wq.Not):
@@ -591,16 +604,21 @@ def analyze_ast(node: ast.Node, reg: FieldRegistry) -> ast.Node:
     ``query()`` methods (``qa is None -> use qb``, etc; see
     ``whoosh.qparser.syntax``): a stopword inside ``foo AND the`` doesn't
     make the *whole* query match nothing, it just disappears as though it
-    was never typed. This deliberately differs from
-    :func:`whoosh_compat.ast.normalize`'s own rule that an *explicit*
-    ``Nothing()`` (e.g. a genuinely empty range) poisons an enclosing
-    ``And``: that's a different, real "no results" case, not a
-    dropped-token case, and conflating the two here would produce
-    normalize()-driven false mismatches like ``(title:0) AND (0)`` (a
-    single-char token whoosh's default analyzer drops as too short)
-    resolving to ``Nothing`` on whoosh-compat's side but to
-    ``Term('tag', '0')`` (the multifield OR's one surviving KEYWORD branch)
-    on whoosh's, since KEYWORD fields have no minsize filter.
+    was never typed, the same way an empty group does (issue #10). This
+    deliberately differs from :func:`whoosh_compat.ast.normalize`'s own
+    rule that an *explicit* ``Nothing()`` (e.g. a genuinely empty range)
+    poisons an enclosing ``And``: that's a different, real "no results"
+    case, not a dropped-token case. Conflating the two by building a
+    literal empty ``And()``/``Or()`` here and leaving it to
+    ``normalize()``'s "empty group -> Nothing" rule would produce
+    false mismatches like ``(title:0) AND (0)`` (a single-char token
+    whoosh's default analyzer drops as too short) resolving to ``Nothing``
+    on whoosh-compat's side but to ``Term('tag', '0')`` (the multifield
+    OR's one surviving KEYWORD branch) on whoosh's real side, since real
+    whoosh's own ``And.normalize()`` drops an empty-compound child from an
+    enclosing ``And`` instead of poisoning it (verified directly:
+    ``And([Term('tag', '0'), And([])]).normalize() == Term('tag', '0')``),
+    exactly like :func:`_to_ast`'s And/Or branches.
     """
 
     def go(n: ast.Node) -> ast.Node | None:
@@ -609,16 +627,14 @@ def analyze_ast(node: ast.Node, reg: FieldRegistry) -> ast.Node:
         if isinstance(n, ast.Phrase):
             return _analyzed_phrase(n, reg)
         if isinstance(n, ast.And):
-            # Mirrors whoosh's GroupNode.query(): a plain And/Or group
-            # *always* builds a (possibly empty) query object from whatever
-            # children survive analysis: it never itself disappears the
-            # way a Wrapper/BinaryGroup does. normalize()'s existing
-            # empty-group-> Nothing rule handles the all-dropped case
-            # identically on both sides of the comparison.
             subs = [s for s in (go(c) for c in n.children) if s is not None]
+            if not subs:  # see _to_ast's matching And/Or branches
+                return None
             return ast.And(children=tuple(subs))
         if isinstance(n, ast.Or):
             subs = [s for s in (go(c) for c in n.children) if s is not None]
+            if not subs:
+                return None
             return ast.Or(children=tuple(subs))
         if isinstance(n, ast.Not):
             child = go(n.child)
@@ -627,17 +643,30 @@ def analyze_ast(node: ast.Node, reg: FieldRegistry) -> ast.Node:
             a, b = go(n.positive), go(n.negative)
             if a is None and b is None:
                 return None
-            return b if a is None else (a if b is None else ast.AndNot(positive=a, negative=b))
+            # A missing side becomes an explicit Nothing() rather than
+            # falling back to the other operand: real whoosh's AndNot rule
+            # is "positive null -> Nothing" (not "just negative"),
+            # "negative null -> positive", and the final normalize() call
+            # below already implements exactly that (matching
+            # BinaryGroup.query() on the production parser side, issue #10).
+            return ast.AndNot(
+                positive=a if a is not None else ast.Nothing(),
+                negative=b if b is not None else ast.Nothing(),
+            )
         if isinstance(n, ast.AndMaybe):
             a, b = go(n.required), go(n.optional)
             if a is None and b is None:
                 return None
-            return b if a is None else (a if b is None else ast.AndMaybe(required=a, optional=b))
+            return ast.AndMaybe(
+                required=a if a is not None else ast.Nothing(),
+                optional=b if b is not None else ast.Nothing(),
+            )
         if isinstance(n, ast.Require):
             a, b = go(n.scored), go(n.filter_only)
-            if a is None and b is None:
+            if a is None or b is None:
+                # Real whoosh: either side null -> Nothing (both required).
                 return None
-            return b if a is None else (a if b is None else ast.Require(scored=a, filter_only=b))
+            return ast.Require(scored=a, filter_only=b)
         if isinstance(n, ast.Boosted):
             child = go(n.child)
             return None if child is None else ast.Boosted(child=child, boost=n.boost)

@@ -273,11 +273,20 @@ class GroupNode(SyntaxNode):
             if subq is not None:
                 subs.append(subq)
 
-        q: ast.Node
         if not subs:
-            q = ast.Nothing()
-        else:
-            q = self._build(tuple(subs))
+            # An empty group (literally `()`, or one that only ever
+            # contained other empty groups) contributes nothing, exactly
+            # like Wrapper.query()'s "no operand at all" case: the caller
+            # drops it from an enclosing And/Or's subs, same as if it had
+            # never been typed. Building ast.Nothing() here instead would
+            # make it a live query node that then propagates through
+            # normalize()'s And/Not algebra (an empty group inside `foo ()`
+            # would annihilate the whole And, and `NOT ()` would normalize
+            # to Every()), which is not what whoosh does: whoosh drops an
+            # empty group from the tree entirely (issue #10).
+            return None
+
+        q: ast.Node = self._build(tuple(subs))
 
         if self.boost != 1.0:
             q = ast.Boosted(q, self.boost)
@@ -400,15 +409,26 @@ class BinaryGroup(GroupNode):
 
         qa = self.nodes[0].query(parser)
         qb = self.nodes[1].query(parser)
-        q: ast.Node | None
         if qa is None and qb is None:
-            q = ast.Nothing()
-        elif qa is None:
-            q = qb
-        elif qb is None:
-            q = qa
-        else:
-            q = self._build2(qa, qb)
+            # Neither operand contributed anything at all (e.g. both sides
+            # were empty groups): nothing to build, drop like GroupNode's
+            # own empty case.
+            return None
+
+        # A single missing operand becomes an explicit ast.Nothing() rather
+        # than falling back to just the other operand: AndNot/AndMaybe/
+        # Require each have their own, different real-whoosh rule for a
+        # null side (AndNot/AndMaybe: a null -> Nothing, b null -> a;
+        # Require: either null -> Nothing; see ast.normalize()'s AndNot/
+        # AndMaybe/Require branches, which already implement exactly these
+        # rules), so building the node and letting normalize() reduce it is
+        # what stays correct for all three, instead of one ad hoc "use
+        # whichever side is present" rule that was actually only right for
+        # AndNot/AndMaybe's *negative*-null case.
+        q = self._build2(
+            qa if qa is not None else ast.Nothing(),
+            qb if qb is not None else ast.Nothing(),
+        )
 
         return attach(q, self)
 
