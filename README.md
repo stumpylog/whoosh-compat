@@ -55,8 +55,8 @@ result = wc.parse(
 result.ast  # normalized AST root
 result.diagnostics  # tuple[Diagnostic, ...], e.g. invalid dates
 
-# 3. Emit a tantivy.Query against a real index/schema and search it.
-query = emit(result.ast, index=index, schema=schema, registry=registry)
+# 3. Emit a tantivy.Query against a real index and search it.
+query = emit(result.ast, index=index, registry=registry)
 searcher.search(query, limit=10)
 ```
 

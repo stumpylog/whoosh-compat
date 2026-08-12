@@ -232,7 +232,7 @@ def test_emit_never_raises_except_unsupported(q, tindex, ereg):
         # cleanly, so skip the ones that didn't.
         return
     try:
-        emit_(result.ast, index=tindex[0], schema=tindex[1], registry=ereg)
+        emit_(result.ast, index=tindex[0], registry=ereg)
     except UnsupportedQueryError:
         # The one documented, expected exception: a text-field TermRange
         # (DIVERGENCES.md entry 5, tantivy-py has no programmatic text-range

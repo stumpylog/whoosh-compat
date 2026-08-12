@@ -87,7 +87,7 @@ def tantivy_search_ids(tindex, ereg, q, basedate=BASE, tz=BERLIN):
     """
 
     result = wc_parse(q, registry=ereg, default_fields=DEFAULT_FIELDS, basedate=basedate, tz=tz)
-    query = emit_(result.ast, index=tindex[0], schema=tindex[1], registry=ereg)
+    query = emit_(result.ast, index=tindex[0], registry=ereg)
     return search_ids(tindex[0], query)
 
 
@@ -235,7 +235,7 @@ def test_created_previous_month_unquoted_is_a_documented_divergence(windex, tind
     result = wc_parse(q, registry=ereg, default_fields=DEFAULT_FIELDS, basedate=BASE, tz=BERLIN)
     assert result.diagnostics, "expected a diagnostic for the unparseable 'previous' date token"
     with pytest.raises(QueryEmitError):
-        emit_(result.ast, index=tindex[0], schema=tindex[1], registry=ereg)
+        emit_(result.ast, index=tindex[0], registry=ereg)
 
 
 def test_notes_user_json_subpath_has_no_v2_analogue(windex, tindex, ereg):
@@ -375,7 +375,7 @@ def test_issue_13568_acceptance(windex_13568, tindex_13568, ereg_13568):
         tz=BERLIN,
     )
     assert not result.diagnostics
-    query = emit_(result.ast, index=tindex_13568[0], schema=tindex_13568[1], registry=ereg_13568)
+    query = emit_(result.ast, index=tindex_13568[0], registry=ereg_13568)
     assert search_ids(tindex_13568[0], query) == expected
 
 
@@ -488,7 +488,7 @@ def ereg_stem():
 
 def _tindex_stem_ids(tindex_stem, ereg_stem, q_str):
     result = wc_parse(q_str, registry=ereg_stem, default_fields=["content"])
-    query = emit_(result.ast, index=tindex_stem[0], schema=tindex_stem[1], registry=ereg_stem)
+    query = emit_(result.ast, index=tindex_stem[0], registry=ereg_stem)
     return search_ids(tindex_stem[0], query)
 
 

@@ -170,7 +170,7 @@ def parse(ereg):
 
 
 def emit_ast(node, tindex, ereg):
-    return emit_(node, index=tindex[0], schema=tindex[1], registry=ereg)
+    return emit_(node, index=tindex[0], registry=ereg)
 
 
 def search_ids(index, q, limit=10):

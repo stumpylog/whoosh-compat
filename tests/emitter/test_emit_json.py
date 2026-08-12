@@ -145,7 +145,7 @@ def test_json_paths_supported_false_when_no_json_field_registered(tindex):
     # probe_path stays None and the result is cached as False without ever
     # calling tantivy.Query.term_query.
     ereg_no_json = FieldRegistry([FieldSpec("content", FieldKind.TEXT)])
-    emitter = TantivyEmitter(index=tindex[0], schema=tindex[1], registry=ereg_no_json)
+    emitter = TantivyEmitter(index=tindex[0], registry=ereg_no_json)
     assert emitter._json_paths_supported() is False
 
 
@@ -153,7 +153,7 @@ def test_json_paths_supported_is_cached_across_calls(tindex, ereg):
     # Second call on the same emitter instance hits the cached-result branch
     # (`if self._json_paths_ok is None` is False the second time) instead of
     # re-probing.
-    emitter = TantivyEmitter(index=tindex[0], schema=tindex[1], registry=ereg)
+    emitter = TantivyEmitter(index=tindex[0], registry=ereg)
     first = emitter._json_paths_supported()
     second = emitter._json_paths_supported()
     assert first == second

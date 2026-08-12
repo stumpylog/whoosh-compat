@@ -129,9 +129,9 @@ def _gapped_index_fixture():
     ],
 )
 def test_phrase_misses_across_index_time_position_gap(slop, expected):
-    index, schema, registry = _gapped_index_fixture()
+    index, _schema, registry = _gapped_index_fixture()
     node = ast.Phrase(field=FieldRef("content"), text="alpha beta", slop=slop)
-    q = emit_(node, index=index, schema=schema, registry=registry)
+    q = emit_(node, index=index, registry=registry)
     assert search_ids(index, q) == expected
 
 
@@ -178,7 +178,7 @@ def _reversed_pair_fixture():
     ],
 )
 def test_phrase_reversed_pair_slop_boundary(slop, expected):
-    index, schema, registry = _reversed_pair_fixture()
+    index, _schema, registry = _reversed_pair_fixture()
     node = ast.Phrase(field=FieldRef("content"), text="one two", slop=slop)
-    q = emit_(node, index=index, schema=schema, registry=registry)
+    q = emit_(node, index=index, registry=registry)
     assert search_ids(index, q) == expected

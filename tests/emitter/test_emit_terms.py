@@ -19,6 +19,17 @@ def test_term(tindex, ereg, parse):
     assert search_ids(tindex[0], q) == [1]
 
 
+def test_emit_has_no_schema_parameter(tindex, ereg, parse):
+    # issue #27: schema is recoverable from index.schema, so every call site
+    # could pass a value that could be derived (and could pass an
+    # inconsistent pair); dropped from the public signature.
+    node = parse("content:invoice")
+    q = emit_(node, index=tindex[0], registry=ereg)
+    assert search_ids(tindex[0], q) == [1]
+    with pytest.raises(TypeError, match="schema"):
+        emit_(node, index=tindex[0], schema=tindex[1], registry=ereg)
+
+
 def test_multitoken_and(tindex, ereg):
     # A single field value with multiple tokens, combined per Multitoken
     # resolution (DEFAULT -> enclosing group semantics; top level == AND).
@@ -214,23 +225,22 @@ def _dotted_plain_field_fixture():
 
 
 def test_dotted_plain_field_zero_token_term_dropped():
-    index, schema, registry = _dotted_plain_field_fixture()
+    index, _schema, registry = _dotted_plain_field_fixture()
     grp = ast.And(
         children=(
             ast.Term(field=FieldRef("content"), text="invoice"),
             ast.Term(field=FieldRef("field.with.dots"), text="!!!"),
         )
     )
-    q = emit_(grp, index=index, schema=schema, registry=registry)
+    q = emit_(grp, index=index, registry=registry)
     assert search_ids(index, q) == [1]
 
 
 def test_dotted_plain_field_term_with_tokens_still_emits():
-    index, schema, registry = _dotted_plain_field_fixture()
+    index, _schema, registry = _dotted_plain_field_fixture()
     q = emit_(
         ast.Term(field=FieldRef("field.with.dots"), text="anything"),
         index=index,
-        schema=schema,
         registry=registry,
     )
     assert search_ids(index, q) == [1]

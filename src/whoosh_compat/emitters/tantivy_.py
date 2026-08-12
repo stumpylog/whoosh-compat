@@ -246,9 +246,9 @@ def _boolean_query(
 class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     """Emits ``tantivy.Query`` objects from a whoosh-compat AST."""
 
-    def __init__(self, *, index: tantivy.Index, schema: tantivy.Schema, registry: FieldRegistry):
+    def __init__(self, *, index: tantivy.Index, registry: FieldRegistry):
         self.index = index
-        self.schema = schema
+        self.schema = index.schema
         self.registry = registry
         # Multitoken.DEFAULT term text resolves against the enclosing
         # group's semantics; top level behaves like AND.
@@ -716,8 +716,7 @@ def emit(
     node: ast.Node,
     *,
     index: tantivy.Index,
-    schema: tantivy.Schema,
     registry: FieldRegistry,
 ) -> tantivy.Query:
     """Emit a ``tantivy.Query`` for ``node`` against ``registry``."""
-    return TantivyEmitter(index=index, schema=schema, registry=registry).emit(node)
+    return TantivyEmitter(index=index, registry=registry).emit(node)

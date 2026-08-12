@@ -252,9 +252,9 @@ def _non_fast_text_target_fixture():
     ],
 )
 def test_boolean_exists_non_fast_text_target(value, expected):
-    index, schema, registry = _non_fast_text_target_fixture()
+    index, _schema, registry = _non_fast_text_target_fixture()
     node = ast.Term(field=FieldRef("has_body"), text=value)
-    q = emit_(node, index=index, schema=schema, registry=registry)
+    q = emit_(node, index=index, registry=registry)
     assert search_ids(index, q) == expected
 
 
@@ -309,9 +309,9 @@ def _non_fast_keyword_target_fixture():
     ],
 )
 def test_boolean_exists_non_fast_keyword_target(value, expected):
-    index, schema, registry = _non_fast_keyword_target_fixture()
+    index, _schema, registry = _non_fast_keyword_target_fixture()
     node = ast.Term(field=FieldRef("has_label"), text=value)
-    q = emit_(node, index=index, schema=schema, registry=registry)
+    q = emit_(node, index=index, registry=registry)
     assert search_ids(index, q) == expected
 
 
