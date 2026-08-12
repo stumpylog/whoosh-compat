@@ -9,7 +9,6 @@ can share a single source of truth.
 TAG_WHITESPACE = 100
 TAG_RANGE = 1
 TAG_EVERY = -1
-TAG_DATE_FREE = -1
 TAG_DEFAULT = 0
 TAG_OPERATOR = 0
 TAG_OPERATOR_ANDNOT = -5

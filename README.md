@@ -97,10 +97,13 @@ behavior intentionally differs from real Whoosh.
 
 Not carried over from Whoosh (not currently implemented, kept cheap to add
 via the forked plugin architecture): `asn:>100` (`GtLtPlugin`), `term~2`
-fuzzy matching, `r"regex"` literal regex queries, `SequencePlugin`, and
+fuzzy matching, `r"regex"` literal regex queries, `SequencePlugin`,
 `-foo`/`+foo` as negation/requirement shorthand (in the whoosh grammar this
 library targets, `-foo` was plain text whose analyzer typically dropped the
-dash: `NOT` was the only negation operator).
+dash: `NOT` was the only negation operator), and free-date mode (implicit
+date parsing in an unfielded-date context; the parser defaults to the
+date-parsing plugin for fielded dates when the host calls `parse()` with a
+date-aware registry instead).
 
 ### Divergences from real Whoosh
 

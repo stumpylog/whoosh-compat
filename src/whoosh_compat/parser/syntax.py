@@ -478,6 +478,13 @@ class OrGroup(GroupNode):
 
     @classmethod
     def factory(cls, scale: float = 1.0) -> type[OrGroup]:
+        """Create an OrGroup subclass.
+
+        The ``scale`` parameter is accepted for compatibility with whoosh
+        parsers that supply it (whoosh used scale for scoring), but it is
+        silently discarded: the AST's Or node does not carry group-level
+        scoring/weighting.
+        """
         class ScaledOrGroup(OrGroup):
             def __init__(self, nodes: Sequence[SyntaxNode] | None = None,
                          **kwargs: Any) -> None:

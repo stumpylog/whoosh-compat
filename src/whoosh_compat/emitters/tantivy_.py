@@ -191,6 +191,9 @@ def _to_naive_utc(value: datetime) -> datetime:
     Parser-produced range bounds are always tz-aware UTC, so convert here.
     Naive input is passed through unchanged (tantivy already reads naive
     datetimes as UTC, matching how documents are indexed).
+
+    Note: tantivy-py 0.26.0 truncates datetimes to whole seconds on both the
+    index and the query side; this is consistent and harmless in practice.
     """
     if value.tzinfo is None:
         return value
