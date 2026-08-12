@@ -143,6 +143,16 @@ def test_json_unregistered_subpath_demotes(reg):
     assert not isinstance(t, ast.Term) or t.field != FieldRef("notes", "body")
 
 
+def test_json_bare_field_name_demotes(reg):
+    # issue #11: notes:foo (a JSON field addressed with no subpath) used to
+    # parse cleanly to Term(field='notes', text='foo') and then raise
+    # QueryEmitError at emit(), violating "parsing clean means emitting is
+    # safe". Demoted the same way an unknown field is: no diagnostic, no
+    # field='notes' anywhere in the result.
+    t = parse("notes:foo", reg)
+    assert not isinstance(t, ast.Term) or t.field != FieldRef("notes")
+
+
 def test_numeric_range(reg):
     assert parse("asn:[10 TO 20]", reg) == ast.NumericRange(
         field=FieldRef("asn"), lo=10, hi=20, incl_lo=True, incl_hi=True

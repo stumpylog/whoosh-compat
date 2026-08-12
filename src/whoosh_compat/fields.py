@@ -274,6 +274,19 @@ class FieldRegistry:
         direct lookup misses does a dotted name get a second look as
         ``base.subpath`` against a registered JSON field's ``subpaths``.
 
+        A bare (undotted) name that resolves directly to a JSON-kind spec is
+        deliberately *not* recognized here: a JSON field addressed without a
+        subpath has no way to emit (``visit_term``/``visit_phrase`` require
+        one), so treating it as known here would let ``notes:foo`` parse
+        cleanly and then raise at emit time, breaking the "parsing clean
+        means emitting is safe" contract. Since ``make_ref`` is also what
+        ``FieldsPlugin.do_fieldnames`` calls (via ``__contains__``) to decide
+        whether a field prefix is recognized at all, returning ``None`` here
+        demotes it the same way an entirely unknown field name already is
+        (issue #11): consistent, not stricter, since a known field addressed
+        incorrectly demoting more strictly than an unknown one would be
+        backwards.
+
         Args:
             raw: The raw field-name text, as captured by the parser's
                 fieldname tagger (already alias-as-typed, not yet
@@ -284,7 +297,7 @@ class FieldRegistry:
             a registered field nor a registered JSON subpath.
         """
         spec = self._by_name.get(raw)
-        if spec is not None:
+        if spec is not None and spec.kind is not FieldKind.JSON:
             return FieldRef(spec.name)
 
         if "." in raw:

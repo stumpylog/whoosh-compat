@@ -152,14 +152,15 @@ def test_make_ref_dotted_name_on_non_json_spec_returns_none():
     assert registry.make_ref("title.user") is None
 
 
-def test_make_ref_json_field_name_alone_has_no_subpath():
-    """make_ref() on a JSON field's bare name (no dot at all) resolves it
-    as a plain ref: the direct-name lookup wins before any dotted
-    interpretation is attempted.
+def test_make_ref_json_field_bare_name_is_unrecognized():
+    """make_ref() on a JSON field's bare name (no dot, no subpath) returns
+    None rather than a plain ref (issue #11): a JSON field addressed
+    without a subpath has no way to emit, so treating it as known here
+    would let e.g. "notes:foo" parse cleanly and then raise at emit time.
     """
     spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user",))
     registry = FieldRegistry([spec])
-    assert registry.make_ref("notes") == FieldRef("notes")
+    assert registry.make_ref("notes") is None
 
 
 def test_make_ref_unknown_returns_none():
