@@ -495,6 +495,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         if node.field is None:
             return tantivy.Query.all_query()
         spec = self._resolve(node.field)
+        if spec.kind is FieldKind.BOOLEAN_EXISTS:
+            # A BOOLEAN_EXISTS field has no physical column of its own to
+            # check "exists" against; "existence" only ever means its
+            # exists_target's, same redirect as visit_term/visit_phrase's
+            # BOOLEAN_EXISTS branches (issue #16).
+            target = self._resolve(FieldRef(spec.exists_target))  # type: ignore[arg-type]
+            spec = target
         return self._exists_query(spec)
 
     def visit_errorleaf(self, node: ast.ErrorLeaf) -> tantivy.Query:
@@ -557,19 +564,69 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         )
 
     def visit_phrase(self, node: ast.Phrase) -> tantivy.Query:
+        if node.field is not None and node.field.json_path is not None:
+            spec = self.registry.resolve(node.field)
+            if spec is not None:
+                # _emit_json_term already treats its `text` argument
+                # generically (tokenizes it, honors Multitoken): a Phrase's
+                # text needs no different handling here than a Term's would
+                # (issue #8: this JSON-subpath dispatch was previously
+                # missing from visit_phrase entirely, so a quoted
+                # notes.user:"alice" fell through to the plain-field branch
+                # below and queried the wrong tantivy field name, "notes"
+                # instead of "notes.user").
+                return self._emit_json_term(spec, node.field.json_path, node.text)
+            # Falls through to _resolve below, which raises "unknown field"
+            # for an invalid subpath reference instead of silently treating
+            # it as a plain field.
+
         spec = self._resolve(node.field)
-        tokens = self._tokens(spec, node.text)
-        if not tokens:
-            return tantivy.Query.empty_query()
-        if len(tokens) == 1:
-            # tantivy rejects a single-word phrase query; a term query is the
-            # exact equivalent anyway.
-            return tantivy.Query.term_query(self.schema, spec.name, tokens[0])
-        # whoosh's slop counts *positions spanned* (slop=1 means adjacent);
-        # tantivy's counts *gaps allowed* (slop=0 means adjacent).
-        slop = max(node.slop - 1, 0)
-        words: list[str | tuple[int, str]] = list(tokens)
-        return tantivy.Query.phrase_query(self.schema, spec.name, words, slop=slop)
+
+        if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
+            tokens = self._tokens(spec, node.text)
+            if not tokens:
+                return tantivy.Query.empty_query()
+            if len(tokens) == 1:
+                # tantivy rejects a single-word phrase query; a term query is
+                # the exact equivalent anyway.
+                return tantivy.Query.term_query(self.schema, spec.name, tokens[0])
+            # whoosh's slop counts *positions spanned* (slop=1 means
+            # adjacent); tantivy's counts *gaps allowed* (slop=0 adjacent).
+            slop = max(node.slop - 1, 0)
+            words: list[str | tuple[int, str]] = list(tokens)
+            return tantivy.Query.phrase_query(self.schema, spec.name, words, slop=slop)
+
+        if spec.kind is FieldKind.U64:
+            if node.text == "*":
+                # Matches whoosh's NUMERIC.parse_query "*" -> existence
+                # special case, same as a quoted term (issue #16).
+                return self._exists_query(spec)
+            try:
+                value = int(node.text)
+            except (TypeError, ValueError) as exc:
+                raise QueryEmitError(
+                    f"{node.text!r} is not a valid number for {spec.name!r}"
+                ) from exc
+            return tantivy.Query.term_query(self.schema, spec.name, value)
+
+        if spec.kind is FieldKind.BOOLEAN_EXISTS:
+            # exists_target is always a plain (non-JSON) canonical field
+            # name: FieldRegistry validates it at construction time.
+            target = self._resolve(FieldRef(spec.exists_target))  # type: ignore[arg-type]
+            exists = self._exists_query(target)
+            if node.text == "*" or _is_truthy(node.text):
+                return exists
+            return _boolean_query([(tantivy.Occur.MustNot, exists)])
+
+        if spec.kind is FieldKind.JSON:
+            raise QueryEmitError(
+                f"field {spec.name!r} is a JSON field; phrase queries must "
+                f"address a subpath (e.g. {spec.name}.<subpath>)"
+            )
+
+        raise NotImplementedError(
+            f"Phrase emission for field kind {spec.kind.name} is not implemented"
+        )
 
     def visit_prefix(self, node: ast.Prefix) -> tantivy.Query:
         spec = self._resolve(node.field)

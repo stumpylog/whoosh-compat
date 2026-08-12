@@ -639,3 +639,28 @@ parse-then-emit pipeline).
     `test_binarygroup_right_none_becomes_nothing_negative` pin the
     corrected (and now real-whoosh-matching) per-node behavior at the
     parser level directly.
+
+28. **A double-quoted `"*"` on a BOOLEAN_EXISTS field is not reproduced as a
+    whoosh crash (whoosh-bug, issue #16).** Real whoosh's `PhrasePlugin`
+    calls `field.process_text()` on every quoted value regardless of field
+    type, and `whoosh.fields.BOOLEAN` has no analyzer at all
+    (`BOOLEAN.tokenize` raises `Exception("... field has no analyzer")` for
+    any input, not something specific to `"*"`): `has_tag:"*"` against the
+    real oracle raises a bare `Exception` while parsing, before a query
+    object is even built. This is a defect in whoosh's own `BOOLEAN` field
+    type, not intended semantics, so it is not reproduced: whoosh-compat's
+    `visit_phrase` treats a double-quoted `"*"` on a `BOOLEAN_EXISTS` field
+    the same as the single-quoted and unquoted forms, an existence match
+    (see entry 27's neighbor, issue #16's `_exists_query`/`Every` redirect
+    through `exists_target`). The single-quoted form (`has_tag:'*'`) does
+    not crash real whoosh (`BOOLEAN.parse_query` special-cases `"*"`
+    directly, matching whoosh-compat's own `term_query` fix) and is
+    corpus-compared normally.
+
+    Test references: `tests/differential/corpus_docs.txt`'s issue #16
+    section (only the single-quoted and numeric forms are corpus lines, for
+    exactly this reason); `tests/emitter/test_emit_phrase.py`'s
+    `test_quoted_star_phrase_matches_unquoted_star` and
+    `tests/emitter/test_emit_boolean.py`'s
+    `test_every_field_on_the_boolean_exists_field_itself` cover the
+    double-quoted and bare-star forms directly, without the oracle.

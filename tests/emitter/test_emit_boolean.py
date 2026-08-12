@@ -346,6 +346,20 @@ def test_every_field_and_boolean_exists_agree(tindex, ereg):
     assert search_ids(tindex[0], every_q) == search_ids(tindex[0], boolean_exists_q) == [1, 2, 4]
 
 
+def test_every_field_on_the_boolean_exists_field_itself(tindex, ereg):
+    # has_tag:* (Every(field="has_tag"), a BOOLEAN_EXISTS field, not one of
+    # its targets) used to raise UnsupportedQueryError: BOOLEAN_EXISTS has
+    # no resolved exists strategy of its own (it has no physical column;
+    # "existence" only ever makes sense via its exists_target). visit_term's
+    # BOOLEAN_EXISTS branch already redirects through exists_target;
+    # visit_every needs the same redirect for a bare field:* on the
+    # BOOLEAN_EXISTS field itself, issue #16's "matches the unquoted form"
+    # comparison exposed the gap.
+    every_q = emit_ast(ast.Every(field=FieldRef("has_tag")), tindex, ereg)
+    boolean_exists_q = emit_ast(ast.Term(field=FieldRef("has_tag"), text=True), tindex, ereg)
+    assert search_ids(tindex[0], every_q) == search_ids(tindex[0], boolean_exists_q) == [1, 2, 4]
+
+
 def test_every_field_and_boolean_exists_agree_across_targets(tindex, ereg):
     """The same "has tags" condition, reached through two different targets
     with two different resolved strategies (``has_tag`` -> the fast U64

@@ -5,6 +5,8 @@ import tantivy
 
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import emit as emit_
+from whoosh_compat.errors import QueryEmitError
+from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -182,3 +184,100 @@ def test_phrase_reversed_pair_slop_boundary(slop, expected):
     node = ast.Phrase(field=FieldRef("content"), text="one two", slop=slop)
     q = emit_(node, index=index, registry=registry)
     assert search_ids(index, q) == expected
+
+
+# -- issue #8: quoted (Phrase) values on non-TEXT/JSON fields need the same
+# -- field-kind dispatch visit_term already has, so no raw ValueError from
+# -- tantivy-py's type-mismatched term_query/phrase_query escapes emit(). ---
+
+
+def test_phrase_on_u64_field_matches_unquoted_term(tindex, ereg):
+    # asn:"100" (a quoted, single-word value) used to raise ValueError:
+    # Expected U64 type for field asn, got '100' (tantivy-py rejects a
+    # string against a u64 field's term_query).
+    node = ast.Phrase(field=FieldRef("asn"), text="100", slop=1)
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1]
+
+
+def test_phrase_on_u64_field_bad_number_raises_query_emit_error(tindex, ereg):
+    node = ast.Phrase(field=FieldRef("asn"), text="notanumber", slop=1)
+    with pytest.raises(QueryEmitError, match="not a valid number"):
+        emit_ast(node, tindex, ereg)
+
+
+# issue #16: a quoted star on U64/BOOLEAN_EXISTS is an existence match. A
+# *double*-quoted star stays an ast.Phrase at parse time (see
+# tests/test_parser_fields.py), so its equivalence to the unquoted form is
+# proven here, at emit/search-result level.
+@pytest.mark.parametrize(
+    "field, expected",
+    [
+        pytest.param("asn", [1, 2, 3, 4, 5], id="u64-every-doc-has-a-value"),
+        pytest.param("has_tag", [1, 2, 4], id="boolean-exists-docs-with-tags"),
+    ],
+)
+def test_quoted_star_phrase_matches_unquoted_star(tindex, ereg, parse, field, expected):
+    phrase_node = ast.Phrase(field=FieldRef(field), text="*", slop=1)
+    every_node = parse(f"{field}:*")
+    assert search_ids(tindex[0], emit_ast(phrase_node, tindex, ereg)) == expected
+    assert search_ids(tindex[0], emit_ast(every_node, tindex, ereg)) == expected
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        pytest.param("true", [1, 2, 4], id="truthy-phrase"),
+        pytest.param("false", [3, 5], id="falsy-phrase"),
+    ],
+)
+def test_phrase_on_boolean_exists_field(tindex, ereg, text, expected):
+    node = ast.Phrase(field=FieldRef("has_tag"), text=text, slop=1)
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == expected
+
+
+def test_phrase_on_json_subpath_single_word_matches_unquoted_term(tindex, ereg):
+    node = ast.Phrase(field=FieldRef("notes", "user"), text="alice", slop=1)
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1]
+
+
+def test_phrase_on_json_subpath_multi_word_does_not_raise(tindex, ereg):
+    # No doc's notes.user is "bob smith"; the point is that this doesn't
+    # raise (JSON subpath phrases used to route to the wrong tantivy field
+    # name entirely, see the module docstring), not that it matches.
+    node = ast.Phrase(field=FieldRef("notes", "user"), text="bob smith", slop=1)
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == []
+
+
+def test_phrase_on_bare_json_field_raises_query_emit_error(tindex, ereg):
+    node = ast.Phrase(field=FieldRef("notes"), text="alice", slop=1)
+    with pytest.raises(QueryEmitError, match="JSON field"):
+        emit_ast(node, tindex, ereg)
+
+
+# -- exception contract: every field kind x quoted (Phrase) input either
+# -- emits or raises a documented exception type, never a bare ValueError ---
+
+
+@pytest.mark.parametrize(
+    "field, text",
+    [
+        pytest.param("content", "shopname product1", id="text"),
+        pytest.param("tag", "billing", id="keyword"),
+        pytest.param("asn", "100", id="u64-valid"),
+        pytest.param("asn", "notanumber", id="u64-invalid"),
+        pytest.param("has_tag", "true", id="boolean-exists"),
+        pytest.param("notes.user", "alice", id="json-subpath"),
+    ],
+)
+def test_phrase_emission_never_raises_undocumented_exception(tindex, ereg, field, text):
+    name, _, subpath = field.partition(".")
+    ref = FieldRef(name, subpath or None)
+    node = ast.Phrase(field=ref, text=text, slop=1)
+    try:
+        emit_ast(node, tindex, ereg)
+    except (QueryEmitError, UnsupportedQueryError):
+        pass  # documented exception types: fine.

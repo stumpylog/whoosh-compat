@@ -31,6 +31,20 @@ shopname ()
 NOT ()
 shopname (() ())
 
+# --- issue #16: a quoted star on a numeric or boolean field is an
+# existence match, matching the unquoted field:* form. has_tag:"*"
+# (double-quoted, a Phrase) is deliberately not included here: real
+# whoosh itself raises (not a NullQuery, a bare Exception) trying to
+# process_text() a double-quoted phrase against a BOOLEAN field, which
+# has no analyzer (whoosh/fields.py's BOOLEAN.tokenize) -- a whoosh
+# crash, not a whoosh-compat defect, and there is no oracle result to
+# compare against. Covered directly instead, without the oracle, by
+# tests/emitter/test_emit_phrase.py's
+# test_quoted_star_phrase_matches_unquoted_star.
+type_id:'*'
+type_id:"*"
+has_tag:'*'
+
 # --- KNOWN DIVERGENCE (whoosh-bug, allowlist.py): bracketed date ranges
 # (see corpus_paperless.txt's matching section for the root cause).
 created:[2005 to 2009]

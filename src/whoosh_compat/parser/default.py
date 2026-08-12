@@ -377,6 +377,17 @@ class QueryParser:
         spec = self.registry.resolve(ref) if ref is not None else None
 
         if spec is not None:
+            if text == "*" and spec.kind in (FieldKind.U64, FieldKind.BOOLEAN_EXISTS):
+                # Whoosh's NUMERIC.parse_query/BOOLEAN.parse_query special-case
+                # a bare "*" into a match-everything (existence) query; a
+                # *quoted* "*" reaches here (an unquoted one is caught earlier
+                # by WildcardPlugin, which already special-cases it the same
+                # way, see wildcard_query). Without this, a quoted "*" tried
+                # the ordinary U64/BOOLEAN_EXISTS coercion and, for U64,
+                # diagnosed as BAD_NUMBER (issue #16).
+                node: ast.Node = ast.Every(field=ref)
+                return ast.Boosted(node, boost) if boost != 1.0 else node
+
             if spec.kind is FieldKind.U64:
                 assert ref is not None  # spec only resolves from a non-None ref
                 value, err = self._parse_u64(

@@ -120,6 +120,40 @@ def test_numeric_range_open(reg):
     )
 
 
+# -- issue #16: a quoted star on a numeric or boolean field is an
+# -- existence match, matching the unquoted field:* form -------------------
+#
+# A *single*-quoted value goes through the ordinary term path (WordNode ->
+# term_query) at parse time, same as an unquoted one, so it can produce the
+# exact same ast.Every(field) node. A *double*-quoted value is always an
+# ast.Phrase at parse time (analysis is emit-time, see ARCHITECTURE.md), so
+# its equivalence to the unquoted form is necessarily an emit-time /
+# search-result question instead: covered by
+# tests/emitter/test_emit_terms.py's quoted-star tests.
+
+
+@pytest.mark.parametrize(
+    "field, query",
+    [
+        pytest.param("asn", "asn:'*'", id="u64"),
+        pytest.param("has_tag", "has_tag:'*'", id="boolean-exists"),
+    ],
+)
+def test_single_quoted_star_matches_unquoted_ast(reg, field, query):
+    assert parse(query, reg) == parse(f"{field}:*", reg) == ast.Every(field=FieldRef(field))
+
+
+@pytest.mark.parametrize(
+    "field, query",
+    [
+        pytest.param("asn", 'asn:"*"', id="u64"),
+        pytest.param("has_tag", 'has_tag:"*"', id="boolean-exists"),
+    ],
+)
+def test_double_quoted_star_stays_a_phrase_at_parse_time(reg, field, query):
+    assert parse(query, reg) == ast.Phrase(field=FieldRef(field), text="*", slop=1)
+
+
 def test_field_boosts(reg):
     t = wc.parse(
         "aaa title:bbb",
