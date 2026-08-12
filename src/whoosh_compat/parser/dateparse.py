@@ -863,7 +863,21 @@ class DateParserPlugin(Plugin):
             are converted through on the way back to UTC.
         :param dateparser: a :class:`DateParser` instance; defaults to a
             fresh :class:`English`.
+
+        :raises ValueError: if ``basedate`` is naive (has no ``tzinfo``).
+            The library takes an explicit ``tz`` everywhere else, so a
+            naive ``basedate`` is rejected rather than silently interpreted
+            in the host machine's local zone; pass an aware datetime
+            instead, e.g. ``basedate.replace(tzinfo=tz)`` or
+            ``datetime.now(tz)``.
         """
+
+        if basedate.tzinfo is None:
+            raise ValueError(
+                "basedate must be aware (have a tzinfo), not naive: pass an "
+                "aware datetime instead, e.g. basedate.replace(tzinfo=tz) or "
+                "datetime.now(tz)"
+            )
 
         self.basedate = basedate
         self.tz = tz

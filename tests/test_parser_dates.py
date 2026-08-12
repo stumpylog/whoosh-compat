@@ -8,6 +8,7 @@ import whoosh_compat as wc
 from whoosh_compat import ast
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.fields import FieldRef
+from whoosh_compat.parser.dateparse import DateParserPlugin
 
 BERLIN = ZoneInfo("Europe/Berlin")
 BASE = datetime(2026, 8, 4, 10, 30, tzinfo=BERLIN)
@@ -557,6 +558,34 @@ def test_daterangesyntaxnode_and_dateerrornode_r() -> None:
     assert err.r() == "DateError 'bad'"
 
 
+def test_naive_basedate_rejected_by_plugin_construction() -> None:
+    naive = datetime(2026, 8, 4, 10, 30)  # no tzinfo
+    with pytest.raises(ValueError, match="aware"):
+        DateParserPlugin(naive, BERLIN)
+
+
+def test_naive_basedate_rejected_via_parse(reg) -> None:
+    naive = datetime(2026, 8, 4, 10, 30)  # no tzinfo
+    with pytest.raises(ValueError, match="aware"):
+        wc.parse(
+            "created:today", registry=reg, default_fields=["content"], tz=BERLIN, basedate=naive
+        )
+
+
+def test_aware_basedate_with_same_wall_clock_still_works(reg) -> None:
+    # Pins the fixed behavior without manipulating the process timezone
+    # (time.tzset() isn't available on Windows): an aware basedate resolves
+    # against its own tzinfo regardless of the machine's local zone, since
+    # "aware" is now a hard requirement rather than something silently
+    # reinterpreted in the host's local zone.
+    aware = datetime(2026, 8, 4, 23, 0, tzinfo=BERLIN)
+    r = wc.parse(
+        "added:yesterday", registry=reg, default_fields=["content"], tz=BERLIN, basedate=aware
+    ).ast
+    assert r.lo == datetime(2026, 8, 3, 0, 0, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == datetime(2026, 8, 4, 0, 0, tzinfo=BERLIN).astimezone(UTC) and not r.incl_hi
+
+
 def test_do_dates_leaves_non_range_non_text_date_field_node_untouched(reg) -> None:
     # do_dates()'s trailing `else: continue` (has_fieldname but neither a
     # RangeNode nor has_text) has no real-world producer in the current
@@ -564,7 +593,6 @@ def test_do_dates_leaves_non_range_non_text_date_field_node_untouched(reg) -> No
     # has_fieldname=True node types, and FieldnameNode never survives as a
     # leaf. Exercised directly against a minimal stub node.
     from whoosh_compat.parser import syntax
-    from whoosh_compat.parser.dateparse import DateParserPlugin
 
     class FieldOnlyNode(syntax.SyntaxNode):
         has_fieldname = True
