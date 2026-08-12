@@ -46,6 +46,15 @@ class ExistsStrategy(Enum):
     FAST_FIELD = auto()
     """A cheap fast-field presence check (tantivy's ``exists_query``)."""
 
+    FAST_JSON_FIELD = auto()
+    """Like ``FAST_FIELD``, but for a fast JSON field: tantivy's
+    ``exists_query`` only checks a JSON field's subpath columns when passed
+    ``json_subpaths=True``; without it, nothing is ever found to exist
+    (issue #7). A JSON field's "fastness" only ever means its subpaths are
+    fast columns, so this is the resolved strategy for every fast JSON
+    field, never plain ``FAST_FIELD``.
+    """
+
     TERM_SCAN = auto()
     """"Has at least one indexed term", via a ``regex_query(".*")`` sweep of
     the field's term dictionary. Only meaningful for TEXT/KEYWORD fields, and
@@ -60,12 +69,16 @@ def resolve_exists_strategy(kind: FieldKind, fast: bool) -> ExistsStrategy | Non
     """Resolve the "exists" execution strategy for a field, or ``None`` if
     the field's kind/fastness combination cannot support one at all.
 
-    A fast field always uses ``FAST_FIELD`` regardless of kind, since
-    tantivy's ``exists_query`` works on any fast field. A non-fast TEXT or
-    KEYWORD field falls back to ``TERM_SCAN``. Every other combination
-    (a non-fast field of any other kind) has no way to answer "exists".
+    A fast field uses ``FAST_FIELD`` regardless of kind, except JSON, which
+    uses ``FAST_JSON_FIELD`` (tantivy's ``exists_query`` needs
+    ``json_subpaths=True`` to see a JSON field's subpath columns at all).
+    A non-fast TEXT or KEYWORD field falls back to ``TERM_SCAN``. Every
+    other combination (a non-fast field of any other kind) has no way to
+    answer "exists".
     """
     if fast:
+        if kind is FieldKind.JSON:
+            return ExistsStrategy.FAST_JSON_FIELD
         return ExistsStrategy.FAST_FIELD
     if kind in (FieldKind.TEXT, FieldKind.KEYWORD):
         return ExistsStrategy.TERM_SCAN

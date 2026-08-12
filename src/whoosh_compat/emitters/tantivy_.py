@@ -469,6 +469,11 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         if strategy is ExistsStrategy.FAST_FIELD:
             # exists_query is a cheap fast-field presence check.
             return tantivy.Query.exists_query(spec.name)
+        if strategy is ExistsStrategy.FAST_JSON_FIELD:
+            # A JSON fast field's subpath columns are only checked with
+            # json_subpaths=True; without it, exists_query never finds a
+            # value (issue #7).
+            return tantivy.Query.exists_query(spec.name, json_subpaths=True)
         if strategy is ExistsStrategy.TERM_SCAN:
             # Non-fast TEXT/KEYWORD fields: "has any term at all" via a
             # regex that matches every term in the field's dictionary.

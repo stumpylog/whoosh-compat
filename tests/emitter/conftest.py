@@ -104,6 +104,7 @@ def tindex():
     sb.add_date_field("created", stored=True, indexed=True, fast=True)
     sb.add_date_field("added", stored=True, indexed=True, fast=True)
     sb.add_json_field("notes", stored=True)
+    sb.add_json_field("attrs", stored=True, fast=True)
     schema = sb.build()
     index = tantivy.Index(schema)
     w = index.writer()
@@ -120,6 +121,7 @@ def tindex():
         doc.add_date("added", datetime.fromisoformat(added))
         if notes:
             doc.add_json("notes", notes)
+            doc.add_json("attrs", notes)  # fast counterpart of "notes", same values
         w.add_document(doc)
     w.commit()
     index.reload()
@@ -151,6 +153,8 @@ def ereg():
             FieldSpec("has_tag", FieldKind.BOOLEAN_EXISTS, exists_target="tag_id"),
             FieldSpec("has_tag_kw", FieldKind.BOOLEAN_EXISTS, exists_target="tag"),
             FieldSpec("notes", FieldKind.JSON, subpaths=("note", "user")),
+            FieldSpec("attrs", FieldKind.JSON, subpaths=("note", "user"), fast=True),
+            FieldSpec("has_attrs", FieldKind.BOOLEAN_EXISTS, exists_target="attrs"),
         ]
     )
 

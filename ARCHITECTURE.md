@@ -312,9 +312,10 @@ declarations) is entirely data on `FieldSpec`, validated at
 `exists_target`). Where a field's declared shape decides *how* a query can
 be executed, the registry resolves that once, at construction, rather than
 leaving it to the emitter: an `exists_target` is resolved to an
-`ExistsStrategy` (a fast-field presence check, or a term-dictionary scan
-for a non-fast TEXT/KEYWORD field), and a target that supports neither is
-rejected there with a message naming the remedy. `Every(field)` and
+`ExistsStrategy` (a fast-field presence check, a fast JSON field's
+subpath-aware presence check, or a term-dictionary scan for a non-fast
+TEXT/KEYWORD field), and a target that supports neither is rejected there
+with a message naming the remedy. `Every(field)` and
 `BOOLEAN_EXISTS` then share that single resolved strategy, so the two
 cannot drift into different answers to the same question. Extending what
 the library can express for a field means adding a

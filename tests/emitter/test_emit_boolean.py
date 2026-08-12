@@ -164,6 +164,33 @@ def test_boolean_exists(tindex, ereg, value, expected):
     assert search_ids(tindex[0], q) == expected
 
 
+# -- exists checks on a fast JSON field (issue #7) --------------------------
+#
+# A JSON fast field's subpath columns are only checked by exists_query when
+# json_subpaths=True is passed; the default silently checks nothing, so a
+# document that has a value reads as absent. Docs 1, 4 and 5 have a value
+# under "attrs" (ereg's fast JSON field); docs 2 and 3 have none.
+
+
+def test_every_field_fast_json(tindex, ereg):
+    node = ast.Every(field=FieldRef("attrs"))
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1, 4, 5]
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        pytest.param(True, [1, 4, 5], id="exists-true-matches-docs-with-attrs"),
+        pytest.param(False, [2, 3], id="exists-false-matches-docs-without-attrs"),
+    ],
+)
+def test_boolean_exists_fast_json(tindex, ereg, value, expected):
+    node = ast.Term(field=FieldRef("has_attrs"), text=value)
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == expected
+
+
 # -- BOOLEAN_EXISTS targeting a non-fast field (end-to-end) -----------------
 
 
