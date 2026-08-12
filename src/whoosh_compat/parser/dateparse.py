@@ -933,7 +933,7 @@ class DateParserPlugin(Plugin):
                 group[i] = self.do_dates(parser, node)
                 continue
 
-            fname = node.fieldname if node.has_fieldname else None
+            fname = (node.fieldname if node.has_fieldname else None) or parser.fieldname
             if fname is None:
                 continue
 

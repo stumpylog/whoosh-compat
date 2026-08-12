@@ -15,6 +15,7 @@ from whoosh_compat.parser.dateparse import DateErrorNode
 from whoosh_compat.parser.dateparse import DateParserPlugin
 from whoosh_compat.parser.dateparse import DateRangeSyntaxNode
 from whoosh_compat.parser.dateparse import English
+from whoosh_compat.parser.default import QueryParser
 from whoosh_compat.parser.times import adatetime
 from whoosh_compat.parser.times import timespan
 
@@ -545,6 +546,28 @@ def test_daterangesyntaxnode_and_dateerrornode_r() -> None:
     diag = Diagnostic(message="bad", kind=DiagnosticKind.BAD_DATE, startchar=0, endchar=1)
     err = DateErrorNode(diag)
     assert err.r() == "DateError 'bad'"
+
+
+def test_bare_date_keyword_under_query_parser_default_date_field(reg) -> None:
+    # do_dates() only date-parses a node with a fieldname. An unfielded
+    # term's fieldname is None until QueryParser.fieldname's default-field
+    # fallback fills it in; do_dates() used to skip that fallback, so a bare
+    # date keyword under a single-field QueryParser with a date default
+    # field fell through as an ordinary text term instead of a date range.
+    # MultifieldParser (what whoosh_compat.parse() always builds) has no
+    # single default fieldname (it passes None and expands unfielded terms
+    # into a per-field OR instead), so this path is only reachable through
+    # the QueryParser API directly.
+    parser = QueryParser("created", reg)
+    parser.add_plugin(DateParserPlugin(BASE, BERLIN))
+    node = ast.normalize(parser.parse("yesterday"))
+    assert node == ast.DateRange(
+        field=FieldRef("created"),
+        lo=datetime(2026, 8, 3, tzinfo=UTC),
+        hi=datetime(2026, 8, 4, tzinfo=UTC),
+        incl_lo=True,
+        incl_hi=False,
+    )
 
 
 def test_naive_basedate_rejected_by_plugin_construction() -> None:
