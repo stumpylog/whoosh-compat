@@ -284,6 +284,16 @@ datetimes there (a tz-aware one raises `ValueError`). The fix,
 one call site that needs it; nothing else in the pipeline treats naive and
 aware datetimes as interchangeable.
 
+**Kind dispatch is a closed matrix.** A query leaf's behavior is a function
+of (leaf node type, field kind, value spelling, JSON subpath or not). The
+costliest defects in this codebase's history were rules implemented for one
+cell of that matrix and silently missing from siblings, degrading to
+TEXT-shaped behavior instead of failing loudly. Every cell must therefore
+resolve to exactly one of three outcomes: a parse-time `Diagnostic`, a
+documented emit-time error, or an execution that honors the field kind and
+subpath. Code that dispatches on field kind or node type handles the full
+axis explicitly; an unhandled combination raises rather than falling through.
+
 **Diagnostics never raise mid-parse.** See §3's error-flow paragraph: this
 is worth restating as an invariant because it's load-bearing for callers.
 `whoosh_compat.parse()` always returns a `ParseResult`, never raises for bad

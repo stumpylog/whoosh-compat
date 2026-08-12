@@ -118,6 +118,24 @@ Non-negotiable, and not all of them are visible from the surrounding code:
   runnable. Assertions about what whoosh does have been confidently wrong in
   both directions here; measure against it rather than reasoning from memory,
   and say which you did.
+- **Sweep the sibling cells.** The dominant recurring defect class in this
+  codebase is a rule implemented for one combination of AST leaf type, field
+  kind, and value spelling (bare, single-quoted, double-quoted) but forgotten
+  for its siblings: the same check landing in `visit_term` but not
+  `visit_phrase`, applying to U64 but not BOOLEAN_EXISTS, handling plain
+  fields but not JSON subpaths. Any behavior change scoped by node type or
+  field kind must enumerate the whole row and column it touches, and every
+  cell must end in exactly one of three outcomes: a parse-time diagnostic, a
+  documented emit-time error, or a real search that honors the kind and
+  subpath. Silent fallthrough to TEXT-shaped behavior is never acceptable for
+  a non-TEXT cell. Where the kind/spelling exhaustiveness matrix test exists,
+  extend it for every new cell; never carve exceptions out of it.
+- **A deliberate divergence lands with its paperwork.** The triple from the
+  `differential-triage` skill (allowlist entry, `DIVERGENCES.md` entry,
+  retained corpus line) applies when *introducing* an intentional deviation
+  from whoosh, not only when triaging a failing test. A change that knowingly
+  deviates ships all three in the same commit; a divergence that exists only
+  in a commit message or code comment does not count as documented.
 
 ## Downstream
 
