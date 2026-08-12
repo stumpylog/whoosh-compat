@@ -90,9 +90,41 @@ def parse(
     :param tz: timezone used to interpret relative/local dates.
     :param basedate: the "now" used to resolve relative dates; defaults to
         the current time in ``tz`` when a date plugin is active.
+
+    :raises ValueError: if ``default_fields`` is empty, ``default_fields``
+        names a field ``registry`` doesn't know, or a ``field_boosts`` key
+        doesn't resolve to a known field. These are host configuration
+        mistakes: the registry's own philosophy is that a misconfiguration
+        raises at construction, not at query time, and this extends the
+        same bar to configuration passed here (issue #20). An alias
+        resolves normally in both ``default_fields`` and ``field_boosts``
+        (a ``field_boosts`` key is canonicalized to its field's own name
+        before use); it is not one of the rejected cases.
     """
 
-    parser = MultifieldParser(list(default_fields), registry, fieldboosts=field_boosts)
+    if not default_fields:
+        raise ValueError("default_fields must not be empty")
+    canonical_fields = []
+    for name in default_fields:
+        ref = registry.make_ref(name)
+        if ref is None:
+            raise ValueError(f"default_fields names unknown field {name!r}")
+        # Canonicalized (not left as whatever alias/dotted form the caller
+        # typed) so a field_boosts key, also canonicalized below, looks up
+        # correctly in MultifieldPlugin.do_multifield, which keys its lookup
+        # by these same strings.
+        canonical_fields.append(str(ref))
+
+    resolved_boosts: dict[str, float] | None = None
+    if field_boosts:
+        resolved_boosts = {}
+        for key, boost in field_boosts.items():
+            ref = registry.make_ref(key)
+            if ref is None:
+                raise ValueError(f"field_boosts key {key!r} does not name a known field")
+            resolved_boosts[str(ref)] = boost
+
+    parser = MultifieldParser(canonical_fields, registry, fieldboosts=resolved_boosts)
 
     if any(spec.kind in (FieldKind.DATE, FieldKind.DATETIME) for spec in registry):
         resolved_tz = tz or UTC
