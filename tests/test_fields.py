@@ -257,10 +257,14 @@ def test_iter_deduplicates():
 
 
 def test_validation_duplicate_canonical_names():
-    """ValueError if two specs have the same canonical name."""
+    """ValueError if two specs have the same canonical name; message says
+    "duplicate canonical name" here, since that's genuinely what collided
+    (contrast test_validation_duplicate_canonical_name_message_names_alias_collision,
+    where the collision is with an alias instead).
+    """
     spec1 = FieldSpec(name="title", kind=FieldKind.TEXT)
     spec2 = FieldSpec(name="title", kind=FieldKind.KEYWORD)
-    with pytest.raises(ValueError, match="title"):
+    with pytest.raises(ValueError, match="duplicate canonical name"):
         FieldRegistry([spec1, spec2])
 
 
@@ -278,6 +282,160 @@ def test_validation_duplicate_aliases():
     spec2 = FieldSpec(name="subject", kind=FieldKind.TEXT, aliases=("heading",))
     with pytest.raises(ValueError, match=r"subject|title"):
         FieldRegistry([spec1, spec2])
+
+
+def test_validation_duplicate_canonical_name_message_names_alias_collision():
+    """issue #21: when a later spec's canonical name collides with an
+    *earlier* spec's alias (not its canonical name), the message must say
+    so, not claim "duplicate canonical name" (which is what actually
+    collided is an alias, a different, more confusing conflict to debug).
+    """
+    spec1 = FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("heading",))
+    spec2 = FieldSpec(name="heading", kind=FieldKind.TEXT)
+    with pytest.raises(ValueError, match="alias") as excinfo:
+        FieldRegistry([spec1, spec2])
+    message = str(excinfo.value)
+    assert "heading" in message
+    assert "title" in message
+    assert "duplicate canonical name" not in message
+
+
+def test_validation_rejects_empty_canonical_name():
+    """issue #21: an empty field name can never be typed in a query."""
+    with pytest.raises(ValueError, match="empty"):
+        FieldRegistry([FieldSpec(name="", kind=FieldKind.TEXT)])
+
+
+def test_validation_rejects_empty_alias():
+    with pytest.raises(ValueError, match="empty"):
+        FieldRegistry([FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("",))])
+
+
+def test_validation_rejects_duplicate_aliases_within_one_spec():
+    """issue #21: two identical aliases on the *same* spec (as opposed to
+    test_validation_duplicate_aliases's cross-spec case) previously slipped
+    past the collision check entirely, since that check only compares
+    against specs already registered, not a spec's own aliases tuple.
+    """
+    with pytest.raises(ValueError, match="heading"):
+        FieldRegistry(
+            [FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("heading", "heading"))]
+        )
+
+
+def test_validation_rejects_dotted_json_canonical_name():
+    """issue #21 (narrowed by the follow-up status-update comment): a
+    dotted canonical name is only actually unreachable for a JSON-kind
+    field. make_ref's exact-match branch excludes JSON specifically (a
+    bare JSON reference has no subpath and can't emit, issue #11), so a
+    dotted JSON name falls through to dotted-name splitting, which looks
+    up the text *before* the first dot as the field name -- never this
+    field's own name -- so it (and every one of its subpaths) can never
+    resolve through any query text at all.
+    """
+    with pytest.raises(ValueError, match=r"meta\.data"):
+        FieldRegistry([FieldSpec(name="meta.data", kind=FieldKind.JSON, subpaths=("x",))])
+
+
+def test_validation_rejects_dotted_json_alias():
+    # A clean alias before the dotted one exercises the loop actually
+    # scanning past a non-offending entry, not just checking the first.
+    with pytest.raises(ValueError, match=r"heading\.sub"):
+        FieldRegistry(
+            [
+                FieldSpec(
+                    name="notes",
+                    kind=FieldKind.JSON,
+                    subpaths=("user",),
+                    aliases=("clean", "heading.sub"),
+                )
+            ]
+        )
+
+
+def test_validation_dotted_plain_canonical_name_is_permitted():
+    """A dotted canonical name on a *non*-JSON field is a deliberately
+    supported, tested shape (tests/emitter/test_emit_terms.py's
+    dotted-plain-field tests): make_ref's exact-match lookup finds it
+    directly, so unlike the JSON case it is genuinely reachable. The
+    follow-up status-update comment on issue #21 corrects the original,
+    broader "reject all dotted canonical names" decision to this narrower
+    JSON-only scope after confirming the plain-field case actually works.
+    """
+    registry = FieldRegistry([FieldSpec(name="field.with.dots", kind=FieldKind.TEXT)])
+    assert registry.make_ref("field.with.dots") == FieldRef("field.with.dots")
+
+
+def test_validation_dotted_plain_alias_is_permitted():
+    registry = FieldRegistry(
+        [FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("heading.sub",))]
+    )
+    assert registry.make_ref("heading.sub") == FieldRef("title")
+
+
+def test_validation_boolean_exists_target_boolean_exists_kind_rejected():
+    """issue #21: a BOOLEAN_EXISTS exists_target can never work, since a
+    BOOLEAN_EXISTS field has no physical index column of its own to check
+    "exists" against, no matter its fast/kind-resolved strategy. Previously
+    only the *non-fast* case was rejected: a fast=True BOOLEAN_EXISTS
+    target resolved a FAST_FIELD strategy (resolve_exists_strategy looks
+    only at kind/fast, not at what physical column that implies), so it
+    slipped through construction despite having no real column behind it.
+    """
+    spec1 = FieldSpec(name="has_tag", kind=FieldKind.BOOLEAN_EXISTS, exists_target="tag")
+    spec2 = FieldSpec(name="tag", kind=FieldKind.TEXT)
+    spec3 = FieldSpec(name="has_has_tag", kind=FieldKind.BOOLEAN_EXISTS, exists_target="has_tag")
+    with pytest.raises(ValueError, match="has_has_tag"):
+        FieldRegistry([spec1, spec2, spec3])
+
+
+def test_validation_boolean_exists_target_kind_rejected_regardless_of_list_order():
+    """The rejection is a third pass over all fully-registered specs, so it
+    must not depend on exists_target being listed *after* the field that
+    references it: has_has_tag names has_tag as exists_target here while
+    listed *before* it.
+    """
+    spec3 = FieldSpec(name="has_has_tag", kind=FieldKind.BOOLEAN_EXISTS, exists_target="has_tag")
+    spec1 = FieldSpec(name="has_tag", kind=FieldKind.BOOLEAN_EXISTS, exists_target="tag")
+    spec2 = FieldSpec(name="tag", kind=FieldKind.TEXT)
+    with pytest.raises(ValueError, match="has_has_tag"):
+        FieldRegistry([spec3, spec1, spec2])
+
+
+def test_validation_boolean_exists_self_reference_rejected():
+    with pytest.raises(ValueError, match="has_tag"):
+        FieldRegistry(
+            [FieldSpec(name="has_tag", kind=FieldKind.BOOLEAN_EXISTS, exists_target="has_tag")]
+        )
+
+
+def test_validation_boolean_exists_fast_self_reference_rejected():
+    """The specific gap the follow-up status update flagged: fast=True on
+    a self-targeting BOOLEAN_EXISTS spec resolved a FAST_FIELD strategy
+    (fast=True always does, regardless of kind) and so previously
+    constructed successfully despite being unable to ever work: a
+    BOOLEAN_EXISTS field has no physical column for "fast" to mean
+    anything about.
+    """
+    with pytest.raises(ValueError, match="has_tag"):
+        FieldRegistry(
+            [
+                FieldSpec(
+                    name="has_tag",
+                    kind=FieldKind.BOOLEAN_EXISTS,
+                    exists_target="has_tag",
+                    fast=True,
+                )
+            ]
+        )
+
+
+def test_analyzer_on_kind_that_ignores_it_is_permitted():
+    """issue #21, documented as permitted (not a validation gap): a host
+    may reasonably share one FieldSpec factory across kinds, passing an
+    analyzer that a non-TEXT/KEYWORD/JSON kind simply never calls.
+    """
+    FieldRegistry([FieldSpec(name="asn", kind=FieldKind.U64, analyzer=str.split)])
 
 
 # ============================================================================

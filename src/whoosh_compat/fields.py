@@ -118,7 +118,14 @@ class FieldRef:
 
 @dataclass(frozen=True, slots=True)
 class FieldSpec:
-    """Specification for a single field in the schema."""
+    """Specification for a single field in the schema.
+
+    ``analyzer``/``pattern_normalizer``/``multitoken``/``comma_values`` are
+    only consulted for kinds that use them (TEXT/KEYWORD, plus JSON for
+    ``analyzer``); setting one on a kind that ignores it is permitted, not
+    validated against, since a host may reasonably share one ``FieldSpec``
+    factory across kinds rather than branch on kind to omit them.
+    """
 
     name: str
     kind: FieldKind
@@ -186,9 +193,63 @@ class FieldRegistry:
             if spec.kind == FieldKind.BOOLEAN_EXISTS and spec.exists_target is None:
                 raise ValueError(f"Field '{spec.name}': BOOLEAN_EXISTS requires exists_target")
 
-            # Check for duplicate canonical names
-            if spec.name in self._by_name:
-                raise ValueError(f"Field '{spec.name}': duplicate canonical name")
+            # Validate: canonical name and aliases must be non-empty. An
+            # empty name can never be typed in a query.
+            if spec.name == "":
+                raise ValueError("Field name must not be empty")
+            seen_aliases: set[str] = set()
+            for alias in spec.aliases:
+                if alias == "":
+                    raise ValueError(f"Field '{spec.name}': alias must not be empty")
+                if alias in seen_aliases:
+                    raise ValueError(
+                        f"Field '{spec.name}': alias '{alias}' is repeated within this spec"
+                    )
+                seen_aliases.add(alias)
+
+            # Validate: a JSON-kind field's canonical name (and aliases)
+            # must be dot-free. make_ref's exact-match lookup (by raw
+            # string, tried first) does give a dotted *non*-JSON name a way
+            # to resolve (a registered "field.with.dots" TEXT field, or a
+            # dotted alias of one, matches directly and is a deliberately
+            # supported, tested shape: see
+            # tests/emitter/test_emit_terms.py's dotted-plain-field tests).
+            # A dotted *JSON* name is different: make_ref's exact-match
+            # branch explicitly excludes JSON kind (a bare JSON reference
+            # has no subpath and can't emit, see issue #11's demotion fix),
+            # so it falls through to dotted-name splitting instead, which
+            # looks up the text *before* the first dot as a field name; for
+            # a JSON field whose own canonical name contains a dot, that
+            # split point isn't the field's own name, so it never resolves
+            # at all, subpaths included. Rejecting at construction is
+            # better than a JSON field that silently can never be
+            # addressed by any query text.
+            if spec.kind is FieldKind.JSON:
+                if "." in spec.name:
+                    raise ValueError(
+                        f"Field '{spec.name}': a JSON field's canonical name must not "
+                        f"contain '.' (it would make the field, and all its subpaths, "
+                        f"unreachable through any query text)"
+                    )
+                for alias in spec.aliases:
+                    if "." in alias:
+                        raise ValueError(
+                            f"Field '{spec.name}': a JSON field's alias '{alias}' must not "
+                            f"contain '.' (same reachability problem as a dotted canonical "
+                            f"name)"
+                        )
+
+            # Check for duplicate canonical names (or a collision with an
+            # earlier spec's alias, named accurately rather than as a
+            # misleading "duplicate canonical name" when that's not what
+            # actually collided).
+            existing = self._by_name.get(spec.name)
+            if existing is not None:
+                if existing.name == spec.name:
+                    raise ValueError(f"Field '{spec.name}': duplicate canonical name")
+                raise ValueError(
+                    f"Field '{spec.name}': collides with an alias of field '{existing.name}'"
+                )
 
             # Check for alias collision with canonical names
             for alias in spec.aliases:
@@ -224,6 +285,22 @@ class FieldRegistry:
                     raise ValueError(
                         f"Field '{spec.name}': exists_target '{spec.exists_target}' "
                         f"does not reference a registered spec"
+                    )
+                # Validate: target must not itself be BOOLEAN_EXISTS. A
+                # BOOLEAN_EXISTS field has no physical index column of its
+                # own to check "exists" against; that's true regardless of
+                # its resolved strategy (a fast=True BOOLEAN_EXISTS target
+                # resolves FAST_FIELD despite having no real column behind
+                # it, since resolve_exists_strategy only looks at kind/fast,
+                # not at what physical column that combination implies), so
+                # this can never work no matter what the target's own fast
+                # flag is. Includes self-reference (a spec targeting itself)
+                # as the degenerate case of a cycle.
+                if target_spec.kind is FieldKind.BOOLEAN_EXISTS:
+                    raise ValueError(
+                        f"Field '{spec.name}': exists_target '{spec.exists_target}' is "
+                        f"itself BOOLEAN_EXISTS, which has no physical column to check "
+                        f"'exists' against; point exists_target at a real field instead"
                     )
                 # Validate: target must resolve to a supported "exists"
                 # strategy (fast=True of any kind, or non-fast TEXT/KEYWORD).
