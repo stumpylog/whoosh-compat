@@ -41,6 +41,7 @@ dev = [
   "whoosh-compat[tantivy]",
   "Whoosh @ git+https://github.com/whoosh-community/whoosh@baa4d577fdb34bfcf30547c8c6bf853fffeb7fe0",
   "tzdata>=2026.3",
+  "pyrefly>=1.2.0",
 ]
 
 [tool.pytest.ini_options]
@@ -56,6 +57,11 @@ check_untyped_defs = true
 # see its pinned git ref above) ships no py.typed marker / type stubs.
 module = "whoosh.*"
 ignore_missing_imports = true
+
+[tool.pyrefly]
+# Matches `uv run mypy src`: only the library is type-checked, not tests.
+project-includes = ["src"]
+python-version = "3.11"
 
 [tool.coverage.run]
 source = ["whoosh_compat"]
