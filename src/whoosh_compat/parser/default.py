@@ -78,6 +78,8 @@ from whoosh_compat.parser.plugins import Plugin
 # See paperless-ngx#13568.
 _TRAILING_STAR_RE = re.compile(r"^[^*?\[]+\*$")
 
+_U64_MAX = 2**64 - 1
+
 
 class QueryParser:
     """A hand-written query parser built on modular plug-ins. The default
@@ -376,19 +378,17 @@ class QueryParser:
 
         if spec is not None:
             if spec.kind is FieldKind.U64:
-                try:
-                    node = ast.Term(field=ref, text=int(text))
-                except ValueError:
-                    d = Diagnostic(
-                        message=f"{text!r} is not a valid number for {ref}",
-                        kind=DiagnosticKind.BAD_NUMBER,
-                        startchar=kw.get("startchar"),  # type: ignore[arg-type]
-                        endchar=kw.get("endchar"),  # type: ignore[arg-type]
-                        field=ref,
-                        raw_value=text,
-                    )
-                    self.report(d)
-                    return ast.ErrorLeaf(diagnostic=d)
+                assert ref is not None  # spec only resolves from a non-None ref
+                value, err = self._parse_u64(
+                    text,
+                    ref,
+                    kw.get("startchar"),  # type: ignore[arg-type]
+                    kw.get("endchar"),  # type: ignore[arg-type]
+                )
+                if err is not None:
+                    return err
+                assert value is not None  # err is None only when value is set
+                node = ast.Term(field=ref, text=value)
                 return ast.Boosted(node, boost) if boost != 1.0 else node
 
             if spec.kind is FieldKind.BOOLEAN_EXISTS:
@@ -405,24 +405,44 @@ class QueryParser:
         node = ast.Term(field=ref, text=text)
         return ast.Boosted(node, boost) if boost != 1.0 else node
 
-    def _coerce_range_bound(
-        self, text: str | None, ref: FieldRef, node: object
+    def _parse_u64(
+        self, text: str, ref: FieldRef, startchar: int | None, endchar: int | None
     ) -> tuple[int | None, ast.ErrorLeaf | None]:
-        if text is None:
-            return None, None
+        """Parses ``text`` as a u64 value, diagnosing both a non-numeric
+        value and one outside u64's domain (negative, or ``>= 2**64``) as
+        ``BAD_NUMBER`` at parse time.
+
+        Without the domain check, an out-of-range value that still converts
+        via ``int()`` (e.g. ``-5`` or ``2**64``) reached tantivy-py's u64
+        extraction at emit time as a bare, undiagnosed ``ValueError``.
+        """
+
         try:
-            return int(text), None
+            value = int(text)
         except ValueError:
+            value = None
+
+        if value is None or not (0 <= value <= _U64_MAX):
             d = Diagnostic(
                 message=f"{text!r} is not a valid number for {ref}",
                 kind=DiagnosticKind.BAD_NUMBER,
-                startchar=getattr(node, "startchar", None),
-                endchar=getattr(node, "endchar", None),
+                startchar=startchar,
+                endchar=endchar,
                 field=ref,
                 raw_value=text,
             )
             self.report(d)
             return None, ast.ErrorLeaf(diagnostic=d)
+        return value, None
+
+    def _coerce_range_bound(
+        self, text: str | None, ref: FieldRef, node: object
+    ) -> tuple[int | None, ast.ErrorLeaf | None]:
+        if text is None:
+            return None, None
+        return self._parse_u64(
+            text, ref, getattr(node, "startchar", None), getattr(node, "endchar", None)
+        )
 
     def range_query(
         self,

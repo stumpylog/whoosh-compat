@@ -1,4 +1,6 @@
 # tests/test_parser_fields.py
+import pytest
+
 import whoosh_compat as wc
 from whoosh_compat import ast
 from whoosh_compat.errors import DiagnosticKind
@@ -32,6 +34,59 @@ def test_numeric_range_bad_bound_diagnostic_carries_field_and_raw_value(reg):
     assert isinstance(r.ast, ast.ErrorLeaf) and r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
     assert r.diagnostics[0].field == FieldRef("asn")
     assert r.diagnostics[0].raw_value == "xyz"
+
+
+def test_u64_negative_is_diagnosed_at_parse_time(reg):
+    # -5 converts fine as a Python int but is outside u64's domain; letting
+    # it through used to raise a bare ValueError at tantivy-py's u64
+    # extraction at emit time instead of a parse-time diagnostic.
+    r = wc.parse("asn:-5", registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf) and r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert r.diagnostics[0].field == FieldRef("asn")
+    assert r.diagnostics[0].raw_value == "-5"
+    assert r.diagnostics[0].startchar == 4
+    assert r.diagnostics[0].endchar == 6
+
+
+def test_u64_too_large_is_diagnosed_at_parse_time(reg):
+    too_large = str(2**64)
+    r = wc.parse(f"asn:{too_large}", registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf) and r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert r.diagnostics[0].field == FieldRef("asn")
+    assert r.diagnostics[0].raw_value == too_large
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(0, id="lower-boundary"),
+        pytest.param(2**64 - 1, id="upper-boundary"),
+    ],
+)
+def test_u64_boundary_values_still_parse(reg, value):
+    assert parse(f"asn:{value}", reg) == ast.Term(field=FieldRef("asn"), text=value)
+
+
+def test_u64_negative_range_bound_is_diagnosed_at_parse_time(reg):
+    r = wc.parse("asn:[-5 TO 20]", registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf) and r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert r.diagnostics[0].field == FieldRef("asn")
+    assert r.diagnostics[0].raw_value == "-5"
+
+
+def test_u64_too_large_range_bound_is_diagnosed_at_parse_time(reg):
+    too_large = str(2**64)
+    r = wc.parse(f"asn:[0 TO {too_large}]", registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf) and r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert r.diagnostics[0].field == FieldRef("asn")
+    assert r.diagnostics[0].raw_value == too_large
+
+
+def test_u64_boundary_range_bounds_still_parse(reg):
+    r = parse(f"asn:[0 TO {2**64 - 1}]", reg)
+    assert r == ast.NumericRange(
+        field=FieldRef("asn"), lo=0, hi=2**64 - 1, incl_lo=True, incl_hi=True
+    )
 
 
 def test_bool_words(reg):
