@@ -18,7 +18,7 @@ def utc(y, m, d):
 
 
 @pytest.mark.parametrize(
-    "lo, hi, incl_lo, incl_hi, expected",
+    ("lo", "hi", "incl_lo", "incl_hi", "expected"),
     [
         pytest.param(
             utc(2020, 1, 1), utc(2021, 1, 1), True, False, [1, 4], id="both-bounds-incl-lo-excl-hi"
@@ -56,7 +56,7 @@ def test_date_range_parsed(tindex, ereg, parse):
 
 
 @pytest.mark.parametrize(
-    "lo, hi, incl_lo, incl_hi, expected",
+    ("lo", "hi", "incl_lo", "incl_hi", "expected"),
     [
         pytest.param(101, 103, True, False, [2, 3], id="excl-hi"),
         pytest.param(101, 103, True, True, [2, 3, 4], id="incl-hi"),

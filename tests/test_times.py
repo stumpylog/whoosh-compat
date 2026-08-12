@@ -29,7 +29,7 @@ def test_timespan_disambiguate():
 
 
 @pytest.mark.parametrize(
-    "current_wday, wday, dir, expected",
+    ("current_wday", "wday", "dir", "expected"),
     [
         pytest.param(6, 1, 1, 2, id="next-weekday-forward"),
         pytest.param(1, 6, -1, -2, id="last-weekday-backward"),
@@ -42,7 +42,7 @@ def test_relative_days(current_wday, wday, dir, expected):
 
 
 @pytest.mark.parametrize(
-    "kwargs, message",
+    ("kwargs", "message"),
     [
         pytest.param({"month": 0}, "month must be in 1..12", id="month-too-low"),
         pytest.param({"month": 13}, "month must be in 1..12", id="month-too-high"),
@@ -125,9 +125,9 @@ def test_adatetime_floor_ceil_all_fields_specified():
 
 def test_adatetime_floor_ceil_no_year_raises():
     at = adatetime(month=3, day=4)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Date has no year"):
         at.floor()
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Date has no year"):
         at.ceil()
 
 
@@ -146,7 +146,7 @@ def test_adatetime_disambiguated_ambiguous_returns_timespan():
 
 
 @pytest.mark.parametrize(
-    "start, end",
+    ("start", "end"),
     [
         pytest.param("not-a-date", datetime(2020, 1, 1), id="bad-start"),
         pytest.param(datetime(2020, 1, 1), "not-a-date", id="bad-end"),
@@ -182,7 +182,8 @@ def test_timespan_disambiguate_no_year_either_side_uses_basedate_year():
     # has_no_date() is False: both years fall back to the basedate
     # (times.py:314-316).
     ts = timespan(adatetime(month=3), adatetime(month=6)).disambiguated(datetime(2026, 1, 1))
-    assert ts.start.year == 2026 and ts.end.year == 2026
+    assert ts.start.year == 2026
+    assert ts.end.year == 2026
 
 
 def test_timespan_disambiguate_end_year_missing_uses_max_of_start_and_basedate_year():
@@ -207,7 +208,8 @@ def test_timespan_disambiguate_end_dm_copied_to_start():
     ts = timespan(
         adatetime(year=2020, hour=1), adatetime(year=2020, month=6, day=15, hour=5)
     ).disambiguated(datetime(2026, 1, 1))
-    assert ts.start.month == 6 and ts.start.day == 15
+    assert ts.start.month == 6
+    assert ts.start.day == 15
 
 
 def test_timespan_disambiguate_end_dm_falls_back_to_basedate_when_time_inverted():
@@ -216,7 +218,8 @@ def test_timespan_disambiguate_end_dm_falls_back_to_basedate_when_time_inverted(
     ts = timespan(
         adatetime(year=2020, hour=20), adatetime(year=2020, month=6, day=15, hour=5)
     ).disambiguated(datetime(2026, 3, 9))
-    assert ts.start.month == 3 and ts.start.day == 9
+    assert ts.start.month == 3
+    assert ts.start.day == 9
 
 
 def test_timespan_disambiguate_start_dm_copied_to_end_uses_basedate():
@@ -226,7 +229,8 @@ def test_timespan_disambiguate_start_dm_copied_to_end_uses_basedate():
     ts = timespan(
         adatetime(year=2020, month=3, day=9, hour=1), adatetime(year=2020, hour=5)
     ).disambiguated(datetime(2026, 3, 9))
-    assert ts.end.month == 3 and ts.end.day == 9
+    assert ts.end.month == 3
+    assert ts.end.day == 9
 
 
 def test_timespan_disambiguate_swaps_out_of_order_explicit_years():
@@ -270,7 +274,7 @@ def test_timespan_disambiguate_same_day_end_time_before_start_rolls_over():
 
 
 @pytest.mark.parametrize(
-    "value, expected",
+    ("value", "expected"),
     [
         pytest.param(datetime(2020, 1, 1), True, id="datetime-passthrough-floor"),
     ],
@@ -298,7 +302,7 @@ def test_fill_in_fills_missing_units_from_basedate():
 
 
 @pytest.mark.parametrize(
-    "at, expected",
+    ("at", "expected"),
     [
         pytest.param(adatetime(), True, id="fully-ambiguous-has-no-date"),
         pytest.param(adatetime(hour=3), True, id="time-only-has-no-date"),
@@ -311,7 +315,7 @@ def test_has_no_date(at, expected):
 
 
 @pytest.mark.parametrize(
-    "at, expected",
+    ("at", "expected"),
     [
         pytest.param(adatetime(), True, id="fully-ambiguous-has-no-time"),
         pytest.param(adatetime(year=2020), True, id="date-only-has-no-time"),
@@ -324,7 +328,7 @@ def test_has_no_time(at, expected):
 
 
 @pytest.mark.parametrize(
-    "at, expected",
+    ("at", "expected"),
     [
         pytest.param(adatetime(year=2020), True, id="partial-adatetime-is-ambiguous"),
         pytest.param(adatetime(2020, 1, 1, 0, 0, 0, 0), False, id="full-adatetime-not-ambiguous"),
@@ -336,7 +340,7 @@ def test_is_ambiguous(at, expected):
 
 
 @pytest.mark.parametrize(
-    "at, expected",
+    ("at", "expected"),
     [
         pytest.param(adatetime(), True, id="empty-adatetime-is-void"),
         pytest.param(adatetime(year=2020), False, id="partial-adatetime-not-void"),

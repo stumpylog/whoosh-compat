@@ -18,6 +18,7 @@ looks like.
 
 from __future__ import annotations
 
+import contextlib
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -231,14 +232,12 @@ def test_emit_never_raises_except_unsupported(q, tindex, ereg):
         # intentional contract). This property is about queries that parsed
         # cleanly, so skip the ones that didn't.
         return
-    try:
+    # The one documented, expected exception: a text-field TermRange
+    # (DIVERGENCES.md entry 5, tantivy-py has no programmatic text-range
+    # API) is the only construct that's parseable but genuinely
+    # inexecutable against tantivy.
+    with contextlib.suppress(UnsupportedQueryError):
         emit_(result.ast, index=tindex[0], registry=ereg)
-    except UnsupportedQueryError:
-        # The one documented, expected exception: a text-field TermRange
-        # (DIVERGENCES.md entry 5, tantivy-py has no programmatic text-range
-        # API) is the only construct that's parseable but genuinely
-        # inexecutable against tantivy.
-        pass
 
 
 @given(q=_query_text(max_leaves=6))

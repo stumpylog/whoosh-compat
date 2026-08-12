@@ -510,7 +510,7 @@ class Regex(ParserBase):
     def extract(self, match: re.Match[str]) -> Props:
         d = match.groupdict()
         for key, value in d.items():
-            try:
+            try:  # noqa: SIM105 (matches whoosh's original try/except/pass, kept verbatim)
                 d[key] = int(value)  # type: ignore[call-overload]
             except (ValueError, TypeError):
                 pass
@@ -614,7 +614,7 @@ class Daynames(Regex):
         direction = -1 if re.match(p.dir, self.last_pattern) else 1
 
         daynum = 0
-        for daynum, expr in enumerate(self._dayname_exprs):
+        for daynum, expr in enumerate(self._dayname_exprs):  # noqa: B007 (daynum is used below, after the loop)
             m = expr.match(p.day)
             if m:
                 break

@@ -107,7 +107,7 @@ def test_zero_token_term_dropped_through_boosted_parsed(tindex, ereg, parse):
 
 
 @pytest.mark.parametrize(
-    "text, expected",
+    ("text", "expected"),
     [
         pytest.param("false", [3, 5], id="str-false-is-falsy"),
         pytest.param("0", [3, 5], id="str-zero-is-falsy"),
@@ -154,7 +154,7 @@ def _multitoken_registry(mode):
 
 
 @pytest.mark.parametrize(
-    "mode, text, expected",
+    ("mode", "text", "expected"),
     [
         # FIRST: only the first token is searched: "shopname" alone matches
         # both docs 2 and 4 regardless of what follows it.

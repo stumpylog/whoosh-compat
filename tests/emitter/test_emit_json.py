@@ -25,7 +25,7 @@ from .conftest import search_ids
 
 
 @pytest.mark.parametrize(
-    "text, expected",
+    ("text", "expected"),
     [
         pytest.param("alice", [1], id="matches-owning-doc"),
         pytest.param("bob", [4], id="matches-different-doc"),

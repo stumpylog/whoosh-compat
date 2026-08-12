@@ -71,7 +71,7 @@ def attach(q: Any, stxnode: Any) -> Any:
         q.startchar = stxnode.startchar
         q.endchar = stxnode.endchar
     except AttributeError:
-        raise AttributeError(
+        raise AttributeError(  # noqa: B904 (matches whoosh's original re-raise, kept verbatim)
             f"Can't set attribute on {q.__class__.__name__}"
         )
     return q

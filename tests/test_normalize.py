@@ -21,7 +21,7 @@ def T(x):
 # child group must be normalized before the parent applies its own rules.
 class TestRule1NormalizeChildrenFirst:
     @pytest.mark.parametrize(
-        "tree, expected",
+        ("tree", "expected"),
         [
             # Or(And(a, Nothing)) -> Or(Nothing) -> Nothing (all dropped)
             pytest.param(
@@ -65,7 +65,7 @@ class TestRule2Flatten:
 # Rule 3: Nothing propagation across all combinator types.
 class TestRule3NothingPropagation:
     @pytest.mark.parametrize(
-        "tree, expected",
+        ("tree", "expected"),
         [
             pytest.param(
                 And(children=(T("a"), Nothing())),
@@ -119,7 +119,7 @@ class TestRule3NothingPropagation:
 # Rule 4: single-child group unwraps (after flatten/dedupe/absorption).
 class TestRule4SingleChildUnwrap:
     @pytest.mark.parametrize(
-        "tree, expected",
+        ("tree", "expected"),
         [
             pytest.param(And(children=(T("a"),)), T("a"), id="and-single-child-unwraps"),
             pytest.param(Or(children=(T("a"),)), T("a"), id="or-single-child-unwraps"),
@@ -142,7 +142,7 @@ class TestRule5Dedupe:
 # Rule 6: Every() absorption in Or, dropping in And.
 class TestRule6EveryAbsorption:
     @pytest.mark.parametrize(
-        "tree, expected",
+        ("tree", "expected"),
         [
             pytest.param(Or(children=(Every(), T("a"))), Every(), id="every-absorbs-or"),
             pytest.param(

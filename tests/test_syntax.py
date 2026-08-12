@@ -48,7 +48,7 @@ class StubParser:
 
 
 @pytest.mark.parametrize(
-    "group_cls, expected",
+    ("group_cls", "expected"),
     [
         pytest.param(
             syntax.AndGroup,
@@ -130,7 +130,8 @@ def test_group_boost_of_one_does_not_wrap() -> None:
 
 def test_attach_copies_span_onto_frozen_node() -> None:
     term = ast.Term(field=None, text="a")
-    assert term.startchar is None and term.endchar is None
+    assert term.startchar is None
+    assert term.endchar is None
 
     node = syntax.WordNode("a")
     node.set_range(3, 4)
@@ -451,8 +452,10 @@ def test_groupnode_set_range_propagates_to_children() -> None:
     b = syntax.WordNode("b")
     group = syntax.AndGroup([a, b])
     group.set_range(5, 9)
-    assert a.startchar == 5 and a.endchar == 9
-    assert b.startchar == 5 and b.endchar == 9
+    assert a.startchar == 5
+    assert a.endchar == 9
+    assert b.startchar == 5
+    assert b.endchar == 9
 
 
 def test_groupnode_list_protocol() -> None:

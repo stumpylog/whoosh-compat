@@ -47,19 +47,22 @@ def test_year_precision(reg, query):
 
 def test_open_upper(reg):
     r = dparse("created:[2020 TO]", reg).ast
-    assert r.lo is not None and r.hi is None
+    assert r.lo is not None
+    assert r.hi is None
 
 
 def test_yesterday_keyword(reg):
     r = dparse("added:yesterday", reg).ast
     assert r.lo == datetime(2026, 8, 3, 0, 0, tzinfo=BERLIN).astimezone(UTC)
-    assert r.hi == datetime(2026, 8, 4, 0, 0, tzinfo=BERLIN).astimezone(UTC) and not r.incl_hi
+    assert r.hi == datetime(2026, 8, 4, 0, 0, tzinfo=BERLIN).astimezone(UTC)
+    assert not r.incl_hi
 
 
 def test_previous_month(reg):
     r = dparse("added:'previous month'", reg).ast
     assert r.lo == datetime(2026, 7, 1, tzinfo=BERLIN).astimezone(UTC)
-    assert r.hi == datetime(2026, 8, 1, tzinfo=BERLIN).astimezone(UTC) and not r.incl_hi
+    assert r.hi == datetime(2026, 8, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert not r.incl_hi
 
 
 def test_now_compact(reg):
@@ -74,7 +77,8 @@ def test_whoosh_plusminus(reg):
 
 def test_bad_date_diagnostic(reg):
     res = dparse("added:notadate", reg)
-    assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
     # A host mapping this to a typed exception (e.g. InvalidDateQuery(field,
     # value)) needs the field name and offending text structurally, not by
     # regex-parsing the rendered message.
@@ -84,14 +88,15 @@ def test_bad_date_diagnostic(reg):
 
 def test_datetime_boost_preserved(reg):
     r = dparse("added:2020^2.0", reg).ast
-    assert isinstance(r, ast.Boosted) and r.boost == 2.0
+    assert isinstance(r, ast.Boosted)
+    assert r.boost == 2.0
 
 
 # --- Daynames grammar (parser/dateparse.py:625-637) ------------------------
 
 
 @pytest.mark.parametrize(
-    "query, expected_date",
+    ("query", "expected_date"),
     [
         # BASE is 2026-08-04, a Tuesday.
         pytest.param("added:'next monday'", datetime(2026, 8, 10), id="next-monday"),
@@ -112,7 +117,7 @@ def test_dayname_keywords(reg, query, expected_date):
 
 
 @pytest.mark.parametrize(
-    "query, hour, minute, second",
+    ("query", "hour", "minute", "second"),
     [
         pytest.param("added:'3pm'", 15, 0, 0, id="3pm-bare-hour"),
         pytest.param("added:'12am'", 0, 0, 0, id="12am-is-midnight-hour"),
@@ -133,7 +138,8 @@ def test_time12_keywords(reg, query, hour, minute, second):
 def test_previous_year(reg):
     r = dparse("added:'previous year'", reg).ast
     assert r.lo == datetime(2025, 1, 1, tzinfo=BERLIN).astimezone(UTC)
-    assert r.hi == datetime(2026, 1, 1, tzinfo=BERLIN).astimezone(UTC) and not r.incl_hi
+    assert r.hi == datetime(2026, 1, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert not r.incl_hi
 
 
 def test_previous_week(reg):
@@ -141,14 +147,16 @@ def test_previous_week(reg):
     # "previous week" is 2026-07-27 through (excl) 2026-08-03.
     r = dparse("added:'previous week'", reg).ast
     assert r.lo == datetime(2026, 7, 27, tzinfo=BERLIN).astimezone(UTC)
-    assert r.hi == datetime(2026, 8, 3, tzinfo=BERLIN).astimezone(UTC) and not r.incl_hi
+    assert r.hi == datetime(2026, 8, 3, tzinfo=BERLIN).astimezone(UTC)
+    assert not r.incl_hi
 
 
 def test_previous_quarter(reg):
     # BASE month is August (Q3), so the previous quarter is Q2: Apr-Jun.
     r = dparse("added:'previous quarter'", reg).ast
     assert r.lo == datetime(2026, 4, 1, tzinfo=BERLIN).astimezone(UTC)
-    assert r.hi == datetime(2026, 7, 1, tzinfo=BERLIN).astimezone(UTC) and not r.incl_hi
+    assert r.hi == datetime(2026, 7, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert not r.incl_hi
 
 
 def test_this_year(reg):
@@ -169,11 +177,12 @@ def test_today(reg):
 def test_now_keyword(reg):
     r = dparse("added:now", reg).ast
     assert r.lo == BASE.astimezone(UTC)
-    assert r.incl_lo and r.incl_hi  # an exact instant, not a period
+    assert r.incl_lo
+    assert r.incl_hi
 
 
 @pytest.mark.parametrize(
-    "query, hour, minute, second",
+    ("query", "hour", "minute", "second"),
     [
         pytest.param("added:midnight", 0, 0, 0, id="midnight"),
         pytest.param("added:noon", 12, 0, 0, id="noon"),
@@ -187,7 +196,8 @@ def test_midnight_noon(reg, query, hour, minute, second):
     # exact instant, not an ambiguous period: both bounds inclusive, not a
     # half-open range one microsecond wide (see cb3a4b1).
     assert r.lo == r.hi
-    assert r.incl_lo and r.incl_hi
+    assert r.incl_lo
+    assert r.incl_hi
 
 
 def test_tomorrow(reg):
@@ -221,7 +231,8 @@ def test_month_alone(reg):
     # year (2026).
     r = dparse("created:august", reg).ast
     assert r.lo == datetime(2026, 8, 1, tzinfo=UTC)
-    assert r.hi == datetime(2026, 9, 1, tzinfo=UTC) and not r.incl_hi
+    assert r.hi == datetime(2026, 9, 1, tzinfo=UTC)
+    assert not r.incl_hi
 
 
 # --- Compact numeric "simple" sequence (DateParser.__init__'s self.simple) -
@@ -255,7 +266,7 @@ def test_plusdate_years_months_weeks_combo(reg):
 
 
 @pytest.mark.parametrize(
-    "query, lo, hi",
+    ("query", "lo", "hi"),
     [
         pytest.param(
             "created:2020-01-01",
@@ -305,7 +316,8 @@ def test_separated_iso_date_precision(reg, query, lo, hi):
     r = dparse(query, reg).ast
     assert isinstance(r, ast.DateRange), r
     assert r.lo == lo
-    assert r.hi == hi and not r.incl_hi
+    assert r.hi == hi
+    assert not r.incl_hi
 
 
 # --- Range queries combining two date expressions (range_to_node) ---------
@@ -331,7 +343,8 @@ def test_range_bounds_do_not_collapse_to_year(reg):
 
 def test_range_open_lower(reg):
     r = dparse("created:[TO 2020]", reg).ast
-    assert r.lo is None and r.hi is not None
+    assert r.lo is None
+    assert r.hi is not None
 
 
 def test_range_both_sides_are_periods_cannot_combine(reg):
@@ -386,11 +399,12 @@ def test_years_outside_the_representable_range_diagnose(reg, query):
     # rather than the grammar, so they need catching: parsing reports bad
     # input through diagnostics, it does not raise.
     res = dparse(query, reg)
-    assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
 
 
 @pytest.mark.parametrize(
-    "query, bad_bound",
+    ("query", "bad_bound"),
     [
         pytest.param("created:[2020 TO 9999]", "9999", id="end-bound-overflow-named-correctly"),
         pytest.param("created:[0000 TO 2020]", "0000", id="start-bound-underflow-named-correctly"),
@@ -402,7 +416,8 @@ def test_range_out_of_range_diagnostic_names_the_failing_bound(reg, query, bad_b
     # year 9999's exclusive ceiling overflowing datetime.max) incorrectly
     # named the START bound in the diagnostic message.
     res = dparse(query, reg)
-    assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
     assert bad_bound in res.diagnostics[0].message
     assert res.diagnostics[0].field == FieldRef("created")
     assert res.diagnostics[0].raw_value == bad_bound
@@ -410,14 +425,16 @@ def test_range_out_of_range_diagnostic_names_the_failing_bound(reg, query, bad_b
 
 def test_range_bad_start_diagnostic(reg):
     res = dparse("added:[notadate TO 2020]", reg)
-    assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
     assert res.diagnostics[0].field == FieldRef("added")
     assert res.diagnostics[0].raw_value == "notadate"
 
 
 def test_range_bad_end_diagnostic(reg):
     res = dparse("added:[2020 TO notadate]", reg)
-    assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
     assert res.diagnostics[0].field == FieldRef("added")
     # The end bound is the offending text here, not the start bound: the
     # diagnostic's raw_value must track whichever bound the message names.
@@ -439,7 +456,8 @@ def test_torange_combo_first_side_fails_whole_thing_fails(reg):
     # doesn't match at all, so neither the "to" combo nor any dmy/bundle
     # alternative in the outer Choice matches either.
     res = dparse("added:'notadate to 2020'", reg)
-    assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
 
 
 def test_sequence_fill_in_type_error_rejected(reg):
@@ -449,7 +467,8 @@ def test_sequence_fill_in_type_error_rejected(reg):
     # swallows it and reports failure, so no dmy/mdy/... alternative
     # matches and the whole field value is an unparseable date.
     res = dparse("created:'31 february 2020'", reg)
-    assert res.diagnostics and res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
 
 
 def test_bag_time_and_date_both_match_in_one_value(reg):
@@ -595,7 +614,8 @@ def test_aware_basedate_with_same_wall_clock_still_works(reg) -> None:
         "added:yesterday", registry=reg, default_fields=["content"], tz=BERLIN, basedate=aware
     ).ast
     assert r.lo == datetime(2026, 8, 3, 0, 0, tzinfo=BERLIN).astimezone(UTC)
-    assert r.hi == datetime(2026, 8, 4, 0, 0, tzinfo=BERLIN).astimezone(UTC) and not r.incl_hi
+    assert r.hi == datetime(2026, 8, 4, 0, 0, tzinfo=BERLIN).astimezone(UTC)
+    assert not r.incl_hi
 
 
 def test_do_dates_leaves_non_range_non_text_date_field_node_untouched(reg) -> None:
@@ -626,4 +646,5 @@ def test_range_exclusive_bounds_ignored_for_ambiguous_bounds(reg):
     # marker (parser/dateparse.py:999-1000): only incl_hi is
     # forced-exclusive (it already carries the "+1us" half-open adjustment).
     r = dparse("added:{2020 TO 2021}", reg).ast
-    assert r.incl_lo is True and r.incl_hi is False
+    assert r.incl_lo is True
+    assert r.incl_hi is False

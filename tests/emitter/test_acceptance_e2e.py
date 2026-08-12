@@ -207,7 +207,7 @@ SCENARIOS_EQUAL = [
 ]
 
 
-@pytest.mark.parametrize("q, expected", SCENARIOS_EQUAL)
+@pytest.mark.parametrize(("q", "expected"), SCENARIOS_EQUAL)
 def test_scenario_equal(windex, tindex, ereg, q, expected):
     assert whoosh_search_ids(windex, q, BASE, BERLIN) == expected
     assert tantivy_search_ids(tindex, ereg, q) == expected

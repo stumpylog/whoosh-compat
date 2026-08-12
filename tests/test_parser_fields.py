@@ -17,7 +17,8 @@ def test_u64(reg):
 
 def test_u64_bad(reg):
     r = wc.parse("asn:xyz", registry=reg, default_fields=["content"])
-    assert isinstance(r.ast, ast.ErrorLeaf) and r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
     # The diagnostic must carry a real span pointing at "xyz" (offsets 4-7 in
     # "asn:xyz"), not None/None: a host turning this into an HTTP 400 needs
     # somewhere to point the user at, same as BAD_DATE diagnostics already do.
@@ -31,7 +32,8 @@ def test_u64_bad(reg):
 
 def test_numeric_range_bad_bound_diagnostic_carries_field_and_raw_value(reg):
     r = wc.parse("asn:[xyz TO 20]", registry=reg, default_fields=["content"])
-    assert isinstance(r.ast, ast.ErrorLeaf) and r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
     assert r.diagnostics[0].field == FieldRef("asn")
     assert r.diagnostics[0].raw_value == "xyz"
 
@@ -41,7 +43,8 @@ def test_u64_negative_is_diagnosed_at_parse_time(reg):
     # it through used to raise a bare ValueError at tantivy-py's u64
     # extraction at emit time instead of a parse-time diagnostic.
     r = wc.parse("asn:-5", registry=reg, default_fields=["content"])
-    assert isinstance(r.ast, ast.ErrorLeaf) and r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
     assert r.diagnostics[0].field == FieldRef("asn")
     assert r.diagnostics[0].raw_value == "-5"
     assert r.diagnostics[0].startchar == 4
@@ -51,7 +54,8 @@ def test_u64_negative_is_diagnosed_at_parse_time(reg):
 def test_u64_too_large_is_diagnosed_at_parse_time(reg):
     too_large = str(2**64)
     r = wc.parse(f"asn:{too_large}", registry=reg, default_fields=["content"])
-    assert isinstance(r.ast, ast.ErrorLeaf) and r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
     assert r.diagnostics[0].field == FieldRef("asn")
     assert r.diagnostics[0].raw_value == too_large
 
@@ -69,7 +73,8 @@ def test_u64_boundary_values_still_parse(reg, value):
 
 def test_u64_negative_range_bound_is_diagnosed_at_parse_time(reg):
     r = wc.parse("asn:[-5 TO 20]", registry=reg, default_fields=["content"])
-    assert isinstance(r.ast, ast.ErrorLeaf) and r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
     assert r.diagnostics[0].field == FieldRef("asn")
     assert r.diagnostics[0].raw_value == "-5"
 
@@ -77,7 +82,8 @@ def test_u64_negative_range_bound_is_diagnosed_at_parse_time(reg):
 def test_u64_too_large_range_bound_is_diagnosed_at_parse_time(reg):
     too_large = str(2**64)
     r = wc.parse(f"asn:[0 TO {too_large}]", registry=reg, default_fields=["content"])
-    assert isinstance(r.ast, ast.ErrorLeaf) and r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
     assert r.diagnostics[0].field == FieldRef("asn")
     assert r.diagnostics[0].raw_value == too_large
 
@@ -109,7 +115,8 @@ def test_u64_boundary_range_bounds_still_parse(reg):
 def test_wildcard_on_u64_field_is_diagnosed(reg, query):
     r = wc.parse(query, registry=reg, default_fields=["content"])
     assert isinstance(r.ast, ast.ErrorLeaf)
-    assert r.diagnostics and r.diagnostics[0].kind is DiagnosticKind.UNKNOWN
+    assert r.diagnostics
+    assert r.diagnostics[0].kind is DiagnosticKind.UNKNOWN
     assert r.diagnostics[0].field == FieldRef("asn")
     # "1*" arrives here as "1": do_wildcards folds a trailing-star-only
     # wildcard into a literal Prefix *before* query()/prefix_query ever run
@@ -178,7 +185,7 @@ def test_numeric_range_open(reg):
 
 
 @pytest.mark.parametrize(
-    "field, query",
+    ("field", "query"),
     [
         pytest.param("asn", "asn:'*'", id="u64"),
         pytest.param("has_tag", "has_tag:'*'", id="boolean-exists"),
@@ -189,7 +196,7 @@ def test_single_quoted_star_matches_unquoted_ast(reg, field, query):
 
 
 @pytest.mark.parametrize(
-    "field, query",
+    ("field", "query"),
     [
         pytest.param("asn", 'asn:"*"', id="u64"),
         pytest.param("has_tag", 'has_tag:"*"', id="boolean-exists"),

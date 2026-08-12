@@ -85,7 +85,7 @@ target-version = "py311"
 force-exclude = true
 
 [tool.ruff.lint]
-extend-select = ["I"]
+extend-select = ["I", "DTZ", "B", "RUF", "C4", "PT", "UP", "SIM"]
 
 [tool.ruff.lint.isort]
 force-single-line = true

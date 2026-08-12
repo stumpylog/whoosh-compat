@@ -49,7 +49,7 @@ def fnmatch_ids(tokens, pattern):
 
 
 @pytest.mark.parametrize(
-    "pattern, normalizer, expected",
+    ("pattern", "normalizer", "expected"),
     [
         pytest.param("produ*1", None, "produ.*1", id="star-becomes-dot-star"),
         pytest.param("a?b", None, "a.b", id="question-mark-becomes-dot"),
@@ -106,7 +106,7 @@ def test_glob_to_regex_escapes_class_internal_set_operators(tindex, ereg):
 
 
 @pytest.mark.parametrize(
-    "field, tokens, pattern, expected",
+    ("field", "tokens", "pattern", "expected"),
     [
         pytest.param("title", TITLE_TOKENS, "Wär*", [3], id="diacritic-prefix-star"),
         pytest.param("content", CONTENT_TOKENS, "produ*1", [2, 4], id="infix-star"),
@@ -162,7 +162,7 @@ def test_prefix_normalizes_and_escapes(tindex, ereg):
 
 
 @pytest.mark.parametrize(
-    "field, expected",
+    ("field", "expected"),
     [
         pytest.param(None, [1, 2, 3, 4, 5], id="unfielded-matches-all-docs"),
         pytest.param("asn", [1, 2, 3, 4, 5], id="fast-field-matches-all-docs"),

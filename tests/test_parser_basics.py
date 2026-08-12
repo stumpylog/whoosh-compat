@@ -41,7 +41,8 @@ def test_explicit_or(reg):
 
 def test_lowercase_and_is_text(reg):
     t = parse("title:aaa and title:bbb", reg)
-    assert isinstance(t, ast.And) and len(t.children) == 3  # 'and' is a term
+    assert isinstance(t, ast.And)
+    assert len(t.children) == 3
 
 
 def test_not_group_parens(reg):

@@ -1,5 +1,7 @@
 """Phrase emission (including the 1- and 0-token degenerate cases)."""
 
+import contextlib
+
 import pytest
 import tantivy
 
@@ -17,7 +19,7 @@ from .conftest import search_ids
 
 
 @pytest.mark.parametrize(
-    "text, slop, expected",
+    ("text", "slop", "expected"),
     [
         # whoosh slop=1 ("adjacent") maps to tantivy slop=0.
         pytest.param("shopname product1", 1, [2, 4], id="adjacent-slop-1-matches-both-docs"),
@@ -118,7 +120,7 @@ def _gapped_index_fixture():
 
 
 @pytest.mark.parametrize(
-    "slop, expected",
+    ("slop", "expected"),
     [
         # whoosh slop=1 ("adjacent") maps to tantivy slop=0: with the dropped
         # "the" leaving a real gap between positions 0 and 2, "alpha beta"
@@ -168,7 +170,7 @@ def _reversed_pair_fixture():
 
 
 @pytest.mark.parametrize(
-    "slop, expected",
+    ("slop", "expected"),
     [
         # The parser default and whoosh slop=2 agree with whoosh: no match.
         pytest.param(1, [], id="default-slop-agrees-with-whoosh-no-match"),
@@ -211,7 +213,7 @@ def test_phrase_on_u64_field_bad_number_raises_query_emit_error(tindex, ereg):
 # tests/test_parser_fields.py), so its equivalence to the unquoted form is
 # proven here, at emit/search-result level.
 @pytest.mark.parametrize(
-    "field, expected",
+    ("field", "expected"),
     [
         pytest.param("asn", [1, 2, 3, 4, 5], id="u64-every-doc-has-a-value"),
         pytest.param("has_tag", [1, 2, 4], id="boolean-exists-docs-with-tags"),
@@ -225,7 +227,7 @@ def test_quoted_star_phrase_matches_unquoted_star(tindex, ereg, parse, field, ex
 
 
 @pytest.mark.parametrize(
-    "text, expected",
+    ("text", "expected"),
     [
         pytest.param("true", [1, 2, 4], id="truthy-phrase"),
         pytest.param("false", [3, 5], id="falsy-phrase"),
@@ -263,7 +265,7 @@ def test_phrase_on_bare_json_field_raises_query_emit_error(tindex, ereg):
 
 
 @pytest.mark.parametrize(
-    "field, text",
+    ("field", "text"),
     [
         pytest.param("content", "shopname product1", id="text"),
         pytest.param("tag", "billing", id="keyword"),
@@ -277,7 +279,6 @@ def test_phrase_emission_never_raises_undocumented_exception(tindex, ereg, field
     name, _, subpath = field.partition(".")
     ref = FieldRef(name, subpath or None)
     node = ast.Phrase(field=ref, text=text, slop=1)
-    try:
+    # documented exception types: fine.
+    with contextlib.suppress(QueryEmitError, UnsupportedQueryError):
         emit_ast(node, tindex, ereg)
-    except (QueryEmitError, UnsupportedQueryError):
-        pass  # documented exception types: fine.

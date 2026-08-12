@@ -276,7 +276,7 @@ def test_validation_duplicate_aliases():
     """ValueError if two specs have the same alias."""
     spec1 = FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("heading",))
     spec2 = FieldSpec(name="subject", kind=FieldKind.TEXT, aliases=("heading",))
-    with pytest.raises(ValueError, match="subject|title"):
+    with pytest.raises(ValueError, match=r"subject|title"):
         FieldRegistry([spec1, spec2])
 
 
@@ -370,7 +370,7 @@ def test_validation_boolean_exists_target_fast_is_valid():
 
 
 @pytest.mark.parametrize(
-    "kind, fast, expected",
+    ("kind", "fast", "expected"),
     [
         pytest.param(FieldKind.TEXT, True, ExistsStrategy.FAST_FIELD, id="fast-text"),
         pytest.param(FieldKind.KEYWORD, True, ExistsStrategy.FAST_FIELD, id="fast-keyword"),

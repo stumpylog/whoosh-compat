@@ -151,7 +151,7 @@ def test_not_zero_token_term_matches_everything(tindex, ereg, parse):
 
 
 @pytest.mark.parametrize(
-    "value, expected",
+    ("value", "expected"),
     [
         # Docs 3 and 5 both have no tags at all.
         pytest.param(False, [3, 5], id="exists-false-matches-docs-without-tags"),
@@ -179,7 +179,7 @@ def test_every_field_fast_json(tindex, ereg):
 
 
 @pytest.mark.parametrize(
-    "value, expected",
+    ("value", "expected"),
     [
         pytest.param(True, [1, 4, 5], id="exists-true-matches-docs-with-attrs"),
         pytest.param(False, [2, 3], id="exists-false-matches-docs-without-attrs"),
@@ -241,7 +241,7 @@ def _non_fast_text_target_fixture():
 
 
 @pytest.mark.parametrize(
-    "value, expected",
+    ("value", "expected"),
     [
         pytest.param(True, [1], id="exists-true-matches-doc-with-body"),
         pytest.param(
@@ -298,7 +298,7 @@ def _non_fast_keyword_target_fixture():
 
 
 @pytest.mark.parametrize(
-    "value, expected",
+    ("value", "expected"),
     [
         pytest.param(True, [1], id="exists-true-matches-doc-with-label"),
         pytest.param(
