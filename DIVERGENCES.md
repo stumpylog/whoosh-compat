@@ -554,3 +554,42 @@ parse-then-emit pipeline).
     date-offset entry; `tests/differential/strategies.py`'s
     `_DATE_RELATIVE` (the relative-offset vocabulary the grammar-aware
     fuzzer draws bare date values from).
+
+26. **Phrase slop diverges from `~2` upward (design, mapping left
+    unchanged).** whoosh's slop counts *positions spanned* (adjacent is
+    slop=1); tantivy's counts *gaps allowed* (adjacent is slop=0), so the
+    mapping is `tantivy_slop = whoosh_slop - 1` (`emitters/tantivy_.py`'s
+    `visit_phrase`). That mapping is exact for the parser default (slop=1)
+    and for two-word phrases in forward order at slop=2, which is what a
+    caller who never types `~N` gets. Two independent divergences appear
+    only once a query explicitly widens slop with `~N`:
+
+    - **Reversed pair over-match, `N >= 3`.** Real whoosh's phrase matcher
+      (`SpanNear2(..., ordered=True)`, `whoosh/query/positional.py:243`)
+      never matches a transposed pair at any slop. tantivy's slop is an
+      unordered total-displacement budget, so a reversed two-word phrase
+      starts matching once that budget covers a full swap: whoosh slop 3
+      maps to tantivy slop 2, which is enough. Confirmed against the pinned
+      oracle: query phrase `"one two"`, document `"two one"`, whoosh never
+      matches at any slop, tantivy matches starting at whoosh slop 3.
+    - **Three-or-more-word under-match, `N >= 2`.** whoosh's ordered
+      matcher enforces slop as a *per-adjacent-gap* limit; tantivy's is a
+      *total* budget shared across the whole phrase. For a 3+ word phrase
+      where each adjacent gap uses the full whoosh allowance, tantivy's
+      total budget runs out before whoosh's would. Verified: query phrase
+      `"one two three"` against document `"one x two y three"`, whoosh
+      slop=2 matches (each adjacent gap is within limit 2), tantivy needs
+      slop=3 (total displacement 3) to match the same document; the mapped
+      tantivy slop=1 does not.
+
+    Not reproduced at the parser default or at whoosh slop=2 on a two-word
+    phrase, so no user who omits `~N` is affected, and no line in
+    `tests/differential/corpus_paperless.txt` uses `~` at all. Changing the
+    mapping to close either gap would put the currently-exact default and
+    two-word-slop-2 cases at risk to fix a shape nobody in the motivating
+    consumer's corpus types; left as a documented divergence instead.
+
+    Test references: `tests/emitter/test_emit_phrase.py`'s
+    `test_phrase_reversed_pair_slop_boundary` (pins the reversed-pair
+    over-match boundary and confirms the default and slop=2 still agree
+    with whoosh).

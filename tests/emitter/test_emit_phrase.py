@@ -133,3 +133,52 @@ def test_phrase_misses_across_index_time_position_gap(slop, expected):
     node = ast.Phrase(field=FieldRef("content"), text="alpha beta", slop=slop)
     q = emit_(node, index=index, schema=schema, registry=registry)
     assert search_ids(index, q) == expected
+
+
+# -- DIVERGENCES.md entry 26: slop-1 transposition over-match ---------------
+#
+# Pins the boundary the issue #18 decision measured against the pinned
+# whoosh oracle: the reversed pair "two one" against query phrase
+# "one two". Real whoosh's SpanNear2 matcher is ordered=True and never
+# matches a reversed pair at any slop; tantivy's slop is an unordered total
+# displacement budget, so it starts matching once that budget covers a full
+# swap (two positions), which is whoosh slop >= 3 under the slop-1 mapping.
+
+
+def _reversed_pair_fixture():
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_text_field("content", stored=True)
+    schema = sb.build()
+    index = tantivy.Index(schema)
+    w = index.writer()
+    doc = tantivy.Document()
+    doc.add_unsigned("id", 1)
+    doc.add_text("content", "two one")
+    w.add_document(doc)
+    w.commit()
+    index.reload()
+
+    registry = FieldRegistry(
+        [FieldSpec("content", FieldKind.TEXT, analyzer=lambda t: t.lower().split())]
+    )
+    return index, schema, registry
+
+
+@pytest.mark.parametrize(
+    "slop, expected",
+    [
+        # The parser default and whoosh slop=2 agree with whoosh: no match.
+        pytest.param(1, [], id="default-slop-agrees-with-whoosh-no-match"),
+        pytest.param(2, [], id="slop-2-agrees-with-whoosh-no-match"),
+        # whoosh never matches a reversed pair at any slop (ordered=True);
+        # tantivy's unordered total-displacement budget covers the swap
+        # once whoosh slop reaches 3 (tantivy slop=2). Over-match, not a bug.
+        pytest.param(3, [1], id="slop-3-diverges-tantivy-over-matches-reversed-pair"),
+    ],
+)
+def test_phrase_reversed_pair_slop_boundary(slop, expected):
+    index, schema, registry = _reversed_pair_fixture()
+    node = ast.Phrase(field=FieldRef("content"), text="one two", slop=slop)
+    q = emit_(node, index=index, schema=schema, registry=registry)
+    assert search_ids(index, q) == expected
