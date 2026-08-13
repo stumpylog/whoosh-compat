@@ -262,25 +262,46 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         self._json_paths_ok: bool | None = None
 
     def emit(self, node: ast.Node) -> tantivy.Query:
-        """Emit ``node``, guaranteeing the documented exception contract.
+        """Normalize and emit ``node``, guaranteeing the documented exception contract.
 
         Most invalid-input shapes get a specific, well-messaged
         ``QueryEmitError``/``UnsupportedQueryError`` from the ``visit_*``
         method that first notices them. This is the backstop for the rest:
-        a hand-built (not just parsed) AST can carry a value of the wrong
-        type or shape for its field's kind in ways no single ``visit_*``
-        method specifically checks for (e.g. a non-numeric ``Boosted.boost``,
-        which every kind can carry, or a future tantivy-py call this doesn't
-        yet special-case); the underlying tantivy-py call then raises a
-        bare ``ValueError``/``TypeError``/``AttributeError`` instead of one
-        of the two documented types (issue #24). Converting here, once,
-        keeps every individual ``visit_*`` method free to just let its own
-        tantivy-py calls raise naturally rather than needing its own
-        try/except for cases already covered by this backstop.
+        a hand-built (not just parsed) AST can violate the type contract in
+        ways no single ``visit_*`` method specifically checks for, and the
+        underlying call then raises one of several bare exceptions instead
+        of one of the two documented types. Four shapes are converted here:
+
+        * A non-numeric ``Boosted.boost`` or other badly-typed leaf value
+          (a kind every field kind can carry, or a future tantivy-py call
+          this doesn't yet special-case): a bare ``ValueError``, ``TypeError``
+          or ``AttributeError`` from the underlying tantivy-py call.
+        * A ``None`` (or otherwise non-node) value standing in for a child
+          node, either caught by ``ast.normalize`` while walking the tree
+          (a bare ``AttributeError``) or, once past normalization, by
+          ``ast.Visitor.generic_visit`` finding no ``visit_*`` method for
+          the value's type (a bare ``NotImplementedError``).
+        * A chain deep enough to exhaust the interpreter's recursion limit
+          (a bare ``RecursionError``): this emitter's traversal, like
+          ``ast.normalize``'s former recursive form, walks one Python stack
+          frame per nesting level.
+
+        Converting here, once, keeps every individual ``visit_*`` method
+        free to just let its own tantivy-py calls raise naturally rather
+        than needing its own try/except for cases already covered by this
+        backstop. ``ast.normalize`` is called inside the same try so a
+        hand-built tree that fails during normalization (not just during
+        visiting) still gets the documented contract.
         """
         try:
-            return self.visit(node)
-        except (ValueError, TypeError, AttributeError) as exc:
+            return self.visit(ast.normalize(node))
+        except (
+            ValueError,
+            TypeError,
+            AttributeError,
+            NotImplementedError,
+            RecursionError,
+        ) as exc:
             raise QueryEmitError(f"cannot emit query: {exc}") from exc
 
     # -- helpers -----------------------------------------------------
@@ -986,5 +1007,22 @@ def emit(
     ``emit()`` could observe the difference). Normalizing here closes that
     gap without changing behavior for the ``parse()`` -> ``emit()`` path,
     since renormalizing an already-normalized tree is a no-op.
+
+    Raises:
+        QueryEmitError: ``node`` (or a value it contains) cannot be turned
+            into a valid query: an unresolvable field, a value that fails a
+            field kind's domain check, a hand-built tree with a ``None`` (or
+            otherwise non-node) value standing in for a required child, a
+            hand-built tree deep enough to exhaust the interpreter's
+            recursion limit, or any other shape that would otherwise raise a
+            bare ``ValueError``, ``TypeError``, ``AttributeError``,
+            ``NotImplementedError`` or ``RecursionError`` while building the
+            query.
+        UnsupportedQueryError: ``node`` describes a query shape this emitter
+            deliberately does not support (a text range, a wildcard/prefix
+            pattern on an incompatible field, an ``exists`` check on a
+            non-fast field with no way to answer it). A sibling of
+            ``QueryEmitError`` under the common ``WhooshCompatError`` base,
+            not a subclass of it.
     """
-    return TantivyEmitter(index=index, registry=registry).emit(ast.normalize(node))
+    return TantivyEmitter(index=index, registry=registry).emit(node)
