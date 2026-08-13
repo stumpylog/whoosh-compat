@@ -164,6 +164,19 @@ class FieldSpec:
 
     def __post_init__(self) -> None:
         if isinstance(self.subpaths, tuple):
+            # A dict comprehension silently collapses a repeated key, so a
+            # duplicate in the tuple sugar form has to be caught here, before
+            # normalization erases the fact that it was ever repeated: by the
+            # time FieldRegistry.__init__ sees this spec, subpaths is already
+            # the deduplicated mapping and the duplication is unrecoverable.
+            seen: set[str] = set()
+            for path in self.subpaths:
+                if path in seen:
+                    raise ValueError(
+                        f"Field '{self.name}': subpath '{path}' is repeated in the "
+                        f"subpaths tuple; remove the duplicate"
+                    )
+                seen.add(path)
             # Frozen dataclass: normalize through object.__setattr__ rather
             # than plain assignment. This is the one place a tuple form of
             # subpaths survives past construction; every reader elsewhere
@@ -244,6 +257,31 @@ class FieldRegistry:
             # Validate: JSON requires non-empty subpaths
             if spec.kind == FieldKind.JSON and not spec.subpaths:
                 raise ValueError(f"Field '{spec.name}': JSON kind requires non-empty subpaths")
+
+            # Validate: each subpath string must itself be non-empty and
+            # addressable through the fieldname tagger. An empty subpath
+            # constructs and resolves (make_ref("attrs.") -> FieldRef("attrs",
+            # json_path="")) but no query text can ever type it, so a Term
+            # built against it silently matches nothing. A subpath containing
+            # whitespace, ':', or '"' has the same problem: the fieldname
+            # tagger's expression (FieldsPlugin.expr, r"(?P<text>[\w.]+|[*]):")
+            # only ever captures word characters and dots, so such a subpath
+            # is likewise unreachable from any query text, and a hand-built
+            # FieldRef carrying one would feed it unescaped into the JSON
+            # parse_query fallback string.
+            if spec.kind == FieldKind.JSON:
+                for subpath in spec.subpaths:
+                    if subpath == "":
+                        raise ValueError(
+                            f"Field '{spec.name}': a JSON field's subpath must not be "
+                            f"empty (no query text can ever address it)"
+                        )
+                    if any(ch.isspace() for ch in subpath) or ":" in subpath or '"' in subpath:
+                        raise ValueError(
+                            f"Field '{spec.name}': subpath '{subpath}' contains a "
+                            f"character the fieldname tagger can never produce "
+                            f"(whitespace, ':', or '\"'); remove it from the subpath"
+                        )
 
             # Validate: comma_values only on KEYWORD, U64, TEXT
             if spec.comma_values and spec.kind not in (
@@ -378,6 +416,38 @@ class FieldRegistry:
                         f"no way to answer 'exists': mark it fast=True, or change its "
                         f"kind to TEXT or KEYWORD"
                     )
+
+        # Fourth pass: reject a registered canonical name or alias that
+        # exactly matches "<jsonfield>.<subpath>" for any registered JSON
+        # field's subpath. This is the mirror image of the dotted-JSON-name
+        # rejection above: make_ref resolves an exact match before ever
+        # attempting a dotted-subpath split, so a plain field or alias
+        # spelled exactly like a registered subpath's dotted form would
+        # permanently steal every "<jsonfield>.<subpath>:" query from that
+        # subpath, with no diagnostic. Runs over the fully-registered
+        # self._by_name, so it catches the collision regardless of whether
+        # the JSON field or the colliding plain name/alias was registered
+        # first.
+        for spec in self._specs:
+            if spec.kind is not FieldKind.JSON:
+                continue
+            for subpath in spec.subpaths:
+                dotted = f"{spec.name}.{subpath}"
+                colliding = self._by_name.get(dotted)
+                if colliding is None:
+                    continue
+                collision_desc = (
+                    f"canonical name '{dotted}'"
+                    if colliding.name == dotted
+                    else f"alias '{dotted}'"
+                )
+                raise ValueError(
+                    f"Field '{spec.name}': subpath '{subpath}' is shadowed by field "
+                    f"'{colliding.name}''s {collision_desc} (make_ref resolves an "
+                    f"exact match before ever trying a dotted-subpath split, so "
+                    f"'{dotted}:' would always resolve to '{colliding.name}', never "
+                    f"this subpath); rename '{colliding.name}' or its colliding name"
+                )
 
     def resolve(self, ref: FieldRef) -> ResolvedField | None:
         """Resolve a :class:`FieldRef` to a :class:`ResolvedField`.

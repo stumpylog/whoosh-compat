@@ -708,6 +708,113 @@ def test_validation_json_with_subpaths_is_valid() -> None:
     assert resolved.spec is spec
 
 
+def test_validation_rejects_empty_subpath_string() -> None:
+    """An empty subpath string constructs and resolves (make_ref("attrs.")
+    -> FieldRef("attrs", json_path="")), but no query text can ever type it,
+    so a Term built against it silently matches nothing.
+    """
+    with pytest.raises(ValueError, match="attrs") as excinfo:
+        FieldRegistry([FieldSpec(name="attrs", kind=FieldKind.JSON, subpaths=("",), fast=True)])
+    assert "empty" in str(excinfo.value)
+
+
+def test_validation_rejects_duplicate_subpath_in_tuple_sugar() -> None:
+    """A repeated entry in the tuple-sugar form of ``subpaths`` collapses
+    silently through the ``{path: SubpathSpec() for
+    path in self.subpaths}`` dict comprehension in ``FieldSpec.__post_init__``:
+    by the time ``FieldRegistry.__init__`` would see the normalized mapping,
+    the duplication is already gone. A ``Mapping[str, SubpathSpec]`` passed
+    directly cannot have a literal duplicate key at all (Python dict literals
+    reject that structurally), so this check only applies to the tuple sugar
+    form, and it has to run in ``FieldSpec.__post_init__`` itself, before
+    normalization, to see the duplicate at all.
+    """
+    with pytest.raises(ValueError, match="user"):
+        FieldSpec(name="attrs", kind=FieldKind.JSON, subpaths=("user", "user"))
+
+
+@pytest.mark.parametrize(
+    "subpath",
+    [
+        pytest.param("has space", id="whitespace"),
+        pytest.param("has:colon", id="colon"),
+        pytest.param('has"quote', id="double-quote"),
+    ],
+)
+def test_validation_rejects_subpath_with_unreachable_character(subpath: str) -> None:
+    """The fieldname tagger's expression
+    (``FieldsPlugin.expr``, ``r"(?P<text>[\\w.]+|[*]):"``) only ever captures
+    word characters and dots, so a subpath containing whitespace, ':', or '"'
+    can never be typed in any query text. A hand-built FieldRef carrying one
+    would also feed it unescaped into the JSON parse_query fallback string.
+    """
+    with pytest.raises(ValueError, match="attrs"):
+        FieldRegistry(
+            [FieldSpec(name="attrs", kind=FieldKind.JSON, subpaths=(subpath,), fast=True)]
+        )
+
+
+@pytest.mark.parametrize(
+    "specs",
+    [
+        pytest.param(
+            [
+                FieldSpec(name="attrs", kind=FieldKind.JSON, subpaths=("user",), fast=True),
+                FieldSpec(name="attrs.user", kind=FieldKind.TEXT),
+            ],
+            id="json-field-registered-first",
+        ),
+        pytest.param(
+            [
+                FieldSpec(name="attrs.user", kind=FieldKind.TEXT),
+                FieldSpec(name="attrs", kind=FieldKind.JSON, subpaths=("user",), fast=True),
+            ],
+            id="plain-field-registered-first",
+        ),
+    ],
+)
+def test_validation_rejects_dotted_plain_name_shadowing_subpath(specs: list[FieldSpec]) -> None:
+    """A plain TEXT field whose canonical name is
+    exactly "<jsonfield>.<subpath>" would permanently steal every
+    "attrs.user:" query from the registered JSON subpath, since make_ref
+    resolves an exact match before ever attempting a dotted-subpath split
+    (DIVERGENCES.md entry 14). This is the mirror image of the
+    dotted-JSON-canonical-name rejection
+    (test_validation_rejects_dotted_json_canonical_name), and must be caught
+    regardless of which field is registered first.
+    """
+    with pytest.raises(ValueError, match="attrs") as excinfo:
+        FieldRegistry(specs)
+    assert "user" in str(excinfo.value)
+
+
+def test_validation_rejects_alias_shadowing_subpath() -> None:
+    """The shadowing collision applies to an alias on an otherwise
+    unrelated field, not just a canonical name.
+    """
+    spec1 = FieldSpec(name="attrs", kind=FieldKind.JSON, subpaths=("user",), fast=True)
+    spec2 = FieldSpec(name="other", kind=FieldKind.TEXT, aliases=("attrs.user",))
+    with pytest.raises(ValueError, match="attrs") as excinfo:
+        FieldRegistry([spec1, spec2])
+    assert "other" in str(excinfo.value)
+
+
+def test_validation_multi_dot_subpath_still_constructs() -> None:
+    """Control: a legitimate multi-level dotted subpath (a subpath string
+    that itself contains further dots, e.g. "user.name") is a supported
+    shape, not a case the new character-restriction validation should reject.
+    Only whitespace, ':', and '"' are unreachable through the fieldname
+    tagger; '.' is explicitly part of its expression
+    (r"(?P<text>[\\w.]+|[*]):"). See also test_make_ref_json_subpath_with_extra_dots,
+    which confirms make_ref resolves such a subpath end to end.
+    """
+    spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user.name", "admin.role"))
+    registry = FieldRegistry([spec])
+    resolved = registry.resolve(FieldRef("notes", "user.name"))
+    assert resolved is not None
+    assert resolved.json_path == "user.name"
+
+
 # ============================================================================
 # Validation: comma_values
 # ============================================================================

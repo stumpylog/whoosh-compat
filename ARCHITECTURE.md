@@ -152,10 +152,14 @@ normalizes a tuple into the mapping form immediately, so the value actually
 stored on a constructed instance, and read everywhere else in the library
 (`FieldRegistry.resolve`'s `ref.json_path not in spec.subpaths`,
 `make_ref`'s `subpath in spec.subpaths`, the JSON-path-support probe in
-`emitters/tantivy_.py`), is always the mapping. Validating the mapping's
-*keys* (rejecting an empty string, a shadowing subpath, and similar) is a
-separate, later change; the container itself only guards against silently
-breaking on such input for now.
+`emitters/tantivy_.py`), is always the mapping. `FieldRegistry.__init__`
+validates the mapping's keys: an empty subpath string, a subpath containing
+whitespace, `:`, or `"` (none of which the fieldname tagger's expression,
+`r"(?P<text>[\w.]+|[*]):"`, can ever produce), and a registered canonical
+name or alias that exactly matches `<jsonfield>.<subpath>` for a registered
+subpath (which would permanently shadow it under `make_ref`'s
+exact-match-first rule) are all rejected at construction, regardless of
+registration order.
 
 Every AST leaf that carries a field (`Term`, `Phrase`, `Prefix`, `Wildcard`,
 `TermRange`, `NumericRange`, `DateRange`, `Every`) holds a `FieldRef`, not a
