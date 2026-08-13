@@ -17,7 +17,6 @@ import whoosh_compat as wc
 from tests.differential.allowlist import allowed
 from tests.differential.oracle import ORACLE_REGISTRY
 from tests.differential.oracle import V2_FIELDS
-from tests.differential.oracle import analyze_ast
 from tests.differential.oracle import compat_raw_parse
 from tests.differential.oracle import oracle_parse
 from tests.differential.oracle import to_ast
@@ -26,6 +25,7 @@ from tests.differential.strategies import query_text
 from tests.differential.strategies import seed_corpus
 from tests.differential.strategies import zero_token_leaf_count
 from whoosh_compat import ast
+from whoosh_compat.ast import analyze
 from whoosh_compat.ast import normalize
 from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.fields import FieldKind
@@ -73,7 +73,7 @@ def test_fuzz_matches_oracle(q: str) -> None:
         # parse producing a diagnostic (e.g. "asn:A", a bad number) yields a
         # structured ErrorLeaf vs whoosh's untyped error_query()/NullQuery.
         return
-    got = normalize(analyze_ast(raw_ast, ORACLE_REGISTRY))
+    got = normalize(analyze(raw_ast, ORACLE_REGISTRY))
     assert got == normalize(expected), f"query: {q!r}"
 
 
@@ -205,7 +205,7 @@ def _grammar_fuzz_matches_oracle(q: str) -> None:
     if diagnostics:
         # DIVERGENCES.md entry 6, see test_fuzz_matches_oracle above.
         return
-    got = normalize(analyze_ast(raw_ast, ORACLE_REGISTRY))
+    got = normalize(analyze(raw_ast, ORACLE_REGISTRY))
     assert got == normalize(expected), f"query: {q!r}"
 
 

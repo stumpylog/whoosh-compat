@@ -696,7 +696,7 @@ def ast_shape(node: ast.Node) -> tuple[int, int, int]:
 def zero_token_leaf_count(node: ast.Node, reg: FieldRegistry) -> int:
     """Count Term/Phrase leaves in ``node`` whose analyzer drops every token.
 
-    Only meaningful on a *raw* (pre-normalize) tree: normalize()/analyze_ast()
+    Only meaningful on a *raw* (pre-normalize) tree: normalize()/analyze()
     already remove these leaves, which is exactly the behavior this metric
     exists to help the fuzzer find more of (see module docstring).
     """

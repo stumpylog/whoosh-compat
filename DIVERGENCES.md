@@ -169,10 +169,16 @@ parse-then-emit pipeline).
     default group (design note, not a bug).** whoosh-compat's
     `Multitoken.DEFAULT` (`src/whoosh_compat/fields.py`) resolves "how do
     multiple tokens from one field value combine" by looking at the
-    *actual* enclosing group at the term's position in the parsed tree
-    (`TantivyEmitter._group_stack`, `src/whoosh_compat/emitters/tantivy_.py`):
-    an `Or(...)` group's multitoken children combine with OR, an
-    `And(...)` group's combine with AND. Real whoosh's default
+    *actual* enclosing group at the term's position in the parsed tree: an
+    `Or(...)` group's multitoken children combine with OR, an `And(...)`
+    group's combine with AND. This resolution is computed once, structurally,
+    by `whoosh_compat.ast.analyze()` (a top-down pass over the tree assigns
+    each node the `Multitoken` context of its nearest enclosing And/Or, with
+    `analyze()`'s own `default_mode` parameter, `Multitoken.AND` by default,
+    used for a term with no enclosing group at all); it is not tracked via
+    any per-visit emitter state (an earlier version of this mechanism lived
+    in a `TantivyEmitter`-internal group-context stack, before analysis
+    became its own explicit pipeline stage). Real whoosh's default
     (`whoosh/qparser/default.py:191`, `multitoken_query='default'`) instead
     always uses the *parser's* single configured default group class,
     regardless of which group a term happens to sit inside syntactically.
@@ -186,16 +192,29 @@ parse-then-emit pipeline).
     parser's fixed default), even though both sides are looking at the
     exact same syntactic position.
 
-    This was not hit by name in this project's corpus (no differential/
-    acceptance case currently nests a genuine multitoken field value inside
-    a top-level `Or`), but it is a known, understood shape of divergence
-    baked into `Multitoken.DEFAULT`'s design rather than an implementation
-    defect. Do not "fix" it by making the emitter track the parser's single
-    default group instead of the syntactic enclosing group if it surfaces
-    later; that would just move the divergence rather than remove it
-    (whoosh-compat's own position-dependent behavior is arguably more
-    intuitive for a hand-written query, since it means "what you see is
-    what groups together").
+    This was not hit by name in this project's corpus at the AST-comparison
+    layer for a long time (no differential/acceptance case nested a genuine
+    multitoken field value inside a top-level `Or`), but it is a known,
+    understood shape of divergence baked into `Multitoken.DEFAULT`'s design
+    rather than an implementation defect. Do not "fix" it by making
+    `analyze()` track the parser's single default group instead of the
+    syntactic enclosing group if it surfaces further; that would just move
+    the divergence rather than remove it (whoosh-compat's own
+    position-dependent behavior is arguably more intuitive for a
+    hand-written query, since it means "what you see is what groups
+    together"). It has since been confirmed at the AST-comparison layer too,
+    not just the result level below: once `analyze()` became the single
+    implementation both `TantivyEmitter` and the differential harness call
+    (replacing the harness's own separate, hand-synchronized forward-analysis
+    model), an unfielded or unknown-field-demoted multi-token value
+    (multifield expansion always wraps such a value in a fresh `Or(...)` at
+    the point it appears, giving every default field's own combinator an
+    unconditional `Or` context to resolve `DEFAULT` against) started
+    reaching this exact divergence directly in `tests/differential`, not
+    just in the acceptance-layer property described next.
+    `tests/differential/allowlist.py`'s entry for this shape covers both
+    textual pathways (a bare dashed/dotted word, and an unknown-field-colon
+    demotion) that reach it in the current corpus/fuzzer vocabulary.
 
     The acceptance-layer result property (`tests/emitter/test_acceptance_property.py`)
     later found the predicted shape occurring for real, and confirmed it
@@ -242,8 +261,8 @@ parse-then-emit pipeline).
     its own).** Entries 2 (wildcard case-folding order) and 12 (date-range
     tz bypass) are real at the *differential-compared* AST level (what
     `tests/differential/test_differential.py::test_matches_oracle` actually
-    compares, the tree produced after `oracle.analyze_ast`'s forward
-    analysis) but were found, while building
+    compares, the tree produced after `whoosh_compat.ast.analyze()`'s
+    forward analysis) but were found, while building
     `tests/emitter/test_acceptance_e2e.py`, to not change the final doc-id
     set either backend's search actually returns for the queries in this
     project's fixture:
@@ -265,9 +284,9 @@ parse-then-emit pipeline).
     Entry 17's comma-quote-literal divergence is a related but distinct
     case, worth contrasting with the two above: it does not even survive to
     the differential-compared AST level in the first place (entry 17's own
-    text now explains why: `oracle.analyze_ast`'s forward analysis already
-    splits both sides' comma values identically, for the same reason
-    `TantivyEmitter` does at emit time, described below), so it was never a
+    text now explains why: `whoosh_compat.ast.analyze()`'s forward analysis
+    already splits both sides' comma values identically, for the same
+    reason `TantivyEmitter` does, described below), so it was never a
     `tests/differential` divergence to begin with, only a raw-parse-tree
     one and a documented design choice.
 
@@ -283,12 +302,12 @@ parse-then-emit pipeline).
     to expose these as result-changing.
 
     The comma-quote-literal mechanism common to entry 17 and this entry:
-    whoosh-compat's emitter re-runs the field's own `analyzer` (which still
-    splits on commas) over a quoted comma value's Term text at *emit* time
-    (`TantivyEmitter._text_term_query`), so the parse-time quoted-vs-split
-    distinction doesn't survive to search time, the same way it doesn't
-    survive `oracle.analyze_ast`'s forward analysis at the differential
-    layer.
+    `whoosh_compat.ast.analyze()` re-runs the field's own `analyzer` (which
+    still splits on commas) over a quoted comma value's Term text before the
+    emitter ever visits it, so the parse-time quoted-vs-split distinction
+    doesn't survive to search time, the same way it doesn't survive
+    `analyze()`'s forward analysis at the differential layer either (the
+    same function, not a separately maintained model of it).
 
 17. **`tag:'foo,bar'` comma-quote-literal handling (design, formalizing what
     entries 12/16 above already referred to by description before this
@@ -302,10 +321,11 @@ parse-then-emit pipeline).
 
     This divergence is real in the raw, pre-analysis parse tree, but does
     not reach `tests/differential`'s own AST-comparison layer: that
-    comparison runs both sides through `oracle.analyze_ast` first, which
-    forward-analyzes every `Term` through its field's own analyzer before
-    comparing (modeling `TantivyEmitter`'s emit-time behavior, the same
-    mechanism entry 16 above describes at the result level). Since `tag` is
+    comparison runs both sides through `whoosh_compat.ast.analyze()` first,
+    which forward-analyzes every `Term` through its field's own analyzer
+    before comparing (the same function `TantivyEmitter.emit()` calls, the
+    same mechanism entry 16 above describes at the result level). Since
+    `tag` is
     a `KEYWORD(commas=True)` field, that forward-analysis step splits
     whoosh-compat's still-unsplit `"foo,bar"` term on the comma too,
     collapsing the two sides to the same tree before the comparison this
@@ -496,39 +516,58 @@ parse-then-emit pipeline).
 
     Test references: `tests/test_parser_dates.py`'s year-plus-time case.
 
-22. **JSON-subpath `index.parse_query` fallback cannot honor
-    `Multitoken.AND`/`OR`/`PHRASE` combinator semantics, only `FIRST` and
-    single-leaf matching (a known limitation of the fallback path, not the
-    general design).** `TantivyEmitter._emit_json_term`
-    (`emitters/tantivy_.py`) runs `spec.analyzer` over a JSON subpath
-    term's value and, when the installed tantivy-py can address a JSON
-    subpath directly (`_json_paths_supported()`), reuses
-    `_text_term_query` exactly like an ordinary TEXT/KEYWORD term: every
-    `Multitoken` mode works identically to a plain field. When it cannot
-    (as of tantivy-py 0.26, the version this project currently runs against;
-    see the JSON `parse_query` carve-out in `ARCHITECTURE.md` §5), the
-    fallback still runs `spec.analyzer` and honors `Multitoken.FIRST`
-    (searching only the first token), but `AND`/`OR`/`PHRASE`/
-    DEFAULT-resolved-to-AND-or-OR all collapse to one quoted, space-joined
-    leaf through `index.parse_query`, which behaves like a phrase match,
-    not true AND ("all tokens present, any order/position") or OR ("any
-    token present") semantics. This is a structural limitation of the
-    carve-out itself: `index.parse_query`'s single-leaf call has no
-    programmatic way to build a JSON-subpath boolean query the way
-    `_text_term_query` does for every other field kind. It was fixed to at
-    least stop discarding the analyzed tokens entirely (previously the
-    fallback quoted the *raw, unanalyzed* text verbatim, ignoring
-    `spec.analyzer` and every `Multitoken` mode including `FIRST`), but
-    full AND/OR/PHRASE parity is not achievable without the JSON subpath
-    `term_query`/`phrase_query` support `_json_paths_supported()` probes
-    for. Once tantivy-py#716 lands and ships, `_json_paths_supported()`
-    starts returning `True` and this whole fallback branch (including this
-    limitation) stops being taken.
+22. **JSON-subpath `index.parse_query` fallback: `AND`/`OR` now honor true
+    combinator semantics for a `Term` value (fixed as a structural
+    consequence of promoting analysis to its own pipeline stage); `PHRASE`
+    and a genuine `Phrase` node remain single-leaf-limited (a real,
+    remaining limitation of the fallback path, not the general design).**
+    `Multitoken` resolution for a `Term` value now happens once, in
+    `whoosh_compat.ast.analyze()`, *before* emission: a multi-token
+    `Multitoken.AND`/`OR` value is already rewritten into an `And`/`Or` of
+    separate single-token `Term` nodes by the time `TantivyEmitter` ever
+    visits it, each addressing the same JSON subpath independently.
+    `visit_and`/`visit_or` then combine whatever query each single-token
+    `Term` produces, including one built through the `index.parse_query`
+    fallback (`TantivyEmitter._emit_json_term`, taken when the installed
+    tantivy-py cannot address a JSON subpath directly via `term_query`, see
+    the JSON `parse_query` carve-out in `ARCHITECTURE.md` §5): two or more
+    separate `index.parse_query`-backed single-token queries, `Must`/
+    `Should`-combined by the ordinary boolean-query machinery, give real
+    AND ("all tokens present, any order/position") or OR ("any token
+    present") semantics, not the single quoted, space-joined,
+    phrase-shaped leaf this fallback used to collapse to. Verified directly
+    against a live index: `Multitoken.AND` over two tokens present in a
+    document's JSON subpath value but in the *reverse* order from the
+    query text still matches (a phrase-shaped collapse would not have).
+    `Multitoken.FIRST` is unaffected (`analyze()` already resolves it to a
+    single token, exactly as before this fix).
+
+    `Multitoken.PHRASE` over a bare `Term` value, and a genuine quoted
+    `Phrase` node, are unaffected by this fix and remain limited: both are
+    represented as a single `Phrase` AST node (`analyze()` never explodes a
+    PHRASE-mode value or a quoted phrase into separate `Term`s, since a
+    phrase's words must stay together as one ordered unit, not independent
+    combinable clauses), so `TantivyEmitter._emit_json_phrase`'s fallback
+    branch still has only one `index.parse_query` call to make, with no way
+    to build a JSON-subpath *phrase* query (word order/adjacency, and slop)
+    programmatically. `index.parse_query`'s single-leaf call has no
+    programmatic way to build that the way `Query.phrase_query` does for
+    every other field kind; this remains a structural limitation of the
+    carve-out itself, not something the analysis-pipeline refactor could
+    also resolve. Once tantivy-py#716 lands and ships,
+    `_json_paths_supported()` starts returning `True` and this whole
+    fallback branch (including this remaining phrase limitation) stops
+    being taken.
 
     Test references: `tests/emitter/test_emit_json.py`'s
-    `test_json_subpath_parse_query_fallback_honors_multitoken_first`.
+    `test_json_subpath_parse_query_fallback_honors_multitoken_first` (still
+    pins `Multitoken.FIRST`) and
+    `test_json_subpath_parse_query_fallback_honors_multitoken_and_or`
+    (new: pins the AND/OR fix directly, including the reversed-token-order
+    case that a phrase-shaped collapse would have missed).
 
-    This limitation is about `Term` values only. A quoted `Phrase` node on
+    This remaining limitation is about a `Phrase` node (or a PHRASE-mode
+    `Term` value) only. A quoted `Phrase` node on
     a JSON subpath (`TantivyEmitter._emit_json_phrase`) never consults
     `Multitoken` at all, on either branch (a phrase's words are the phrase,
     not independent tokens to combine), and additionally cannot carry an
@@ -565,8 +604,7 @@ parse-then-emit pipeline).
     None of this is code whoosh-compat wrote; it's free behavior inherited
     from handing the string to `index.parse_query`.
 
-    The `_json_paths_supported()` branch above it
-    (`self._text_term_query(resolved, tokens)`) builds a plain
+    The `_json_paths_supported()` branch above it builds a plain
     `Query.term_query(schema, full, token)` call with a `str` token: a
     single, explicitly `Str`-typed term, with no equivalent fast-value/text
     union. Once tantivy-py#716 ships and the probe starts returning `True`,
@@ -601,14 +639,23 @@ parse-then-emit pipeline).
 
 23. **`NOT` of a term whose analyzer drops every token matches every
     document here, but matches none in real whoosh (confirmed divergence,
-    not fixed).** `visit_term`'s zero-token TEXT/KEYWORD branch
-    (`emitters/tantivy_.py`) returns `Query.empty_query()` for a term that
-    analyzes to zero tokens (e.g. an all-stopword value). `visit_not`
-    wraps whatever `self.visit(node.child)` returns in `MustNot(...)`
-    without going through `_group_child`'s zero-token-drop check (that
-    check only applies to direct And/Or children), so `NOT` of such a term
-    becomes `MustNot(empty_query())`, which excludes nothing and therefore
-    matches every document.
+    not fixed).** `whoosh_compat.ast.analyze()` drops a zero-token TEXT/
+    KEYWORD `Term`/`Phrase` (e.g. an all-stopword value) to `ast.Nothing()`
+    as part of its own analysis pass, leaving `Not(Nothing())`;
+    `analyze()` finishes by calling `normalize()`, whose pre-existing
+    `Not(Nothing) -> Every()` rule then converts that into "matches
+    everything", the *natural* consequence of running token-drop analysis
+    ahead of a normalize pass that already had this rule, not a special
+    case `analyze()` implements for `NOT` specifically (see `analyze()`'s
+    own docstring, which names this exact case explicitly so a future
+    implementer doesn't "fix" it by changing drop semantics). Before
+    analysis became its own explicit pipeline stage, the identical outcome
+    came from a narrower mechanism confined to the emitter itself
+    (`visit_term`'s zero-token branch returning `Query.empty_query()`, and
+    `visit_not` wrapping that in `MustNot(...)` without going through the
+    emitter's own zero-token-drop check, which only applied to direct
+    And/Or children); the result was, and still is, `NOT` of such a term
+    excludes nothing and therefore matches every document.
 
     Real whoosh does the opposite. Verified directly against the pinned
     oracle: `query.Not(NullQuery).normalize()` is `NullQuery` (real
@@ -621,30 +668,31 @@ parse-then-emit pipeline).
 
     This is *not* the same case as `ast.normalize()`'s own
     `Not(Nothing) -> Every` rule (`ast.py`), even though the two produce
-    the same-shaped result: that rule fires at parse/normalize time for an
-    explicit `ast.Nothing` node reaching a `Not`, and is itself a
-    deliberate, pre-existing design choice with no claim to whoosh parity
-    (whoosh's own rule for the equivalent AST-level case is also
-    "stays nothing", the same direction as the term-analyzer case
-    documented here). The case documented in this entry is purely an
-    *emit-time* phenomenon: an `ast.Term` that is syntactically ordinary
-    (not an `ast.Nothing` node) but whose configured `analyzer` happens to
-    consume its text entirely once emission runs `_tokens` over it, a fact
-    `ast.normalize()` has no visibility into since it runs before
-    analysis. Left undocumented before this entry, `visit_term`'s
-    docstring described the emit-time behavior as consistent with
-    `ast.normalize()`'s rule without flagging that neither one actually
-    matches real whoosh; the docstring now points here instead.
+    the same-shaped result: that rule itself is a deliberate, pre-existing
+    design choice with no claim to whoosh parity (whoosh's own rule for the
+    equivalent AST-level case is also "stays nothing", the same direction
+    as the analysis-driven case documented here). The case documented in
+    this entry is purely an *analysis-time* phenomenon: an `ast.Term` that
+    is syntactically ordinary (not an `ast.Nothing` node in the tree
+    `parse()` produced) but whose configured `analyzer` happens to consume
+    its text entirely once `analyze()` runs over it, a fact the earlier
+    `normalize()` call in the pipeline (`analyze(normalize(node), ...)`)
+    has no visibility into, since normalization runs before analysis, on
+    still-raw text. `visit_term`'s docstring used to describe this as an
+    an emit-time phenomenon before analysis was promoted to its own
+    pipeline stage; it now points here, and to `analyze()`'s own docstring,
+    instead.
 
     Decision: documented, not changed, matching this project's judgment
-    call. Changing only the emit-time case to match whoosh (while leaving
-    `ast.normalize()`'s already-established, unrelated `Not(Nothing) ->
-    Every` parse-time rule as-is) would make two structurally identical
-    situations, a `NOT` whose operand turns out empty, behave differently
-    depending purely on *when* the emptiness was discovered (parse-time
-    Nothing node vs. emit-time zero-token analysis), which is a timing
-    artifact a query author has no way to predict or control. Uniform
-    emit-time behavior, even though it disagrees with whoosh, is more
+    call. Changing only the analysis-time case to match whoosh (while
+    leaving `ast.normalize()`'s already-established, unrelated
+    `Not(Nothing) -> Every` parse-time rule as-is) would make two
+    structurally identical situations, a `NOT` whose operand turns out
+    empty, behave differently depending purely on *when* the emptiness was
+    discovered (parse-time `Nothing` node vs. analysis-time zero-token
+    result), which is a timing artifact a query author has no way to
+    predict or control. Uniform behavior regardless of when the emptiness
+    was discovered, even though it disagrees with whoosh, is more
     predictable than a rule that depends on an implementation detail.
 
     Test references: `tests/emitter/test_emit_boolean.py`'s
@@ -652,12 +700,14 @@ parse-then-emit pipeline).
     property fuzzer (`tests/differential/strategies.py`,
     `test_hypothesis.py::test_fuzz_grammar_matches_oracle`) later found that
     this same divergence also reaches the *differential AST-comparison*
-    layer, not just the emitter: `oracle.analyze_ast`'s own token-dropping
-    rule turns a `NOT`'s now-empty child into an empty `And()`, which
+    layer, not just the emitter: the differential harness's own
+    forward-analysis step (originally a separate, hand-synchronized
+    `oracle.analyze_ast` helper, since replaced by a direct call to the
+    real `whoosh_compat.ast.analyze()`, the same function `TantivyEmitter`
+    calls) turns a `NOT`'s now-empty child into `Nothing()`, which
     `ast.normalize()`'s pre-existing `Not(Nothing) -> Every` rule then
     upgrades to `Every()`, landing on the same "matches everything" shape
-    this entry already describes, just reached through the test harness's
-    forward-analysis step instead of `TantivyEmitter`. Allowlisted in
+    this entry already describes. Allowlisted in
     `tests/differential/allowlist.py` (a `NOT` directly wrapping a single
     known-zero-token TEXT-field value) rather than treated as a new
     divergence, since the underlying behavior is this same entry.
@@ -665,14 +715,23 @@ parse-then-emit pipeline).
     The same accepted tradeoff extends to `ANDNOT`/`ANDMAYBE`/`REQUIRE`'s
     positive/required/scored operand, found by the acceptance-layer result
     property (`tests/emitter/test_acceptance_property.py`), not just bare
-    `NOT`: `visit_andnot`/`visit_andmaybe`/`visit_require`
-    (`emitters/tantivy_.py`) share `_lone_operand`, which drops a zero-token
-    side and lets the other stand alone, uniformly, exactly the same
-    "discovered at emit time, not parse time, so `ast.normalize()`'s
-    `AndNot`/`AndMaybe`/`Require` rules (entry 27's positive/required-null
-    handling) never get a chance to run" mechanism as bare `NOT`. Confirmed
-    directly this also means whoosh-compat's behavior depends on nothing
-    about *when* whoosh happened to eliminate the operand, unlike real
+    `NOT`: `whoosh_compat.ast.analyze()` applies one uniform rule (see its
+    own docstring, and the `_analyze_binary_drop` helper it delegates to)
+    for all three of `AndNot`/`AndMaybe`/`Require`: a side that newly drops
+    to zero tokens *during this analysis pass* lets its sibling stand alone,
+    regardless of which side dropped, distinct from a genuinely pre-existing
+    `Nothing()` operand (which still follows `ast.normalize()`'s ordinary
+    whoosh-matching poison/absorb rule, entry 27's positive/required-null
+    handling). Before analysis became its own pipeline stage, the identical
+    outcome came from a narrower, emitter-only mechanism confined to
+    `visit_andnot`/`visit_andmaybe`/`visit_require`, which shared a helper
+    that dropped a zero-token side and let the other stand alone at emit
+    time; the result was, and still is, the same "discovered here, not at
+    parse time, so `ast.normalize()`'s `AndNot`/`AndMaybe`/`Require` rules
+    never get a chance to run for a value that only became empty later"
+    mechanism as bare `NOT`. Confirmed directly this also means
+    whoosh-compat's behavior depends on nothing about *when* whoosh happened
+    to eliminate the operand, unlike real
     whoosh, whose own behavior for this shape turns out to depend on
     parenthesization: `title:the ANDNOT content:foo` (bare, unparenthesized)
     drops `title:the` at the syntax level before `ANDNOT` ever binds,
@@ -707,14 +766,16 @@ parse-then-emit pipeline).
     words come out the other end, including zero (e.g. `title:"the"`, a
     single stopword): the result is a real, non-null `Phrase` query object
     whose `words` list just happens to be empty. whoosh-compat instead
-    defers all analysis to emit time (see ARCHITECTURE.md's "analyzer
-    contract" invariant): `ast.Phrase` keeps the raw, unanalyzed text, and
-    `TantivyEmitter` (and, for the differential harness's purposes,
-    `oracle.analyze_ast`'s `_analyzed_phrase` helper, which models the same
-    behavior for comparison) drops the phrase from its enclosing group
-    entirely once analysis reduces it to zero tokens, the same rule already
-    applied to a zero-token plain `Term` (see `oracle.analyze_ast`'s
-    docstring). The two sides therefore build structurally different trees
+    defers all analysis to a pipeline stage after parsing (see
+    ARCHITECTURE.md's "analyzer contract" invariant): `parse()`'s
+    `ast.Phrase` keeps the raw, unanalyzed text, and
+    `whoosh_compat.ast.analyze()` (called both by `TantivyEmitter.emit()`
+    and, for the differential harness's purposes, directly by the harness
+    itself, the same function either way) drops the phrase from its
+    enclosing group entirely once analysis reduces it to zero tokens, the
+    same rule already applied to a zero-token plain `Term` (see
+    `analyze()`'s docstring). The two sides therefore build structurally
+    different trees
     for the exact same input: an oracle `ast.Phrase(field, text="")` versus
     whoosh-compat's node vanishing (its enclosing group normalizing to
     `Nothing()` if nothing else survives). This is the same underlying

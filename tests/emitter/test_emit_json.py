@@ -155,6 +155,64 @@ def test_json_subpath_parse_query_fallback_honors_multitoken_first(tindex: TInde
     assert search_ids(tindex[0], q) == [1]
 
 
+def test_json_subpath_parse_query_fallback_honors_multitoken_and_or() -> None:
+    # DIVERGENCES.md entry 22 (updated): promoting analysis to its own
+    # pipeline stage (ast.analyze()) means a multi-token AND/OR-mode Term
+    # value is already resolved into separate single-token Terms, each
+    # addressing the JSON subpath independently, before TantivyEmitter ever
+    # visits it: the parse_query fallback now gets one call per surviving
+    # token, combined by the ordinary boolean-query machinery, giving true
+    # AND/OR semantics instead of collapsing to one quoted, phrase-shaped
+    # leaf. This is pinned with a *reversed* word order against the index
+    # (query "alice bob" against an indexed "bob alice"): a phrase-shaped
+    # collapse would never match this (wrong order), but true AND (or OR)
+    # over independent single-token term queries does.
+    index, _schema, reg = _transposed_json_fixture()
+    and_reg = FieldRegistry(
+        [
+            FieldSpec(
+                spec.name,
+                spec.kind,
+                subpaths=spec.subpaths,
+                analyzer=spec.analyzer,
+                multitoken=Multitoken.AND,
+            )
+            for spec in reg
+        ]
+    )
+    emitter = TantivyEmitter(index=index, registry=and_reg)
+    assert emitter._json_paths_supported() is False, (
+        "this test pins the parse_query fallback; it requires the installed "
+        "tantivy-py to not support JSON-subpath term_query/phrase_query"
+    )
+    and_node = ast.Term(field=FieldRef("notes", "user"), text="alice bob")
+    and_q = emitter.emit(and_node)
+    assert search_ids(index, and_q) == [1], (
+        "Multitoken.AND must match regardless of word order (both tokens "
+        "present), not collapse to a phrase-shaped single-leaf match"
+    )
+
+    or_reg = FieldRegistry(
+        [
+            FieldSpec(
+                spec.name,
+                spec.kind,
+                subpaths=spec.subpaths,
+                analyzer=spec.analyzer,
+                multitoken=Multitoken.OR,
+            )
+            for spec in reg
+        ]
+    )
+    or_emitter = TantivyEmitter(index=index, registry=or_reg)
+    or_node = ast.Term(field=FieldRef("notes", "user"), text="alice nonexistent")
+    or_q = or_emitter.emit(or_node)
+    assert search_ids(index, or_q) == [1], (
+        "Multitoken.OR must match on any surviving token ('alice' alone is "
+        "present), not require the whole joined text to match as a phrase"
+    )
+
+
 def test_json_paths_supported_false_when_no_json_field_registered(tindex: TIndex) -> None:
     # _json_paths_supported()'s probe loop finds no JSON+subpaths field, so
     # probe_path stays None and the result is cached as False without ever

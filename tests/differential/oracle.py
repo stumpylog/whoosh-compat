@@ -105,10 +105,11 @@ _STANDARD_ANALYZER = StandardAnalyzer()
 def _analyze(text: str) -> list[str]:
     """Tokenize ``text`` with whoosh's own StandardAnalyzer.
 
-    Used both as the oracle registry's TEXT-field analyzer (so
-    whoosh-compat's :func:`~whoosh_compat.parser.default` term text and the
-    real whoosh index's analyzed tokens are produced by the *same* code) and
-    directly by :func:`analyze_ast`.
+    Used as the oracle registry's TEXT-field analyzer, so whoosh-compat's
+    :func:`~whoosh_compat.parser.default` term text, the real whoosh index's
+    analyzed tokens, and :func:`whoosh_compat.ast.analyze`'s own forward
+    analysis of whoosh-compat's parsed tree are all produced by the *same*
+    code.
     """
 
     return [t.text for t in _STANDARD_ANALYZER(text)]
@@ -553,35 +554,6 @@ def unmapped_reason(q: wq.Query) -> str:
     return f"oracle-unmappable: whoosh query type {type(q).__name__!r} has no ast.Node mapping"
 
 
-# --------------------------------------------------------------------------
-# whoosh_compat.ast -> forward-analyzed whoosh_compat.ast (comparable form)
-# --------------------------------------------------------------------------
-
-
-def _analyzed_term(field: FieldRef | None, text: object, reg: FieldRegistry) -> ast.Node | None:
-    resolved = reg.resolve(field) if field else None
-    if resolved is None or resolved.spec.kind not in (FieldKind.TEXT, FieldKind.KEYWORD):
-        return ast.Term(field=field, text=cast("str | int | bool", text))
-    if not isinstance(text, str):
-        return ast.Term(field=field, text=cast("str | int | bool", text))
-    spec = resolved.spec
-    tokens = spec.analyzer(text) if spec.analyzer else [text]
-    if not tokens:
-        return None
-    if len(tokens) == 1:
-        return ast.Term(field=field, text=tokens[0])
-    return ast.And(children=tuple(ast.Term(field=field, text=t) for t in tokens))
-
-
-def _analyzed_phrase(node: ast.Phrase, reg: FieldRegistry) -> ast.Node | None:
-    resolved = reg.resolve(node.field) if node.field else None
-    analyzer = resolved.spec.analyzer if resolved is not None else None
-    tokens = analyzer(node.text) if analyzer else node.text.split()
-    if not tokens:
-        return None
-    return ast.Phrase(field=node.field, text=" ".join(tokens), slop=node.slop)
-
-
 def compat_raw_parse(
     q: str, reg: FieldRegistry, default_fields: list[str], tz: tzinfo_t, basedate: datetime
 ) -> tuple[ast.Node, tuple[Diagnostic, ...]]:
@@ -590,18 +562,19 @@ def compat_raw_parse(
     (the public API) applies internally.
 
     Mirrors the oracle side's ``parser.parse(text, normalize=False)`` (see
-    module docstring): :func:`analyze_ast` needs to forward-analyze
-    each raw ``Term`` *before* any structural normalization runs, or a
-    redundant parenthesized single term that analyzes to zero tokens (e.g.
+    module docstring): the differential comparison's own
+    :func:`whoosh_compat.ast.analyze` call needs to analyze each raw
+    ``Term`` *before* any structural normalization runs, or a redundant
+    parenthesized single term that analyzes to zero tokens (e.g.
     ``(title:0)``: ``0`` is shorter than StandardAnalyzer's default
     ``minsize=2``) gets pre-collapsed by ``whoosh_compat.parse()``'s
     internal normalize into a bare ``Term`` indistinguishable from an
     unparenthesized one. whoosh's own (also-unnormalized) tree keeps the
-    structure that turns into an empty ``And([])`` in that case:
-    comparable, post-:func:`analyze_ast`, only if our side is *also* still
-    unnormalized when the 0-token drop happens. ``analyze_ast`` still ends
-    with its own :func:`~whoosh_compat.ast.normalize` call, exactly
-    mirroring the oracle comparison.
+    structure that turns into an empty ``And([])`` in that case: comparable,
+    post-analysis, only if our side is *also* still unnormalized when the
+    0-token drop happens. :func:`~whoosh_compat.ast.analyze` still ends with
+    its own :func:`~whoosh_compat.ast.normalize` call, exactly mirroring the
+    oracle comparison.
     """
 
     parser = CompatMultifieldParser(list(default_fields), reg)
@@ -609,87 +582,3 @@ def compat_raw_parse(
         parser.add_plugin(CompatDateParserPlugin(basedate, tz))
     node = parser.parse(q)
     return node, tuple(parser.diagnostics)
-
-
-def analyze_ast(node: ast.Node, reg: FieldRegistry) -> ast.Node:
-    """Replace each TEXT/KEYWORD ``Term``'s raw text with its analyzed
-    tokens (multi-token -> ``And`` of ``Term``s, matching the oracle
-    schema's default multitoken policy), then normalize.
-
-    A 0-token analyzed value (a stopword, or a token shorter than
-    StandardAnalyzer's ``minsize=2``) is *dropped from its parent group*
-    entirely: not replaced with an explicit :class:`~whoosh_compat.ast.Nothing`
-    leaf: mirroring whoosh's own ``GroupNode``/``Wrapper``/``BinaryGroup``
-    ``query()`` methods (``qa is None -> use qb``, etc; see
-    ``whoosh.qparser.syntax``): a stopword inside ``foo AND the`` doesn't
-    make the *whole* query match nothing, it just disappears as though it
-    was never typed, the same way an empty group does (issue #10). This
-    deliberately differs from :func:`whoosh_compat.ast.normalize`'s own
-    rule that an *explicit* ``Nothing()`` (e.g. a genuinely empty range)
-    poisons an enclosing ``And``: that's a different, real "no results"
-    case, not a dropped-token case. Conflating the two by building a
-    literal empty ``And()``/``Or()`` here and leaving it to
-    ``normalize()``'s "empty group -> Nothing" rule would produce
-    false mismatches like ``(title:0) AND (0)`` (a single-char token
-    whoosh's default analyzer drops as too short) resolving to ``Nothing``
-    on whoosh-compat's side but to ``Term('tag', '0')`` (the multifield
-    OR's one surviving KEYWORD branch) on whoosh's real side, since real
-    whoosh's own ``And.normalize()`` drops an empty-compound child from an
-    enclosing ``And`` instead of poisoning it (verified directly:
-    ``And([Term('tag', '0'), And([])]).normalize() == Term('tag', '0')``),
-    exactly like :func:`_to_ast`'s And/Or branches.
-    """
-
-    def go(n: ast.Node) -> ast.Node | None:
-        if isinstance(n, ast.Term):
-            return _analyzed_term(n.field, n.text, reg)
-        if isinstance(n, ast.Phrase):
-            return _analyzed_phrase(n, reg)
-        if isinstance(n, ast.And):
-            subs = [s for s in (go(c) for c in n.children) if s is not None]
-            if not subs:  # see _to_ast's matching And/Or branches
-                return None
-            return ast.And(children=tuple(subs))
-        if isinstance(n, ast.Or):
-            subs = [s for s in (go(c) for c in n.children) if s is not None]
-            if not subs:
-                return None
-            return ast.Or(children=tuple(subs))
-        if isinstance(n, ast.Not):
-            child = go(n.child)
-            return None if child is None else ast.Not(child=child)
-        if isinstance(n, ast.AndNot):
-            a, b = go(n.positive), go(n.negative)
-            if a is None and b is None:
-                return None
-            # A missing side becomes an explicit Nothing() rather than
-            # falling back to the other operand: real whoosh's AndNot rule
-            # is "positive null -> Nothing" (not "just negative"),
-            # "negative null -> positive", and the final normalize() call
-            # below already implements exactly that (matching
-            # BinaryGroup.query() on the production parser side, issue #10).
-            return ast.AndNot(
-                positive=a if a is not None else ast.Nothing(),
-                negative=b if b is not None else ast.Nothing(),
-            )
-        if isinstance(n, ast.AndMaybe):
-            a, b = go(n.required), go(n.optional)
-            if a is None and b is None:
-                return None
-            return ast.AndMaybe(
-                required=a if a is not None else ast.Nothing(),
-                optional=b if b is not None else ast.Nothing(),
-            )
-        if isinstance(n, ast.Require):
-            a, b = go(n.scored), go(n.filter_only)
-            if a is None or b is None:
-                # Real whoosh: either side null -> Nothing (both required).
-                return None
-            return ast.Require(scored=a, filter_only=b)
-        if isinstance(n, ast.Boosted):
-            child = go(n.child)
-            return None if child is None else ast.Boosted(child=child, boost=n.boost)
-        return n
-
-    result = go(node)
-    return ast.normalize(result if result is not None else ast.Nothing())

@@ -14,11 +14,11 @@ from tests.differential.allowlist import DivergenceKind
 from tests.differential.allowlist import allowed_entry
 from tests.differential.oracle import ORACLE_REGISTRY
 from tests.differential.oracle import V2_FIELDS
-from tests.differential.oracle import analyze_ast
 from tests.differential.oracle import compat_raw_parse
 from tests.differential.oracle import oracle_parse
 from tests.differential.oracle import to_ast
 from tests.differential.oracle import unmapped_reason
+from whoosh_compat.ast import analyze
 from whoosh_compat.ast import normalize
 from whoosh_compat.fields import FieldRegistry
 
@@ -89,7 +89,7 @@ def test_matches_oracle(q: str, oracle_reg: FieldRegistry) -> None:
     if diagnostics:
         pytest.skip(_DIAGNOSTIC_SKIP_REASON)
 
-    got = normalize(analyze_ast(raw_ast, oracle_reg))
+    got = normalize(analyze(raw_ast, oracle_reg))
     expected_n = normalize(expected)
 
     if entry is None:

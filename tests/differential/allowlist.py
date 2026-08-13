@@ -650,6 +650,61 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         ),
         DivergenceKind.MISMATCH,
     ),
+    # design (DIVERGENCES.md entry 15, now confirmed at the AST-comparison
+    # layer too, not just result-level): analyze() resolves a DEFAULT-
+    # multitoken field's combinator from the term's *actual* enclosing group
+    # (AND vs OR), which real whoosh never does (it always uses the parser's
+    # fixed default group, AND here). Multifield expansion of an unfielded
+    # (or demoted-unknown-field) value always builds a fresh Or(field1:...,
+    # field2:..., ...) at the point the value appears, so every default
+    # field's own per-field combinator resolves against that Or
+    # unconditionally, regardless of what encloses the expansion elsewhere in
+    # the query: any such value that survives its own field's analyzer as
+    # two or more tokens (for at least one default TEXT/KEYWORD field)
+    # diverges. Two independent textual shapes reach this: a bare (unfielded)
+    # word containing an internal separator between two >=2-character runs
+    # (StandardAnalyzer splits on the separator; each half needs to be at
+    # least minsize=2 to plausibly survive, though this is a length
+    # approximation, not an exact stopword-aware simulation, see below), and
+    # an unregistered ("unknown") field name followed by a colon and a value,
+    # which whoosh-compat's FieldsPlugin merges into one literal string
+    # (fieldname included) the same way real whoosh's own unknown-field
+    # demotion does, tokenizing on the colon boundary the same way a dash or
+    # dot would. Both alternatives require each side of the internal
+    # separator to be at least two characters, confirmed directly
+    # ("zzz:x"/"a:foobar", where the one-character half is dropped by
+    # StandardAnalyzer's minsize=2 and only one token survives per field, do
+    # NOT diverge) as a practical proxy for "plausibly survives analysis",
+    # not a byte-for-byte simulation of StandardAnalyzer's stopword list;
+    # the differential-triage skill's normal iterate-on-fuzzer-findings
+    # workflow applies if a future fuzz run finds a shape (e.g. an actual
+    # English stopword landing on one side) this approximation misses.
+    # Known field names/aliases are excluded from the unknown-field
+    # alternative so an explicitly, correctly fielded value (which only
+    # diverges when nested inside a genuine user-written OR, a narrower,
+    # context-dependent case not covered by this entry) isn't wrongly
+    # swept in here.
+    (
+        re.compile(
+            r"(?:^|(?<=[\s(]))\w{2,}[-.]\w{2,}(?=[\s)]|$)"
+            r"|\b(?!(?:id|title|content|asn|correspondent_id|correspondent"
+            r"|has_correspondent|tag_id|tag|has_tag|type_id|type|has_type"
+            r"|created|modified|added|path_id|path|has_path|notes|num_notes"
+            r"|custom_fields_id|custom_fields|custom_field_count"
+            r"|has_custom_fields|owner_id|owner|has_owner|viewer_id|checksum"
+            r"|page_count|original_filename|release_date)\b)"
+            r"\w{2,}:[^\s():]{2,}"
+        ),
+        (
+            "DIVERGENCES.md entry 15: an unfielded or unknown-field-demoted"
+            " value that survives its field's analyzer as 2+ tokens resolves"
+            " Multitoken.DEFAULT against the multifield expansion's Or"
+            " context in whoosh-compat, but against whoosh's fixed AND"
+            " default in real whoosh, now confirmed reachable at the AST-"
+            " comparison layer via analyze()"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
 ]
 
 
