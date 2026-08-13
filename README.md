@@ -71,6 +71,28 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full `FieldSpec`/
 `FieldRegistry` shape and how a query string gets from string to
 `tantivy.Query`.
 
+## API Stability
+
+Before 0.1.0, we're declaring the public API boundary explicitly.
+
+**Stable API** (guaranteed across minor and patch releases):
+
+- `whoosh_compat.parse()` and `whoosh_compat.ParseResult`
+- `whoosh_compat.ast` module (the backend-neutral query tree)
+- `whoosh_compat.fields` module (`FieldSpec`, `FieldRegistry`, `FieldKind`, etc.)
+- `whoosh_compat.errors` module (exception types)
+- `whoosh_compat.emitters.tantivy_.emit()` function and the `Emitter` protocol in `whoosh_compat.emitters.base`
+
+**Internal / not stable** (usable, but subject to change without notice between versions):
+
+- `whoosh_compat.parser.*` — the forked whoosh tagger and filter pipeline. The parser is a fork of whoosh's own query parser, kept close to upstream so it stays diffable and easy to maintain. Because it tracks a third-party codebase, its internals and behavior may change between whoosh-compat releases, even minor ones.
+
+The `parser.*` exemption forecloses nothing: it can always be promoted to stable later. In the meantime, if you import directly from `whoosh_compat.parser`, your code may need updates on whoosh-compat releases.
+
+### Module naming: why `emitters.tantivy_`?
+
+The `emitters.tantivy_` module uses a trailing underscore to signal that this is a backend-specific module. This naming is deliberate and permanent at the 0.1.0 release. While a future version could add a lazy re-export (e.g., `emitters.tantivy` without the underscore) to provide an alternative import path, the canonical import is and will remain `from whoosh_compat.emitters.tantivy_ import emit`. The underscore also reinforces that tantivy is an optional dependency: the emitter won't be imported unless you ask for it.
+
 ## Supported query syntax
 
 Parity target is **Whoosh's intended grammar**, not every Whoosh plugin.
