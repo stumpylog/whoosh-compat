@@ -216,6 +216,41 @@ def test_phrase_on_u64_field_bad_number_raises_query_emit_error(
         emit_ast(node, tindex, ereg)
 
 
+# -- issue #9 (reopened): parsed input can never carry an out-of-domain u64
+# -- value into a Phrase anymore (see tests/test_parser_fields.py), but a
+# -- hand-built ast.Phrase bypasses the parser entirely, so visit_phrase's
+# -- U64 branch needs its own domain check as a backstop, same as the
+# -- parse-time one. ------------------------------------------------------
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("-5", id="negative"),
+        pytest.param(str(2**64), id="too-large"),
+    ],
+)
+def test_phrase_on_u64_field_out_of_domain_raises_query_emit_error(
+    tindex: TIndex, ereg: FieldRegistry, text: str
+) -> None:
+    node = ast.Phrase(field=FieldRef("asn"), text=text, slop=1)
+    with pytest.raises(QueryEmitError, match="not a valid number"):
+        emit_ast(node, tindex, ereg)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("0", id="lower-boundary"),
+        pytest.param(str(2**64 - 1), id="upper-boundary"),
+    ],
+)
+def test_phrase_on_u64_field_boundary_values_still_emit(
+    tindex: TIndex, ereg: FieldRegistry, text: str
+) -> None:
+    node = ast.Phrase(field=FieldRef("asn"), text=text, slop=1)
+    q = emit_ast(node, tindex, ereg)
+    assert isinstance(q, tantivy.Query)
+
+
 # issue #16: a quoted star on U64/BOOLEAN_EXISTS is an existence match. A
 # *double*-quoted star stays an ast.Phrase at parse time (see
 # tests/test_parser_fields.py), so its equivalence to the unquoted form is

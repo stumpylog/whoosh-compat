@@ -52,6 +52,7 @@ from typing import Any
 
 from whoosh_compat import ast
 from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.fields import FieldKind
 from whoosh_compat.parser import priorities
 from whoosh_compat.parser import syntax
 from whoosh_compat.parser.common import attach
@@ -556,6 +557,24 @@ class PhrasePlugin(Plugin):
         def query(self, parser: Any) -> ast.Node:
             fieldname = self.fieldname or getattr(parser, "fieldname", None)
             ref = parser.field_ref(fieldname)
+            registry = getattr(parser, "registry", None)
+            resolved = registry.resolve(ref) if ref is not None and registry is not None else None
+            if (
+                resolved is not None
+                and resolved.spec.kind is FieldKind.U64
+                and self.text != "*"
+            ):
+                # A double-quoted value on a U64 field still needs the same
+                # parse-time domain diagnosis the bare/single-quoted/range
+                # spellings get (issue #9, reopened): without this, a value
+                # that reaches here as a Phrase (raw text, never coerced)
+                # sailed through with zero diagnostics and only failed at
+                # emit time. ("*" is exempt: it is an existence-match
+                # special case handled entirely at emit time, see issue #16.)
+                assert ref is not None  # resolve() only returns non-None for a resolved ref
+                _, err = parser._parse_u64(self.text, ref, self.startchar, self.endchar)
+                if err is not None:
+                    return err
             # Analysis is emit-time: just hand the raw phrase text and slop
             # off to the AST; whatever backend consumes the AST is
             # responsible for tokenizing it.

@@ -96,6 +96,71 @@ def test_u64_boundary_range_bounds_still_parse(reg: FieldRegistry) -> None:
     )
 
 
+# -- issue #9 (reopened): a double-quoted value on a U64 field becomes an
+# -- ast.Phrase carrying raw text, which the term/range-only domain check
+# -- never saw; it sailed through with zero diagnostics and only failed at
+# -- emit time. ---------------------------------------------------------
+
+
+def test_u64_negative_double_quoted_is_diagnosed_at_parse_time(reg: FieldRegistry) -> None:
+    r = wc.parse('asn:"-5"', registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert r.diagnostics[0].field == FieldRef("asn")
+    assert r.diagnostics[0].raw_value == "-5"
+    assert r.diagnostics[0].startchar == 4
+    assert r.diagnostics[0].endchar == 8
+
+
+def test_u64_too_large_double_quoted_is_diagnosed_at_parse_time(reg: FieldRegistry) -> None:
+    too_large = str(2**64)
+    r = wc.parse(f'asn:"{too_large}"', registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert r.diagnostics[0].field == FieldRef("asn")
+    assert r.diagnostics[0].raw_value == too_large
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(0, id="lower-boundary"),
+        pytest.param(2**64 - 1, id="upper-boundary"),
+    ],
+)
+def test_u64_double_quoted_boundary_values_still_parse_and_match(
+    reg: FieldRegistry, value: int
+) -> None:
+    r = wc.parse(f'asn:"{value}"', registry=reg, default_fields=["content"])
+    assert r.diagnostics == ()
+    assert r.ast == ast.Phrase(field=FieldRef("asn"), text=str(value), slop=1)
+
+
+def test_u64_double_quoted_non_numeric_is_diagnosed_at_parse_time(reg: FieldRegistry) -> None:
+    # A non-numeric double-quoted value on a U64 field must also be caught,
+    # not just an out-of-domain one, mirroring the bare/single-quoted forms.
+    r = wc.parse('asn:"xyz"', registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert r.diagnostics[0].field == FieldRef("asn")
+    assert r.diagnostics[0].raw_value == "xyz"
+
+
+def test_u64_double_quoted_comma_value_is_diagnosed_not_split(reg: FieldRegistry) -> None:
+    # A double-quoted value on a comma_values U64 field is never split by
+    # CommaValuesPlugin (that plugin only touches syntax.WordNode, and a
+    # double-quoted value is a PhrasePlugin.PhraseNode, a different syntax
+    # node type entirely), so it reaches the phrase path as a single raw
+    # string that isn't a valid u64 either way; confirming it is diagnosed
+    # here rather than silently accepted or split rules out a fourth,
+    # comma-specific gap in the double-quoted spelling.
+    r = wc.parse('tag_id:"1,99999999999999999999"', registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics[0].kind is DiagnosticKind.BAD_NUMBER
+    assert r.diagnostics[0].field == FieldRef("tag_id")
+    assert r.diagnostics[0].raw_value == "1,99999999999999999999"
+
+
 # -- issue #17: a wildcard/prefix pattern on a numeric field is diagnosed
 # -- at parse time rather than failing at search time. Real whoosh silently
 # -- drops the wildcard character and searches the (mangled) literal prefix

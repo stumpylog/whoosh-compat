@@ -39,6 +39,7 @@ from whoosh_compat.fields import Multitoken
 from whoosh_compat.fields import ResolvedField
 
 _FALSY_TEXT = ("f", "false", "no", "0")
+_U64_MAX = 2**64 - 1
 
 
 def _is_truthy(value: object) -> bool:
@@ -715,6 +716,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 raise QueryEmitError(
                     f"{node.text!r} is not a valid number for {spec.name!r}"
                 ) from exc
+            if not (0 <= value <= _U64_MAX):
+                # Parsed input can no longer carry an out-of-domain u64 value
+                # here (issue #9, reopened: the parse-time domain check now
+                # also covers the double-quoted/Phrase spelling), but a
+                # hand-built ast.Phrase bypasses the parser entirely, so this
+                # is a backstop for that case, same rule as term/range.
+                raise QueryEmitError(f"{node.text!r} is not a valid number for {spec.name!r}")
             return tantivy.Query.term_query(self.schema, spec.name, value)
 
         if spec.kind is FieldKind.BOOLEAN_EXISTS:
