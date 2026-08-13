@@ -566,12 +566,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 # _emit_json_phrase (not _emit_json_term: a Phrase carries
                 # slop and must never consult Multitoken, both unlike a Term,
                 # see its docstring) is the JSON-subpath counterpart of this
-                # method's own plain-field TEXT/KEYWORD branch below (issue
-                # #8: this JSON-subpath dispatch was previously missing from
-                # visit_phrase entirely, so a quoted notes.user:"alice"
-                # fell through to the plain-field branch and queried the
-                # wrong tantivy field name, "notes" instead of "notes.user";
-                # a quoted phrase's slop, which _emit_json_term never carried.
+                # method's own plain-field TEXT/KEYWORD branch below.
                 return self._emit_json_phrase(json_resolved, node)
             # Falls through to _resolve below, which raises "unknown field"
             # for an invalid subpath reference instead of silently treating
