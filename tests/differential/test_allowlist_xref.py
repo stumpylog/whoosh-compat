@@ -105,7 +105,14 @@ def test_every_divergences_entry_claiming_an_allowlist_entry_has_one() -> None:
     }
     problems = []
     for number, body in _divergence_entry_bodies().items():
-        if "allowlist.py" not in body:
+        # "tests/differential/allowlist.py" specifically, not the bare
+        # substring "allowlist.py": tests/emitter/result_allowlist.py (the
+        # result-level acceptance property's own allowlist, a sibling
+        # module with no connection to this AST-level one) also contains
+        # that substring, and a DIVERGENCES.md entry legitimately citing
+        # only the result-level module's test references must not be
+        # mistaken for a claim about this module.
+        if "tests/differential/allowlist.py" not in body:
             continue
         if number not in cited_numbers:
             problems.append(

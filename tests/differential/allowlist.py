@@ -523,15 +523,19 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # _bool_exists_quoted_atom (which, unlike the old has_tag-only manual
     # corpus line, draws from all of BOOL_EXISTS_FIELDS) found the identical
     # mismatch on "has_correspondent" and confirmed directly it applies
-    # uniformly to has_type/has_custom_fields/has_owner too: the root cause
-    # (term_query's strip-before-check vs BOOLEAN._obj_to_bool's
+    # uniformly to has_type/has_path/has_custom_fields/has_owner too (the
+    # acceptance-layer result property's grammar-aware generator, which
+    # also draws from the same BOOL_EXISTS_FIELDS pool, later found the
+    # same mismatch reachable on "has_path" specifically, not yet listed
+    # here despite the comment above already claiming full coverage): the
+    # root cause (term_query's strip-before-check vs BOOLEAN._obj_to_bool's
     # unstripped-then-bool(qstring) fallback) is the same code path for
     # every BOOLEAN_EXISTS field, not something specific to has_tag.
     (
         re.compile(
-            r"\b(?:has_correspondent|has_tag|has_type|has_custom_fields|has_owner):"
-            r"'\s+\S.*'|\b(?:has_correspondent|has_tag|has_type|has_custom_fields|has_owner):"
-            r"'.*\S\s+'"
+            r"\b(?:has_correspondent|has_tag|has_type|has_path|has_custom_fields|has_owner):"
+            r"'\s+\S.*'|\b(?:has_correspondent|has_tag|has_type|has_path|has_custom_fields"
+            r"|has_owner):'.*\S\s+'"
         ),
         (
             "DIVERGENCES.md entry 33: a whitespace-padded quoted"
@@ -600,7 +604,9 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # time (visit_phrase), same as documented for entry 8. Not reproduced:
     # a real whoosh limitation, not intended semantics.
     (
-        re.compile(r"\b(?:has_correspondent|has_tag|has_type|has_custom_fields|has_owner):\""),
+        re.compile(
+            r"\b(?:has_correspondent|has_tag|has_type|has_path|has_custom_fields|has_owner):\""
+        ),
         (
             "whoosh-bug (DIVERGENCES.md entry 38): BOOLEAN fields have no"
             " analyzer in real whoosh, so PhrasePlugin crashes while"

@@ -197,6 +197,46 @@ parse-then-emit pipeline).
     intuitive for a hand-written query, since it means "what you see is
     what groups together").
 
+    The acceptance-layer result property (`tests/emitter/test_acceptance_property.py`)
+    later found the predicted shape occurring for real, and confirmed it
+    reaches the result level, not just a parsed-tree difference: an
+    unfielded (hence always multifield-expanded into a top-level `Or`, the
+    default group real whoosh's own parser also uses at the top level, so
+    this shape does not even need an explicit `OR` in the query text)
+    two-token dashed word, `00-YEAR`, against this property's fixture
+    (`DOCS_PROP`, whose doc 3 title contains "Year" but not "00"). Real
+    whoosh requires both tokens present in the *same* field
+    (`And([Term('content', '00'), Term('content', 'year')])` per field,
+    confirmed directly), matching nothing here; whoosh-compat's `Or`-context
+    `Multitoken.DEFAULT` only requires *either* token, so doc 3's title
+    alone (containing "year") satisfies that field's clause, matching doc 3.
+    Still not a bug to fix, for the same reason given above; this is the
+    entry-16-style confirmation that a documented, deliberate design choice
+    can be result-changing on the right data, not evidence the choice
+    itself needs revisiting.
+
+    A second, independent trigger pathway to the identical mechanism was
+    also confirmed: a bare (subpath-less) registered-JSON-field value
+    (entry 29's demotion) can itself analyze to more than one token.
+    `attrs:END` demotes to the literal unfielded text `attrs:END` on both
+    sides (entry 29), which `StandardAnalyzer` then tokenizes into two
+    surviving tokens, `attrs` and `end` (the colon is a token boundary);
+    matched against doc 3 (content contains "end" but not "attrs"),
+    whoosh-compat's `Or`-context OR-combination matches it, real whoosh's
+    AND-combination does not. Not every bare-JSON-demoted value reaches
+    this: `attrs:0` tokenizes to only one surviving token (`0` is dropped,
+    shorter than `StandardAnalyzer`'s `minsize=2`), so there is no
+    OR-vs-AND ambiguity there and both sides agree, confirming the
+    mechanism is genuinely about token *count*, not about JSON-field
+    demotion specifically; the dashed-word and bare-JSON-value pathways
+    just happen to be the two shapes this project's generator vocabulary
+    reaches multi-token unfielded values through.
+
+    Test references: `tests/emitter/result_allowlist.py`'s unfielded/
+    `OR`-nested dashed-word and bare-JSON-value entries;
+    `tests/emitter/test_acceptance_property.py`'s
+    `test_multitoken_default_or_context_is_a_result_level_divergence`.
+
 16. **Several AST-level divergences above do not change final search
     results for this project's fixtures (a finding, not a new divergence of
     its own).** Entries 2 (wildcard case-folding order) and 12 (date-range
@@ -621,6 +661,41 @@ parse-then-emit pipeline).
     `tests/differential/allowlist.py` (a `NOT` directly wrapping a single
     known-zero-token TEXT-field value) rather than treated as a new
     divergence, since the underlying behavior is this same entry.
+
+    The same accepted tradeoff extends to `ANDNOT`/`ANDMAYBE`/`REQUIRE`'s
+    positive/required/scored operand, found by the acceptance-layer result
+    property (`tests/emitter/test_acceptance_property.py`), not just bare
+    `NOT`: `visit_andnot`/`visit_andmaybe`/`visit_require`
+    (`emitters/tantivy_.py`) share `_lone_operand`, which drops a zero-token
+    side and lets the other stand alone, uniformly, exactly the same
+    "discovered at emit time, not parse time, so `ast.normalize()`'s
+    `AndNot`/`AndMaybe`/`Require` rules (entry 27's positive/required-null
+    handling) never get a chance to run" mechanism as bare `NOT`. Confirmed
+    directly this also means whoosh-compat's behavior depends on nothing
+    about *when* whoosh happened to eliminate the operand, unlike real
+    whoosh, whose own behavior for this shape turns out to depend on
+    parenthesization: `title:the ANDNOT content:foo` (bare, unparenthesized)
+    drops `title:the` at the syntax level before `ANDNOT` ever binds,
+    leaving `content:foo` standing alone, exactly matching whoosh-compat's
+    "leave the survivor" rule and already verified as agreeing
+    (`test_zero_token_operand_leaves_the_survivor`); but
+    `(title:the) ANDNOT (content:foo)` (each operand explicitly
+    parenthesized, the shape `strategies.py`'s `_extend` combinator always
+    produces) instead keeps a live `AndNot(And([]), ...)` tree whose
+    empty-`And` positive side matches zero documents when actually searched
+    (verified directly against a live oracle index), dragging the whole
+    `AndNot` down to zero regardless of the negative side, the ordinary
+    "AND with an unsatisfiable clause" consequence of entry 27's own
+    positive-null rule, not a new one. whoosh-compat's uniform, timing-
+    independent policy is kept for the same predictability reason this
+    entry already gives; it was not previously known to be reachable
+    through `ANDNOT`/`ANDMAYBE`/`REQUIRE`'s parenthesized form specifically
+    until the result-level property found it.
+
+    Test references: `tests/emitter/result_allowlist.py`'s
+    ANDNOT/ANDMAYBE/REQUIRE-parenthesized-zero-token-operand entry;
+    `tests/emitter/test_acceptance_property.py`'s
+    `test_andnot_zero_token_positive_matches_everything_here`.
 
 24. **An all-zero-token quoted phrase parses to a real empty-words `Phrase`
     object in real whoosh, but is dropped entirely by whoosh-compat's
@@ -1258,3 +1333,122 @@ parse-then-emit pipeline).
     `tests/differential/corpus_docs.txt`'s
     `asn:4294967296` (unsigned field) and `id:2147483648` (signed field)
     lines.
+
+40. **`NOT` of a group that recursively collapses to empty (nested empty
+    groups, or a boost/paren wrapper around one) matches no documents here,
+    but matches every document in real whoosh at nesting depth two or
+    deeper (whoosh-bug, not reproduced; found by the acceptance-layer
+    result property, `tests/emitter/test_acceptance_property.py`).**
+    `GroupNode.query()`'s empty-group rule (`parser/syntax.py`) returns
+    `None`, not `ast.Nothing()`, for a group whose children all resolve to
+    `None` in turn: this is the same deliberate, pre-existing rule entry 27
+    documents (restored to stop an empty group from becoming a live
+    `Nothing()` node that would then propagate through `normalize()`'s
+    And/Not algebra), and it applies uniformly regardless of nesting depth,
+    so `NOT (())`, `NOT ((()))` and `NOT ((())^0.5)` all parse to a bare
+    `ast.Nothing()` with no `Not` node at all (confirmed directly via
+    `compat_raw_parse`): the `NOT` operator has nothing left to bind to by
+    the time its operand has recursively collapsed away, so it is dropped
+    along with the operand rather than ever reaching `normalize()`'s
+    `Not(Nothing) -> Every` rule (entry 23).
+
+    Real whoosh's own behavior for the equivalent shape is not uniform by
+    depth, confirmed directly against the pinned oracle: `NOT ()` (a single
+    level) also collapses to `_NullQuery` at parse time (matching
+    whoosh-compat here), but `NOT (())` and deeper both parse to a real
+    `And([Not(And([And([]) ...]))])` tree that, when actually **searched**,
+    matches every document (an empty `And([])`, unlike the top-level
+    special case, matches nothing when executed, so `Not` of it matches
+    everything). This is an artifact of how whoosh's own `Not`/`And`
+    matchers handle a structurally-nonempty-but-semantically-empty operand
+    at execution time, not a coherent, intentional "NOT of nothing" design
+    on whoosh's part (the depth-1 and depth-2+ cases already disagree with
+    each other on whoosh's own side), so whoosh-compat does not chase it:
+    its own uniform "collapses to nothing at every depth" behavior is more
+    predictable, consistent with entry 27's existing precedent of keeping
+    the deliberate empty-group-drops-out rule rather than reproducing
+    whoosh's transitive per-operator quirks around it.
+
+    This shape was previously invisible to `tests/differential`: real
+    whoosh's own `And([])`-nested `Not` tree has no oracle-side null
+    subquery for `oracle.to_ast`'s `Not`/`And` branches to collapse
+    identically, so `to_ast` returns `None` (`unmapped_reason`'s
+    "oracle-unmappable" case) and the comparison is skipped entirely rather
+    than compared and passed; the AST-level harness never had a tree to
+    disagree over. It took a real dual-index search, not a parsed-tree
+    comparison, to notice the two sides actually return different document
+    sets for this shape at all, the same "an AST-incomparable or
+    AST-agreeing case can still be a result-level divergence" risk entry 16
+    names, here in the more extreme direction of AST comparison being
+    impossible rather than merely coincidentally agreeing.
+
+    Test references: `tests/emitter/result_allowlist.py`'s
+    `NOT\s*\((?=[^)]*\()[\s()0-9.^]*\)` entry;
+    `tests/emitter/test_acceptance_property.py`'s
+    `test_not_of_nested_empty_group_is_a_result_level_divergence` and the
+    generated-query property (seeded with `NOT ((())^0.5)`).
+
+41. **A `NumericRange` with a small-magnitude bound matches every document
+    in real whoosh regardless of any document's actual field value
+    (whoosh-bug, not reproduced; found by the acceptance-layer result
+    property).** Confirmed directly against a live oracle index (four
+    documents with `asn` values 100-103, no document with `asn` below 100),
+    bisecting a single-value range (`asn:[N TO N]`) across a range of `N`:
+    `N` at or below 10 matches every document in the index; `N` at or above
+    20 correctly matches only documents whose `asn` equals `N` (i.e.
+    nothing, for this fixture); the exact boundary between the two was not
+    pinned further than "somewhere between 10 and 20", since the point is
+    the defect's existence, not its precise threshold, and chasing that
+    threshold further would just be more archaeology of a bug this project
+    does not intend to reproduce either way. A bare term query for the same
+    small value (`asn:0`) correctly matches nothing, so the defect is
+    specific to `NumericRange`, not to how small integers are encoded in
+    general; a range whose bounds are both **not** small (`asn:[100 TO
+    101]`, `asn:[100 TO 100]`) also correctly matches only in-range
+    documents, so the defect is not simply "any bracketed numeric range is
+    broken" either, only ranges touching a small-magnitude bound. This
+    looks like a defect in whoosh's own `NumericRange`/`sortable_int_to_bytes`
+    range-matching machinery, most likely in how it decomposes a range into
+    Lucene-style precision-step "shift tiers" for values with few
+    significant bits (not investigated further at the whoosh source level,
+    since the parity bar this project holds itself to is whoosh's
+    *intended* semantics, and matching every document regardless of a
+    query's actual bounds is not a coherent intended semantic for a range
+    query under any reading). whoosh-compat's own numeric range handling
+    already has an existing, oracle-verified regression test for a
+    dissimilar-bounds case (`test_acceptance_e2e.py`'s
+    `"asn:[100 TO 102]"` scenario) and correctly returns only the documents
+    actually in range for every bound tested here, small or otherwise; it
+    is not changed to reproduce this defect.
+
+    Two further manifestations were confirmed directly, neither reducible to
+    the "small bound" shape above. First, an *exclusive* bracket: `asn:{100
+    TO N]` (exclusive lower bound, so doc 1's `asn == 100` should never
+    match) correctly excludes doc 1 for `N` up to 120, but for `N` at or
+    above 127 matches every document, including doc 1, regardless of any
+    document's actual value. Second, while narrowing that down, a plain
+    *inclusive* range with no small bound and no exclusivity at all:
+    `asn:[101 TO N]` (`101` alone should already exclude doc 1) shows the
+    identical break at `N == 127`, one past `126`. `127 == 2**7 - 1` in
+    every broken case found here, consistent with a Lucene-style
+    numeric-trie precision-step tier boundary, but confirmed reachable
+    through at least three distinct, not-obviously-related bound shapes
+    (a small single-value range, an exclusive bound, and an ordinary
+    inclusive range whose upper bound alone crosses 127), not one
+    identifiable pattern; not investigated further at the whoosh source
+    level for the same reason the first manifestation wasn't. Given that
+    breadth, the allowlist entry for this divergence gives up on narrowing
+    to any one reproduction and instead treats every bracketed range on a
+    U64 field as suspect. This is safe specifically because the acceptance
+    property never strict-xfail-asserts an allowlisted generated example
+    (see `tests/emitter/result_allowlist.py`'s module docstring); it would
+    not be an acceptable allowlist scope for the AST-comparison layer's
+    strict-xfail discipline, where an entry this broad could silently
+    swallow an unrelated real regression.
+
+    Test references: `tests/emitter/result_allowlist.py`'s `NumericRange`
+    entry; `tests/emitter/test_acceptance_property.py`'s
+    `test_numeric_range_small_bounds_is_a_whoosh_bug` and
+    `test_numeric_range_exclusive_bound_is_a_whoosh_bug` (each still
+    verifies both a broken and an agreeing bound directly, independent of
+    the broad allowlist scope).
