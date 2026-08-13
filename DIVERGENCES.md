@@ -843,3 +843,57 @@ parse-then-emit pipeline).
     `tests/test_normalize.py`'s `TestIterativeNormalizeDeepTree` (covers
     `ast.normalize()`'s traversal directly, via a hand-built tree that
     bypasses the parser's cap entirely).
+
+32. **A `date_only` field's exclusive upper bound rounds up, not down, when
+    truncation would otherwise move it backwards (issue #33).** `_to_utc()`
+    (`parser/dateparse.py`) collapses a `date_only` field's bounds to
+    UTC-midnight calendar days, since only the calendar date matters for
+    such a field. Naively truncating an exclusive upper bound (`incl_hi
+    =False`, the half-open ceiling shape described above) down to its own
+    day's midnight is wrong whenever the untruncated value carried any
+    time-of-day precision: the bound was computed as a ceiling one
+    microsecond past some period's end, so truncating it down moves it to
+    at or before where it started, either collapsing the range to an empty
+    `[midnight, midnight)` or silently dropping the named end day from a
+    multi-day range. `_to_utc` now ceils such a bound to the *next* day's
+    midnight instead, whenever `ceil=True` (passed only for the hi side of
+    an exclusive bound) and the naive datetime has a nonzero time-of-day; a
+    bound already exactly at midnight is left alone, since it is already
+    day-aligned and rounding it up would over-widen the range by an extra
+    day it was never asked to cover. The lo bound, and any both-inclusive
+    exact-instant hi (an exact instant like `noon`, which resolves to a
+    zero-width timespan rather than a half-open period), keep truncating
+    down unchanged.
+
+    This also fixes an internal inconsistency between a degenerate exact
+    instant (`created:noon`, both-inclusive, always worked) and an
+    hour-precision period value (`created:'3pm'`, half-open, used to
+    collapse to an empty range) on the same `date_only` field: both now
+    resolve to a range covering the same calendar day.
+
+    Not a real-whoosh divergence: the fork's own `_to_utc` docstring already
+    states the `date_only` contract ("only the calendar date matters"), and
+    real whoosh's DATE-field concept does not map onto this the same way
+    (against the oracle these shapes either return `NullQuery` or collapse
+    to a whole-year range via entry 12's partial-match defect), so this is
+    whoosh-compat holding itself to its own stated contract rather than
+    matching or diverging from whoosh. The differential layer registers
+    `created` as DATETIME (`tests/differential/oracle.py`), which
+    structurally cannot exercise `date_only` truncation, so this has no
+    differential-corpus counterpart; coverage is direct unit/emitter tests
+    instead.
+
+    Test references: `tests/test_parser_dates.py`'s
+    `test_date_only_time_bearing_single_value_ceils_hi_to_next_day`,
+    `test_date_only_range_time_bearing_end_bound_includes_named_end_day`,
+    `test_date_only_range_time_bearing_start_bound_still_truncates_down`,
+    `test_date_only_same_day_range_times_on_both_ends_is_not_empty`,
+    `test_date_only_whole_day_value_still_ceils_exactly_once`, and
+    `test_date_only_noon_and_3pm_consistently_cover_their_day` (AST-level);
+    `tests/emitter/test_emit_ranges.py`'s
+    `test_date_only_time_bearing_single_value_matches_the_named_day`,
+    `test_date_only_range_time_bearing_end_bound_includes_named_end_day`,
+    `test_date_only_range_time_bearing_start_bound_still_truncates_down`,
+    `test_date_only_same_day_range_times_on_both_ends_matches`, and
+    `test_date_only_noon_and_3pm_consistently_match_their_day` (result-level,
+    real tantivy searches asserting doc-id sets).

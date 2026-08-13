@@ -370,6 +370,88 @@ def test_range_bounds_do_not_collapse_to_year(reg: FieldRegistry) -> None:
     assert r.hi == datetime(2020, 6, 21, tzinfo=UTC)
 
 
+# --- date_only exclusive-upper-bound ceiling (issue #33) ------------------
+
+
+def test_date_only_time_bearing_single_value_ceils_hi_to_next_day(reg: FieldRegistry) -> None:
+    # "created" is date_only=True. A time-bearing value with any
+    # sub-day precision left ambiguous (minutes here, seconds unspecified)
+    # produces a half-open period; date_only truncation must not let the
+    # exclusive hi bound fall back to (or before) lo's own day.
+    r = dparse("created:'2020-03-15 15:30'", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2020, 3, 15, tzinfo=UTC)
+    assert r.hi == datetime(2020, 3, 16, tzinfo=UTC)
+    assert r.incl_lo
+    assert not r.incl_hi
+
+
+def test_date_only_range_time_bearing_end_bound_includes_named_end_day(
+    reg: FieldRegistry,
+) -> None:
+    r = dparse("created:[2020-03-01 TO '2020-03-15 12:00']", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2020, 3, 1, tzinfo=UTC)
+    assert r.hi == datetime(2020, 3, 16, tzinfo=UTC)
+    assert not r.incl_hi
+
+
+def test_date_only_range_time_bearing_start_bound_still_truncates_down(
+    reg: FieldRegistry,
+) -> None:
+    # The lo bound already truncates down correctly; the ceiling fix must
+    # not touch it.
+    r = dparse("created:['2020-03-15 15:00' TO 2020-11-30]", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2020, 3, 15, tzinfo=UTC)
+    assert r.hi == datetime(2020, 12, 1, tzinfo=UTC)
+
+
+def test_date_only_same_day_range_times_on_both_ends_is_not_empty(reg: FieldRegistry) -> None:
+    r = dparse("created:['2020-03-15 00:00' TO '2020-03-15 18:00']", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2020, 3, 15, tzinfo=UTC)
+    assert r.hi == datetime(2020, 3, 16, tzinfo=UTC)
+    assert r.lo < r.hi
+
+
+def test_date_only_whole_day_value_still_ceils_exactly_once(reg: FieldRegistry) -> None:
+    # Regression guard: a value with no time-of-day component (already
+    # day-aligned) must not get an extra day tacked on.
+    r = dparse("created:2020-03-15", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2020, 3, 15, tzinfo=UTC)
+    assert r.hi == datetime(2020, 3, 16, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("created:noon", id="degenerate-instant-noon"),
+        pytest.param("created:'3pm'", id="hour-precision-period-3pm"),
+    ],
+)
+def test_date_only_noon_and_3pm_consistently_cover_their_day(
+    reg: FieldRegistry, query: str
+) -> None:
+    # Both a degenerate exact-instant value (noon) and an hour-precision
+    # period value (3pm) must resolve to a range that covers the same
+    # calendar day on a date_only field: before the fix, 3pm's half-open
+    # ceiling collapsed to an empty [midnight, midnight) range while noon's
+    # both-inclusive shape happened to still work.
+    r = dparse(query, reg).ast
+    assert isinstance(r, ast.DateRange)
+    basedate_local = BASE.astimezone(BERLIN)
+    expected_day = datetime(
+        basedate_local.year, basedate_local.month, basedate_local.day, tzinfo=UTC
+    )
+    assert r.lo == expected_day
+    assert r.hi is not None
+    # The range must be non-empty (would-be-matching-document shape) under
+    # the (lo, hi, incl_lo, incl_hi) semantics.
+    assert r.lo < r.hi or (r.lo == r.hi and r.incl_lo and r.incl_hi)
+
+
 def test_range_open_lower(reg: FieldRegistry) -> None:
     r = dparse("created:[TO 2020]", reg).ast
     assert isinstance(r, ast.DateRange)

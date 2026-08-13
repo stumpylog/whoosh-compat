@@ -894,7 +894,7 @@ class DateParserPlugin(Plugin):
 
         return self.basedate.astimezone(self.tz).replace(tzinfo=None)
 
-    def _to_utc(self, dt_naive: datetime, date_only: bool) -> datetime:
+    def _to_utc(self, dt_naive: datetime, date_only: bool, *, ceil: bool = False) -> datetime:
         """Converts a naive local datetime produced by the grammar to an
         aware UTC datetime, per the field's storage semantics.
 
@@ -902,9 +902,22 @@ class DateParserPlugin(Plugin):
         (paperless ``_date_only_range``): only the calendar date matters, no
         timezone offset is applied. DATETIME fields are treated as local
         instants converted to UTC (paperless ``_datetime_range``).
+
+        ``ceil`` requests round-up-to-next-day instead of truncate-down, and
+        only ever changes anything when ``date_only`` and ``dt_naive`` has a
+        nonzero time-of-day: it is how an exclusive upper bound
+        (``incl_hi=False``) stays a same-day-or-later ceiling instead of
+        truncating backwards past its own lo bound (issue #33). A value
+        already exactly at its own midnight is left untouched, since it is
+        already day-aligned and rounding it up would over-widen the range by
+        an extra day it was never asked to cover. Callers pass ``ceil`` for
+        the hi side of an exclusive bound only; the lo side, and any
+        both-inclusive exact-instant hi, must keep truncating down.
         """
 
         if date_only:
+            if ceil and dt_naive.time() != time():
+                dt_naive = dt_naive + timedelta(days=1)
             return datetime(dt_naive.year, dt_naive.month, dt_naive.day, tzinfo=UTC)
         return dt_naive.replace(tzinfo=self.tz).astimezone(UTC)
 
@@ -1001,7 +1014,11 @@ class DateParserPlugin(Plugin):
             incl_lo = incl_hi = True
 
         lo = self._to_utc(lo_naive, spec.date_only)
-        hi = self._to_utc(hi_naive, spec.date_only) if hi_naive is not None else None
+        hi = (
+            self._to_utc(hi_naive, spec.date_only, ceil=not incl_hi)
+            if hi_naive is not None
+            else None
+        )
         boost = node.boost if node.has_boost else 1.0  # type: ignore[attr-defined]
         return DateRangeSyntaxNode(spec.name, lo, hi, incl_lo, incl_hi, boost)
 
@@ -1094,7 +1111,11 @@ class DateParserPlugin(Plugin):
         except (ValueError, OverflowError):
             return self._error(node, node.start, spec.name)
         try:
-            hi = self._to_utc(hi_naive, spec.date_only) if hi_naive is not None else None
+            hi = (
+                self._to_utc(hi_naive, spec.date_only, ceil=not incl_hi)
+                if hi_naive is not None
+                else None
+            )
         except (ValueError, OverflowError):
             return self._error(node, node.end, spec.name)
         # An exclusivity flag is meaningless for a bound that isn't there at

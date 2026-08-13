@@ -297,6 +297,17 @@ open-ended-range implementation needs. A date the user typed as an exact
 instant (not a period) keeps `incl_hi=True` since there's no rounding
 involved.
 
+**`date_only` fields ceil their exclusive upper bound.** `_to_utc()`
+collapses a `date_only` (DATE) field's bounds to UTC-midnight calendar
+days; only the date matters, no timezone offset is applied. Truncating an
+exclusive upper bound (the half-open ceiling shape above) *down* to its own
+day's midnight would move it backwards whenever the untruncated value
+carried time-of-day precision, either emptying the range or dropping the
+named end day. `_to_utc` ceils such a bound *up* to the next day's midnight
+instead when it isn't already day-aligned; the lo bound, and any
+both-inclusive exact instant, keep truncating down. See DIVERGENCES.md
+entry 32.
+
 **Timezone contract.** Everywhere in the AST, `DateRange` bounds are
 timezone-aware UTC `datetime`s: parsed local/relative dates are converted
 to UTC once, inside `DateParserPlugin` (`parser/dateparse.py`'s `_to_utc`).

@@ -7,6 +7,7 @@ from datetime import datetime
 import pytest
 
 from whoosh_compat import ast
+from whoosh_compat import parse as _parse
 from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.fields import FieldRef
@@ -67,6 +68,67 @@ def test_date_range_parsed(
 ) -> None:
     q = emit_ast(parse("created:[2020-01-01 TO 2020-12-31]"), tindex, ereg)
     assert search_ids(tindex[0], q) == [1, 4]
+
+
+# -- issue #33: date_only exclusive-upper-bound ceiling, result-level -------
+#
+# "created" (tests/emitter/conftest.py's DOCS) is date_only=True, with a
+# document created on each of 2018-03-23 (id 3), 2019-03-01 (id 5),
+# 2019-06-01 (id 2), 2020-03-15 (id 1), 2020-11-30 (id 4). Before the fix,
+# any time-of-day precision on a bound truncated its exclusive upper bound
+# down instead of up, silently emptying or shortening these ranges.
+
+
+def test_date_only_time_bearing_single_value_matches_the_named_day(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
+    # Before the fix: truncated to [2020-03-15T00:00Z, 2020-03-15T00:00Z),
+    # an empty range, 0 hits.
+    q = emit_ast(parse("created:'2020-03-15 15:30'"), tindex, ereg)
+    assert search_ids(tindex[0], q) == [1]
+
+
+def test_date_only_range_time_bearing_end_bound_includes_named_end_day(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
+    # Before the fix: hi truncated down to 2020-03-15T00:00Z (incl_hi=False),
+    # silently dropping doc 1 (created exactly on that day) from the range.
+    q = emit_ast(parse("created:[2018-01-01 TO '2020-03-15 12:00']"), tindex, ereg)
+    assert search_ids(tindex[0], q) == [1, 2, 3, 5]
+
+
+def test_date_only_range_time_bearing_start_bound_still_truncates_down(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
+    # The lo bound already truncated down correctly; the ceiling fix must
+    # not change this shape.
+    q = emit_ast(parse("created:['2020-03-15 15:00' TO 2020-11-30]"), tindex, ereg)
+    assert search_ids(tindex[0], q) == [1, 4]
+
+
+def test_date_only_same_day_range_times_on_both_ends_matches(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
+    # Before the fix: both bounds truncated to the same day's midnight with
+    # incl_hi=False, an empty [midnight, midnight) range, 0 hits, even
+    # though the query explicitly includes midnight.
+    q = emit_ast(parse("created:['2020-03-15 00:00' TO '2020-03-15 18:00']"), tindex, ereg)
+    assert search_ids(tindex[0], q) == [1]
+
+
+def test_date_only_noon_and_3pm_consistently_match_their_day(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
+    # Regression for the noon-vs-3pm inconsistency the issue calls out:
+    # both a degenerate exact-instant value and an hour-precision period
+    # value must match a document created that day on a date_only field.
+    # basedate is pinned to doc 1's created day (2020-03-15) so "noon"/"3pm"
+    # resolve onto it.
+    basedate = datetime(2020, 3, 15, 10, 0, tzinfo=UTC)
+    for query in ("created:noon", "created:'3pm'"):
+        res = _parse(query, registry=ereg, default_fields=["content"], tz=UTC, basedate=basedate)
+        q = emit_ast(res.ast, tindex, ereg)
+        assert search_ids(tindex[0], q) == [1], query
 
 
 @pytest.mark.parametrize(
