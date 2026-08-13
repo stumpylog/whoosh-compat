@@ -363,6 +363,31 @@ parse-time cap to rely on, and previously cost two stack frames per nesting
 level on top of whatever the parser itself had already used, roughly
 halving the tolerated depth versus the raw parse.
 
+**Spans are preserved through `normalize()`, not just set at parse time.**
+Every `Node` carries an optional `startchar`/`endchar` (character offsets
+into the original query string), attached by the parser (`parser/common.py`'s
+`attach()`) as each syntax node builds its AST node. A leaf's span excludes
+its field prefix (`title:foo` yields `Term(text="foo")` spanning just
+`"foo"`) and, for a boosted clause, excludes the trailing `^N` too
+(`BoostPlugin` strips the boost token out of the syntax tree before `query()`
+ever builds the AST, so a `Boosted` node's span is always identical to its
+child's span; `attach()` backfills that span onto the child, since call
+sites build `ast.Boosted(child, boost)` before the wrapping span is known).
+`ast.normalize()` must not silently drop this metadata while rebuilding
+nodes: a rebuilt node whose structure is unchanged (`Not`, `AndNot`,
+`AndMaybe`, `Require`, a `Boosted` that isn't collapsing to something else)
+carries the pre-normalize node's own span forward; a flattened/merged `And`
+or `Or` instead takes the union (min start, max end, skipping any child with
+no span at all, `None` if none have one) of whatever ended up as its final
+children, since flattening can absorb a nested same-type node's children or
+drop some via dedupe/`Nothing`/`Every` filtering. A branch that returns one
+of its already-normalized children verbatim (a single-child unwrap, an
+`AndNot`/`AndMaybe` side dropping out, a boost merging away to 1.0) leaves
+that child's own span alone rather than widening it to the parent's. This
+makes spans usable as a genuine subtree-to-source-text mapping on the
+post-`normalize()`, post-`parse()` public tree, not just on the raw
+pre-normalize parser output.
+
 ## 5. Extension points
 
 **A new emitter.** Implement `ast.Visitor[T]` (subclass it and provide

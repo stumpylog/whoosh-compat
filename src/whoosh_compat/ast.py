@@ -178,6 +178,21 @@ def _dedupe(nodes: tuple[Node, ...]) -> tuple[Node, ...]:
     return tuple(result)
 
 
+def _span_union(nodes: tuple[Node, ...]) -> tuple[int | None, int | None]:
+    """Returns the (min startchar, max endchar) spanning all of ``nodes``.
+
+    A node whose own span is unset (``startchar is None``) is skipped for
+    this purpose rather than treated as "spans everything" or "spans
+    nothing": it contributes no information either way. If none of
+    ``nodes`` carry a span at all (e.g. an entirely hand-built subtree that
+    never set one), the result is ``(None, None)``.
+    """
+
+    starts = [n.startchar for n in nodes if n.startchar is not None]
+    ends = [n.endchar for n in nodes if n.endchar is not None]
+    return (min(starts) if starts else None, max(ends) if ends else None)
+
+
 def _child_nodes(node: Node) -> tuple[Node, ...]:
     """Returns the immediate child nodes ``normalize`` needs normalized
     before it can apply ``node``'s own rule, in the same order the
@@ -206,13 +221,28 @@ def _normalize_one(node: Node, children: tuple[Node, ...]) -> Node:
     returned them). Pure combination step, no traversal: this is the part
     ``normalize``'s recursive predecessor did after its recursive calls
     returned.
+
+    Span handling: whenever this rebuilds a node as a fresh
+    instance representing the *same* subtree ``node`` stood for (unchanged
+    structure, or a collapse to a ``Nothing``/``Every`` marker), the new
+    instance carries ``node``'s own ``startchar``/``endchar``. When a
+    branch instead returns one of the already-normalized ``children``
+    verbatim (a single-child unwrap, or an And/Or/AndNot/AndMaybe/Require
+    side dropping out), that child's own span is left alone rather than
+    widened to ``node``'s span, matching how normalize already treats a
+    fully-collapsed single-child And/Or. And/Or's flatten/merge case is the
+    one exception: since children may have been absorbed from a nested
+    same-type node (or dropped via dedupe/Nothing/Every filtering), the
+    rebuilt node's span is instead the union (see ``_span_union``) of
+    whatever ended up as its final children, not ``node``'s own span.
     """
 
     if isinstance(node, And):
         if not children:
             return Nothing()  # rule 7: empty group -> Nothing
+        start, end = _span_union(children)
         if any(isinstance(c, Nothing) for c in children):
-            return Nothing()  # rule 3: Nothing propagates through And
+            return Nothing(startchar=start, endchar=end)  # rule 3: Nothing propagates through And
         flat: list[Node] = []
         for child in children:
             if isinstance(child, And):
@@ -223,14 +253,20 @@ def _normalize_one(node: Node, children: tuple[Node, ...]) -> Node:
         flat = [c for c in flat if not (isinstance(c, Every) and c.field is None)]
         flat = list(_dedupe(tuple(flat)))
         if not flat:
-            return Every() if had_every else Nothing()
+            return (
+                Every(startchar=start, endchar=end)
+                if had_every
+                else Nothing(startchar=start, endchar=end)
+            )
         if len(flat) == 1:
             return flat[0]
-        return And(children=tuple(flat))
+        flat_start, flat_end = _span_union(tuple(flat))
+        return And(children=tuple(flat), startchar=flat_start, endchar=flat_end)
 
     if isinstance(node, Or):
         if not children:
             return Nothing()  # rule 7: empty group -> Nothing
+        start, end = _span_union(children)
         flat = []
         for child in children:
             if isinstance(child, Or):
@@ -238,54 +274,61 @@ def _normalize_one(node: Node, children: tuple[Node, ...]) -> Node:
             else:
                 flat.append(child)
         if any(isinstance(c, Every) and c.field is None for c in flat):
-            return Every()  # rule 6: Every absorbs Or siblings
+            return Every(startchar=start, endchar=end)  # rule 6: Every absorbs Or siblings
         flat = [c for c in flat if not isinstance(c, Nothing)]
         flat = list(_dedupe(tuple(flat)))
         if not flat:
-            return Nothing()
+            return Nothing(startchar=start, endchar=end)
         if len(flat) == 1:
             return flat[0]
-        return Or(children=tuple(flat))
+        flat_start, flat_end = _span_union(tuple(flat))
+        return Or(children=tuple(flat), startchar=flat_start, endchar=flat_end)
 
     if isinstance(node, Not):
         (child,) = children
         if isinstance(child, Nothing):
-            return Every()
-        return Not(child=child)
+            return Every(startchar=node.startchar, endchar=node.endchar)
+        return Not(child=child, startchar=node.startchar, endchar=node.endchar)
 
     if isinstance(node, AndNot):
         positive, negative = children
         if isinstance(positive, Nothing):
-            return Nothing()
+            return Nothing(startchar=node.startchar, endchar=node.endchar)
         if isinstance(negative, Nothing):
             return positive
-        return AndNot(positive=positive, negative=negative)
+        return AndNot(
+            positive=positive, negative=negative, startchar=node.startchar, endchar=node.endchar
+        )
 
     if isinstance(node, AndMaybe):
         required, optional = children
         if isinstance(required, Nothing):
-            return Nothing()
+            return Nothing(startchar=node.startchar, endchar=node.endchar)
         if isinstance(optional, Nothing):
             return required
-        return AndMaybe(required=required, optional=optional)
+        return AndMaybe(
+            required=required, optional=optional, startchar=node.startchar, endchar=node.endchar
+        )
 
     if isinstance(node, Require):
         scored, filter_only = children
         if isinstance(scored, Nothing) or isinstance(filter_only, Nothing):
-            return Nothing()
-        return Require(scored=scored, filter_only=filter_only)
+            return Nothing(startchar=node.startchar, endchar=node.endchar)
+        return Require(
+            scored=scored, filter_only=filter_only, startchar=node.startchar, endchar=node.endchar
+        )
 
     if isinstance(node, Boosted):
         (child,) = children
         boost = node.boost
         if isinstance(child, Nothing):
-            return Nothing()
+            return Nothing(startchar=node.startchar, endchar=node.endchar)
         if isinstance(child, Boosted):
             boost = child.boost * boost
             child = child.child
         if boost == 1.0:
             return child
-        return Boosted(child=child, boost=boost)
+        return Boosted(child=child, boost=boost, startchar=node.startchar, endchar=node.endchar)
 
     return node
 

@@ -152,6 +152,68 @@ def test_attach_none_passthrough() -> None:
     assert attach(None, node) is None
 
 
+def test_attach_propagates_span_into_spanless_boosted_child() -> None:
+    # term_query()-style call sites build ast.Boosted(child, boost) before
+    # the wrapping syntax node's own span is known, so the child is still
+    # span-less at this point: attach() must backfill the same
+    # span onto the child, not just the outer Boosted wrapper.
+    term = ast.Term(field=None, text="a")
+    boosted = ast.Boosted(term, 2.0)
+
+    node = syntax.WordNode("a")
+    node.set_range(3, 4)
+
+    attached = attach(boosted, node)
+
+    assert attached == ast.Boosted(term, 2.0, startchar=3, endchar=4)
+    assert isinstance(attached, ast.Boosted)
+    assert attached.startchar == 3
+    assert attached.endchar == 4
+    assert attached.child.startchar == 3
+    assert attached.child.endchar == 4
+
+
+def test_attach_does_not_clobber_boosted_child_with_its_own_span() -> None:
+    # A doubly-boosted clause ("(foo^2)^3") already has a correctly spanned
+    # inner Boosted by the time the outer attach() call runs; propagation
+    # must not override an already-set child span.
+    term = ast.Term(field=None, text="a", startchar=1, endchar=2)
+    inner_boosted = ast.Boosted(term, 2.0, startchar=1, endchar=2)
+    outer_boosted = ast.Boosted(inner_boosted, 3.0)
+
+    node = syntax.WordNode("a")
+    node.set_range(1, 2)
+
+    attached = attach(outer_boosted, node)
+
+    assert isinstance(attached, ast.Boosted)
+    assert isinstance(attached.child, ast.Boosted)
+    assert attached.child == inner_boosted
+    assert attached.child.startchar == 1
+    assert attached.child.endchar == 2
+
+
+def test_attach_propagates_span_through_nested_spanless_boosted_children() -> None:
+    # If a nested Boosted's child is *also* span-less (shouldn't normally
+    # happen from parse(), but the propagation is written generically),
+    # every layer down to the first already-spanned (or leaf) node gets the
+    # same span.
+    term = ast.Term(field=None, text="a")
+    boosted = ast.Boosted(ast.Boosted(term, 2.0), 3.0)
+
+    node = syntax.WordNode("a")
+    node.set_range(5, 9)
+
+    attached = attach(boosted, node)
+
+    assert isinstance(attached, ast.Boosted)
+    assert isinstance(attached.child, ast.Boosted)
+    assert attached.child.startchar == 5
+    assert attached.child.endchar == 9
+    assert attached.child.child.startchar == 5
+    assert attached.child.child.endchar == 9
+
+
 # --- RangeNode --------------------------------------------------------
 
 

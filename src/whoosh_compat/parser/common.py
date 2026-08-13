@@ -37,6 +37,7 @@ import sys
 from typing import Any
 from typing import TextIO
 
+from whoosh_compat import ast
 from whoosh_compat.errors import QueryParserError
 
 __all__ = ["QueryParserError", "attach", "get_single_text", "print_debug"]
@@ -64,8 +65,9 @@ def attach(q: Any, stxnode: Any) -> Any:
         return q
 
     if dataclasses.is_dataclass(q) and not isinstance(q, type):
-        return dataclasses.replace(q, startchar=stxnode.startchar,
-                                    endchar=stxnode.endchar)
+        result = dataclasses.replace(q, startchar=stxnode.startchar,
+                                      endchar=stxnode.endchar)
+        return _propagate_boosted_span(result)
 
     try:
         q.startchar = stxnode.startchar
@@ -75,6 +77,38 @@ def attach(q: Any, stxnode: Any) -> Any:
             f"Can't set attribute on {q.__class__.__name__}"
         )
     return q
+
+
+def _propagate_boosted_span(node: Any) -> Any:
+    """Backfills a span-less :class:`~whoosh_compat.ast.Boosted` child with
+    the ``Boosted`` node's own (just-attached) span.
+
+    Every call site that builds ``ast.Boosted(child, boost)`` (across
+    ``default.py``, ``plugins.py``, ``dateparse.py``, and the ``GroupNode``
+    boost-wrap in this module) does so before it knows the span: the
+    wrapping syntax node's span is only attached afterwards, via this
+    function's caller. That leaves ``child`` permanently span-less once
+    ``attach`` replaces the outer node, since ``dataclasses.replace`` only
+    touches the top-level instance.
+
+    This is safe because a boosted clause's own span is always exactly its
+    child's span: ``BoostPlugin.do_boost`` strips the ``^N`` token out of
+    the syntax tree before ``query()`` ever builds the AST (see
+    ``BoostPlugin.do_boost``), so boosting never adds characters to the
+    span. Recurses through further nested ``Boosted`` layers (e.g. a
+    doubly-boosted clause like ``(foo^2)^3``) but stops as soon as it finds
+    a child that already has a span, so it never overwrites a span another
+    ``attach`` call already set correctly.
+    """
+
+    if (isinstance(node, ast.Boosted)
+            and node.child.startchar is None
+            and node.child.endchar is None):
+        child = dataclasses.replace(node.child, startchar=node.startchar,
+                                     endchar=node.endchar)
+        child = _propagate_boosted_span(child)
+        node = dataclasses.replace(node, child=child)
+    return node
 
 
 def print_debug(level: int, msg: str, out: TextIO = sys.stderr) -> None:
