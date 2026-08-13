@@ -17,14 +17,82 @@ whoosh-compat for parity's sake):
   whoosh-compat's current query surface (e.g. a JSON dotted path, a
   whoosh-compat-only concept with no counterpart in the real-whoosh schema
   being compared against); there is no meaningful oracle comparison to make.
+
+Every reason string MUST also cite an explicit ``DIVERGENCES.md entry N``
+somewhere in its text (even a ``whoosh-bug:``/``design:``/``out-of-scope:``
+one), matching the prefix's own numbered entry: ``tests/differential/
+test_allowlist_xref.py`` mechanically checks this citation exists and names
+a real DIVERGENCES.md entry, in both directions (every allowlist entry cites
+a real DIVERGENCES.md entry, and every DIVERGENCES.md entry that itself
+claims a matching allowlist entry or corpus line actually has one). A
+divergence introduced without this paperwork fails that check instead of
+silently drifting out of sync.
+
+Strict-xfail semantics (``tests/differential/test_differential.py``'s
+``test_matches_oracle``): a query matching one of these entries is not just
+skipped. The comparison still runs, and the test asserts the specific
+divergent outcome this entry documents actually happened; an allowlisted
+query whose comparison unexpectedly succeeds (the trees now match, or the
+oracle stops raising) fails the suite, naming the stale entry, rather than
+silently continuing to skip a divergence that no longer exists. This is what
+each entry's :class:`DivergenceKind` selects between:
+
+* :attr:`DivergenceKind.MISMATCH`: both sides parse cleanly (no
+  whoosh-compat diagnostic) and the compared trees are expected to differ.
+  The test asserts ``got != expected``. This is the default for nearly
+  every entry below.
+* :attr:`DivergenceKind.ORACLE_ERROR`: real whoosh itself raises while
+  parsing this shape, so there is no oracle query object to compare at all.
+  The test asserts the oracle still raises. No current corpus line actually
+  matches an entry of this kind (every oracle-crashing shape found so far,
+  e.g. the "NOT NOT alpha" consecutive-bare-NOTs crash documented in
+  DIVERGENCES.md entry 35 and the double-quoted-``"*"``-on-BOOLEAN crash in
+  entry 28, has no differential corpus line exercising it: see those
+  entries' own "no allowlist/corpus triple" notes), but the kind exists so a
+  future entry of this shape has somewhere to declare it instead of forcing
+  a MISMATCH-shaped assertion onto a query that never produces a comparable
+  tree.
+
+A third outcome, a whoosh-compat parse *diagnostic* (DIVERGENCES.md entry
+6: ``Term``/``Phrase`` values whoosh-compat can't parse, e.g. an invalid
+date or number, become a structured ``ErrorLeaf`` instead of whoosh's
+untyped ``error_query``/``NullQuery``), is deliberately NOT a
+:class:`DivergenceKind` here. ``test_matches_oracle`` checks for a
+whoosh-compat diagnostic before it ever consults this module's per-entry
+:class:`DivergenceKind`, and skips uniformly (not a strict-xfail assertion)
+whenever one is present, regardless of which reason (if any) also matched:
+a diagnostic means the raw AST contains ``ErrorLeaf`` nodes standing in for
+unparseable input, which makes a structural mismatch assertion meaningless
+(there's nothing coherent to compare) whether or not the query also happens
+to match one of the patterns below. Several entries here (e.g. the unquoted
+multi-word natural-date-keyword one) match corpus queries that, in
+practice, *always* hit the diagnostic path today rather than reaching a
+MISMATCH assertion; that's fine; the entry's pattern still needs to exist to
+allowlist any future query shape it matches that does NOT produce a
+diagnostic. This diagnostic skip is still counted, not just silently taken:
+``test_differential.py``'s ``test_diagnostic_skip_count_matches_corpus``
+pins the total number of corpus queries that take it, so a parser change
+that starts (or stops) diagnosing a shape is visible as a count change
+instead of draining or padding the corpus silently.
 """
 
 from __future__ import annotations
 
+import enum
 import re
 
-# (pattern, DIVERGENCES reference + short reason)
-ALLOW: list[tuple[re.Pattern[str], str]] = [
+
+class DivergenceKind(enum.Enum):
+    """Which strict-xfail assertion an allowlist entry's matched query
+    should satisfy; see this module's docstring for the full taxonomy.
+    """
+
+    MISMATCH = "mismatch"
+    ORACLE_ERROR = "oracle_error"
+
+
+# (pattern, DIVERGENCES reference + short reason, strict-xfail taxonomy kind)
+ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # #3: date-node boosts are silently dropped by whoosh's DateTimeNode/
     # DateRangeNode.__init__ (both hardcode self.boost = 1.0), while
     # whoosh-compat's DateParserPlugin preserves the typed boost. Scoped to a
@@ -38,6 +106,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             r"\^\d"
         ),
         "DIVERGENCES.md entry 3: date-node boost preservation",
+        DivergenceKind.MISMATCH,
     ),
     # #6: unparseable dates/numbers become a structured ErrorLeaf(diagnostic)
     # in whoosh-compat vs whoosh's untyped error_query()/NullQuery-with-.error.
@@ -72,17 +141,27 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " the AST by whoosh (LowercaseFilter runs even with tokenize=False)"
             " but only at emit time by whoosh-compat (FieldSpec.pattern_normalizer)"
         ),
+        DivergenceKind.MISMATCH,
     ),
-    # design: whoosh-compat's CommaValuesPlugin treats a *quoted* comma-values
-    # field value as a literal (SingleQuotePlugin marks it is_quoted); real
-    # whoosh has no such plugin at all: its KEYWORD(commas=True) analyzer
-    # always splits on commas at analysis time, quoted or not, so
-    # "tag:'foo,bar'" still expands to tag:foo AND tag:bar upstream. Not a
-    # whoosh bug: whoosh simply never had this feature to begin with.
-    (
-        re.compile(r"tag:'foo,bar'"),
-        "DIVERGENCES.md entry 17: comma_values quote-escape is a whoosh-compat-only feature",
-    ),
+    # DIVERGENCES.md entry 17 (design) documents that whoosh-compat's
+    # CommaValuesPlugin treats a *quoted* comma-values field value as a
+    # literal, unlike real whoosh (whose KEYWORD(commas=True) analyzer always
+    # splits on commas at analysis time, quoted or not). There is no
+    # allowlist entry for it here, though: verified directly (re-checked
+    # while adding this module's strict-xfail taxonomy) that the raw,
+    # pre-analysis parse trees genuinely differ (whoosh-compat keeps
+    # "foo,bar" as one Term; the oracle already has two), but
+    # oracle.analyze_ast forward-analyzes both sides through the same
+    # comma-splitting KEYWORD analyzer before comparison (mirroring
+    # TantivyEmitter's own emit-time re-analysis, see DIVERGENCES.md entry
+    # 16), which collapses that difference before the comparison this test
+    # module runs ever sees it: "tag:'foo,bar'" structurally matches at this
+    # comparison layer, even though it is still a real, separately
+    # unit-tested divergence in the raw parser output and worth keeping
+    # documented. Allowlisting it here would make it a stale entry by
+    # construction (the strict-xfail assertion would fail immediately,
+    # since the trees actually match), so it stays out of ALLOW and is
+    # compared normally.
     # design: JSON dotted-path fields (custom_fields.value, notes.user, ...)
     # aren't registered in the v2 oracle schema/registry (v2 whoosh has no
     # JSON subpath concept at all), so on *both* sides the field is
@@ -109,6 +188,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " name differently than whoosh's tagger even though neither side"
             " has the field registered"
         ),
+        DivergenceKind.MISMATCH,
     ),
     (
         re.compile(r"\bnotes\.(user|note)\b"),
@@ -118,6 +198,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " name differently than whoosh's tagger even though neither side"
             " has the field registered"
         ),
+        DivergenceKind.MISMATCH,
     ),
     # NOTE: DIVERGENCES.md entry 8 ("attached -foo searches for foo") describes
     # a divergence between whoosh-compat and paperless-ngx's live tantivy-based
@@ -155,11 +236,13 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(r"\b(?:created|modified|added):[\[{]"),
         (
-            "whoosh-bug: LocalDateParser's tz-reversal override doesn't reach"
-            " range bounds (range_to_dt uses the bare grammar's date_from, not"
-            " the override); whoosh-compat applies tz conversion uniformly"
-            " instead of reproducing the bug"
+            "whoosh-bug (DIVERGENCES.md entry 12): LocalDateParser's"
+            " tz-reversal override doesn't reach range bounds (range_to_dt"
+            " uses the bare grammar's date_from, not the override);"
+            " whoosh-compat applies tz conversion uniformly instead of"
+            " reproducing the bug"
         ),
+        DivergenceKind.MISMATCH,
     ),
     # design (DIVERGENCES.md entry 18): a bare (non-bracketed) separated-ISO
     # date value on a date field ("created:2020-01-01", "created:2020-01")
@@ -187,6 +270,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " shape (whoosh's ErrorNode-falls-back-to-field.parse_query vs"
             " whoosh-compat's single DateParserPlugin grammar path)"
         ),
+        DivergenceKind.MISMATCH,
     ),
     # design: whoosh-compat's date grammar adds new keywords (previous week/
     # month/quarter/year) directly to the English grammar (see
@@ -216,6 +300,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " paperless's app-level rewrite_natural_date_keywords"
             " preprocessing, out of whoosh-compat's parser scope"
         ),
+        DivergenceKind.MISMATCH,
     ),
     # design: a bare "*" wildcard on a field (`title:*`) whoosh-compat
     # simplifies to Every(field) (see QueryParser.wildcard_query's
@@ -241,6 +326,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             "DIVERGENCES.md entry 20: bare field:* (or unfielded *) simplifies to"
             " Every(field) in whoosh-compat vs a literal Wildcard('*') in whoosh"
         ),
+        DivergenceKind.MISMATCH,
     ),
     # whoosh-bug (DIVERGENCES.md entry 13): real whoosh's WildcardPlugin.do_wildcards
     # (and query.terms.Wildcard.normalize(), same root cause) only tests a
@@ -261,6 +347,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
     (
         re.compile(r"\b\w+:[^\s()]*\[[^\]]*\]\*(?:\s|$|\))"),
         "whoosh-bug (DIVERGENCES.md entry 13): Wildcard.normalize() bracket fold drops the character class on a trailing-star pattern",
+        DivergenceKind.MISMATCH,
     ),
     # design (extends DIVERGENCES.md entry 23, found by the grammar-aware
     # fuzzer, see test_hypothesis.py): NOT of a term/phrase whose value is
@@ -305,6 +392,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             "DIVERGENCES.md entry 23: NOT of a zero-token term/phrase reaches the"
             " same emit-time divergence at the AST-comparison layer"
         ),
+        DivergenceKind.MISMATCH,
     ),
     # design (DIVERGENCES.md entry 24, found by the grammar-aware fuzzer): a
     # quoted phrase whose entire content analyzes to zero tokens (every word
@@ -340,6 +428,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " time) but is dropped entirely by whoosh-compat's emit-time"
             " analysis"
         ),
+        DivergenceKind.MISMATCH,
     ),
     # design (DIVERGENCES.md entry 25, found by the grammar-aware fuzzer): a
     # bare (non-bracketed) relative date offset ("created:now-7d",
@@ -365,6 +454,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " DateRange in whoosh-compat (a documented feature/extension) but"
             " whoosh's grammar only supports this syntax inside a bracketed range"
         ),
+        DivergenceKind.MISMATCH,
     ),
     # design (DIVERGENCES.md entry 27, found by the property-based fuzzer
     # while fixing issue #10): ANDNOT/ANDMAYBE/REQUIRE whose positive/
@@ -387,6 +477,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " And on whoosh-compat's side (Nothing-propagation algebra) but"
             " is dropped on whoosh's"
         ),
+        DivergenceKind.MISMATCH,
     ),
     # design (DIVERGENCES.md entry 33): a whitespace-padded quoted value on a
     # BOOLEAN_EXISTS field reads False in whoosh-compat (strips before the
@@ -405,6 +496,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " before the trues/falses check) but True in whoosh"
             " (unstripped check falls through to bool(qstring))"
         ),
+        DivergenceKind.MISMATCH,
     ),
     # design (DIVERGENCES.md entry 36): a comma-values field boost
     # (`tag:alpha,beta^2`) attaches to the whole split group in
@@ -430,6 +522,7 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " term individually in whoosh, since the comma split happens at"
             " parse time here vs. analysis time there"
         ),
+        DivergenceKind.MISMATCH,
     ),
 ]
 
@@ -443,9 +536,22 @@ def allowed_reason(query: str) -> str | None:
     single catch-all "allowlisted" message.
     """
 
-    for pattern, reason in ALLOW:
+    for pattern, reason, _kind in ALLOW:
         if pattern.search(query):
             return reason
+    return None
+
+
+def allowed_entry(query: str) -> tuple[str, DivergenceKind] | None:
+    """Like :func:`allowed_reason`, but also returns the matched entry's
+    :class:`DivergenceKind`, for callers implementing this module's
+    strict-xfail semantics (``test_differential.py``'s ``test_matches_oracle``).
+    Returns ``None`` if no entry matches.
+    """
+
+    for pattern, reason, kind in ALLOW:
+        if pattern.search(query):
+            return reason, kind
     return None
 
 

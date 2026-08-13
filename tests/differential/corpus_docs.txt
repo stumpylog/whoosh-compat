@@ -84,9 +84,13 @@ notes.user:alice
 notes.note:reminder
 notes.user:alice notes.note:insurance
 
-# --- KNOWN DIVERGENCE (design, allowlist.py): comma_values quote-escape is
-# a whoosh-compat-only feature (real whoosh's KEYWORD(commas=True) analyzer
-# always splits on commas, quoted or not).
+# --- compared: comma_values quote-escape (design, DIVERGENCES.md entry 17)
+# is a whoosh-compat-only feature at the raw parse-tree level (real whoosh's
+# KEYWORD(commas=True) analyzer always splits on commas, quoted or not), but
+# the differential harness's own forward-analysis step re-runs the same
+# comma-splitting analyzer on both sides before comparing, so this line
+# compares and passes structurally; see DIVERGENCES.md entry 17 for why
+# there is deliberately no allowlist.py entry for it.
 tag:'foo,bar'
 
 # --- KNOWN DIVERGENCE (design, allowlist.py, DIVERGENCES.md entry 36): a

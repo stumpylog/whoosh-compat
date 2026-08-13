@@ -199,10 +199,11 @@ parse-then-emit pipeline).
 
 16. **Several AST-level divergences above do not change final search
     results for this project's fixtures (a finding, not a new divergence of
-    its own).** Entries 2 (wildcard case-folding order), entry 17
-    (the `tag:'foo,bar'` comma-quote-literal design entry), and entry 12
-    (date-range tz bypass) are all real at the *parsed-AST* level (what
-    `tests/differential` compares) but were found, while building
+    its own).** Entries 2 (wildcard case-folding order) and 12 (date-range
+    tz bypass) are real at the *differential-compared* AST level (what
+    `tests/differential/test_differential.py::test_matches_oracle` actually
+    compares, the tree produced after `oracle.analyze_ast`'s forward
+    analysis) but were found, while building
     `tests/emitter/test_acceptance_e2e.py`, to not change the final doc-id
     set either backend's search actually returns for the queries in this
     project's fixture:
@@ -215,25 +216,39 @@ parse-then-emit pipeline).
       `Entwä*` query against real whoosh also ends up matching the
       lowercased pattern `entwä`, same as whoosh-compat's explicit
       `pattern_normalizer`, both sides match doc 3.
-    - The comma-quote-literal entry: whoosh-compat's emitter re-runs the
-      field's own `analyzer` (which still splits on commas) over a quoted
-      comma value's Term text at *emit* time
-      (`TantivyEmitter._text_term_query`), so the parse-time
-      quoted-vs-split distinction doesn't survive to search time either.
     - Entry 12: this project's fixture's `created`/`added` values aren't
       close enough to a day boundary for a timezone shift to change which
       calendar day/year they fall into, so the bug's absence on the
       whoosh-compat side happens not to matter for any query this
       project's corpus currently exercises.
 
+    Entry 17's comma-quote-literal divergence is a related but distinct
+    case, worth contrasting with the two above: it does not even survive to
+    the differential-compared AST level in the first place (entry 17's own
+    text now explains why: `oracle.analyze_ast`'s forward analysis already
+    splits both sides' comma values identically, for the same reason
+    `TantivyEmitter` does at emit time, described below), so it was never a
+    `tests/differential` divergence to begin with, only a raw-parse-tree
+    one and a documented design choice.
+
     See `tests/emitter/test_acceptance_e2e.py`'s module docstring for the
-    specific evidence (each case was verified by actually running both
-    pipelines, not by inspection). This does not mean entries 2/12/17 are
-    wrong or should be removed: they are still real, reproducible
-    AST-level divergences that a different fixture (e.g. dates
-    near a local-midnight boundary) could absolutely turn into a
-    result-level divergence too; it just means none of *this* project's
-    specific test data happens to expose that.
+    specific evidence behind entries 2 and 12 (each case was verified by
+    actually running both pipelines, not by inspection). This does not mean
+    entries 2/12/17 are wrong or should be removed: entries 2 and 12 are
+    still real, reproducible differential-compared-AST-level divergences
+    that a different fixture (e.g. dates near a local-midnight boundary)
+    could absolutely turn into a result-level divergence too, and entry 17
+    is still a real, unit-tested raw-parse-tree divergence; it just means
+    none of *this* project's specific test data or comparison layers happen
+    to expose these as result-changing.
+
+    The comma-quote-literal mechanism common to entry 17 and this entry:
+    whoosh-compat's emitter re-runs the field's own `analyzer` (which still
+    splits on commas) over a quoted comma value's Term text at *emit* time
+    (`TantivyEmitter._text_term_query`), so the parse-time quoted-vs-split
+    distinction doesn't survive to search time, the same way it doesn't
+    survive `oracle.analyze_ast`'s forward analysis at the differential
+    layer.
 
 17. **`tag:'foo,bar'` comma-quote-literal handling (design, formalizing what
     entries 12/16 above already referred to by description before this
@@ -245,12 +260,32 @@ parse-then-emit pipeline).
     `tag:foo AND tag:bar` upstream in real whoosh. This is a whoosh-compat
     feature whoosh never had, not a whoosh bug.
 
-    Test references: `tests/differential/allowlist.py`'s `tag:'foo,bar'`
-    entry; `tests/differential/corpus_docs.txt`'s `tag:'foo,bar'` line;
-    entry 16 above (this AST-level divergence doesn't change this
-    project's fixture's actual search results, since the emitter re-runs
-    the field's own comma-splitting `analyzer` over the quoted literal's
-    text at *emit* time anyway).
+    This divergence is real in the raw, pre-analysis parse tree, but does
+    not reach `tests/differential`'s own AST-comparison layer: that
+    comparison runs both sides through `oracle.analyze_ast` first, which
+    forward-analyzes every `Term` through its field's own analyzer before
+    comparing (modeling `TantivyEmitter`'s emit-time behavior, the same
+    mechanism entry 16 above describes at the result level). Since `tag` is
+    a `KEYWORD(commas=True)` field, that forward-analysis step splits
+    whoosh-compat's still-unsplit `"foo,bar"` term on the comma too,
+    collapsing the two sides to the same tree before the comparison this
+    project's differential harness runs ever sees a difference (confirmed
+    directly: `tag:'foo,bar'` structurally matches under
+    `tests/differential/test_differential.py::test_matches_oracle`, so this
+    entry deliberately carries no allowlisted skip pattern of its own,
+    unlike a typical differential-only divergence). The design choice itself, and
+    its result-level irrelevance, are still real and still covered
+    directly: `tests/test_parser_fields.py`/`tests/test_plugins_unit.py`
+    pin the raw parse-time distinction (`is_quoted`, an unsplit `Term`),
+    and `tests/emitter/test_acceptance_e2e.py` covers the result-level
+    equivalence entry 16 describes.
+
+    Test references: `tests/differential/corpus_docs.txt`'s `tag:'foo,bar'`
+    line (compared normally, not allowlisted); entry 16 above (this
+    AST-level divergence doesn't change this project's fixture's actual
+    search results, since the emitter re-runs the field's own
+    comma-splitting `analyzer` over the quoted literal's text at *emit*
+    time anyway).
 
 18. **Bare (non-bracketed) separated-ISO date field values structurally
     diverge from whoosh, even once numerically correct on both sides
