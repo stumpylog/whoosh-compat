@@ -236,6 +236,39 @@ def test_wildcard_on_json_plain_field_no_subpath_is_unaffected(reg: FieldRegistr
     assert parse("content:invoi*", reg) == ast.Prefix(field=FieldRef("content"), text="invoi")
 
 
+# -- issue #17 (reopened): a wildcard/prefix pattern on a BOOLEAN_EXISTS
+# -- field is diagnosed at parse time too, the same shape as the U64 case
+# -- above. Real whoosh executes has_tag:t* leniently, mangled to
+# -- Term('has_tag', True) (the same silent-mangle defect class entry 29
+# -- documents for numerics), which is a whoosh defect, not intended
+# -- semantics, so it is not reproduced here.
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("has_tag:t*", id="trailing-star-prefix-fold"),
+        pytest.param("has_tag:tr?e", id="question-mark-wildcard"),
+        pytest.param("has_tag:[t-t]rue*", id="bracket-class-wildcard"),
+    ],
+)
+def test_wildcard_on_boolean_exists_field_is_diagnosed(reg: FieldRegistry, query: str) -> None:
+    r = wc.parse(query, registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics
+    assert r.diagnostics[0].kind is DiagnosticKind.UNKNOWN
+    assert r.diagnostics[0].field == FieldRef("has_tag")
+
+
+def test_bare_star_on_boolean_exists_field_is_still_an_existence_match(
+    reg: FieldRegistry,
+) -> None:
+    # The "*"-alone case (issue #16, Every/existence) is unaffected: this
+    # entry is about a genuine wildcard *pattern*, not the bare-star
+    # simplification.
+    assert parse("has_tag:*", reg) == ast.Every(field=FieldRef("has_tag"))
+
+
 def test_bool_words(reg: FieldRegistry) -> None:
     for word in ("t", "TRUE", "yes", "1"):
         assert parse(f"has_tag:{word}", reg) == ast.Term(field=FieldRef("has_tag"), text=True)

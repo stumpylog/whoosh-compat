@@ -746,7 +746,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
     def visit_prefix(self, node: ast.Prefix) -> tantivy.Query:
         resolved = self._resolve(node.field)
-        self._reject_subpath_pattern(resolved)
+        self._reject_pattern_incompatible_kind(resolved)
         spec = resolved.spec
         text = str(node.text)
         if spec.pattern_normalizer is not None:
@@ -755,32 +755,50 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
     def visit_wildcard(self, node: ast.Wildcard) -> tantivy.Query:
         resolved = self._resolve(node.field)
-        self._reject_subpath_pattern(resolved)
+        self._reject_pattern_incompatible_kind(resolved)
         spec = resolved.spec
         regex = glob_to_regex(str(node.pattern), spec.pattern_normalizer)
         if "(?!)" in regex:
             return tantivy.Query.empty_query()
         return tantivy.Query.regex_query(self.schema, spec.name, regex)
 
-    def _reject_subpath_pattern(self, resolved: ResolvedField) -> None:
+    def _reject_pattern_incompatible_kind(self, resolved: ResolvedField) -> None:
         """Backstop for a hand-built ``Prefix``/``Wildcard`` node whose
-        field carries a JSON subpath, bypassing the parse-time diagnostic
-        in ``parser/default.py``'s ``_wildcard_kind_diagnostic`` (issue
-        #30, DIVERGENCES.md entry 30).
+        field can't support a pattern query, bypassing the parse-time
+        diagnostic in ``parser/default.py``'s ``_wildcard_kind_diagnostic``
+        (DIVERGENCES.md entry 30 for the JSON-subpath case, entry 29 for
+        the BOOLEAN_EXISTS case).
 
-        tantivy stores JSON terms as path-prefixed encoded bytes, and
-        there is no tantivy-py API on the pinned version that can build a
-        pattern query scoped to one subpath: ``Query.regex_query`` against
-        ``resolved.dotted_name`` raises ``ValueError`` (not a schema
-        field), and against the bare JSON field name it silently matches
-        the whole field's encoded bytes, wrong in both directions. Mirrors
-        the text-range backstop in ``visit_termrange`` (DIVERGENCES.md
-        entry 5).
+        Two independent reasons, both raising ``UnsupportedQueryError``
+        with a message naming the field rather than letting tantivy-py's
+        raw ``ValueError`` leak through ``emit()``'s backstop:
+
+        * A JSON subpath. tantivy stores JSON terms as path-prefixed
+          encoded bytes, and there is no tantivy-py API on the pinned
+          version that can build a pattern query scoped to one subpath:
+          ``Query.regex_query`` against ``resolved.dotted_name`` raises
+          ``ValueError`` (not a schema field), and against the bare JSON
+          field name it silently matches the whole field's encoded bytes,
+          wrong in both directions. Mirrors the text-range backstop in
+          ``visit_termrange`` (DIVERGENCES.md entry 5).
+        * BOOLEAN_EXISTS. This synthetic field has no schema column of its
+          own (``resolved.spec.name`` was never registered with tantivy;
+          only its ``exists_target``'s name was), so
+          ``Query.regex_query(self.schema, spec.name, ...)`` would raise
+          tantivy-py's own "Field ... is not defined in the schema"
+          ``ValueError``, a backend-internal message that also
+          contradicts the field being queryable at all (``has_tag:true``
+          works fine).
         """
         if resolved.is_subpath:
             raise UnsupportedQueryError(
                 f"wildcard/prefix patterns are not supported on JSON subpath "
                 f"{resolved.dotted_name!r} (DIVERGENCES.md entry 30)"
+            )
+        if resolved.spec.kind is FieldKind.BOOLEAN_EXISTS:
+            raise UnsupportedQueryError(
+                f"wildcard/prefix patterns are not supported on boolean-exists "
+                f"field {resolved.spec.name!r} (DIVERGENCES.md entry 29)"
             )
 
     def visit_termrange(self, node: ast.TermRange) -> tantivy.Query:

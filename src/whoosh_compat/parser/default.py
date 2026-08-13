@@ -516,7 +516,7 @@ class QueryParser:
         subpath) that can't support one, or ``None`` if the field is fine
         with it.
 
-        Two independent reasons a pattern can't be honored, both diagnosed
+        Three independent reasons a pattern can't be honored, all diagnosed
         here rather than left to fail (or silently misbehave) downstream:
 
         * NUMERIC field (U64). Real whoosh silently drops the wildcard
@@ -533,6 +533,14 @@ class QueryParser:
           entry 30). This case is independent of field kind: a JSON
           field's own kind is always JSON, so it never also hits the U64
           branch above.
+        * BOOLEAN_EXISTS. This synthetic field has no tantivy column of
+          its own (it redirects to its ``exists_target``'s), so a pattern
+          query built against it would regex a nonexistent schema field.
+          Real whoosh executes ``has_tag:t*`` leniently, mangled to
+          ``Term('has_tag', True)``: the same silent-mangle defect class
+          the U64 branch above documents, not intended semantics, so it
+          is not reproduced here either (issue #17, DIVERGENCES.md
+          entry 29).
 
         Diagnosing at parse time instead of letting it fail (or silently
         misbehave) at tantivy search time matches the rest of this
@@ -551,6 +559,8 @@ class QueryParser:
             message = f"wildcard patterns are not supported on numeric field {ref}"
         elif resolved.is_subpath:
             message = f"wildcard patterns are not supported on a JSON subpath ({ref})"
+        elif resolved.spec.kind is FieldKind.BOOLEAN_EXISTS:
+            message = f"wildcard patterns are not supported on boolean-exists field {ref}"
         else:
             return None
         d = Diagnostic(

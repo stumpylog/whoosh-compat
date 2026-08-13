@@ -244,6 +244,46 @@ def test_pattern_on_plain_json_field_no_subpath_still_works(
     assert search_ids(tindex[0], q) == expected
 
 
+# -- BOOLEAN_EXISTS pattern backstop (issue #17, reopened) ------------------
+
+
+@pytest.mark.parametrize(
+    ("node", "match"),
+    [
+        pytest.param(
+            ast.Prefix(field=FieldRef("has_tag"), text="t"),
+            "has_tag",
+            id="prefix-fast-target",
+        ),
+        pytest.param(
+            ast.Wildcard(field=FieldRef("has_tag"), pattern="tr?e"),
+            "has_tag",
+            id="wildcard-fast-target",
+        ),
+        pytest.param(
+            ast.Prefix(field=FieldRef("has_tag_kw"), text="t"),
+            "has_tag_kw",
+            id="prefix-nonfast-target",
+        ),
+        pytest.param(
+            ast.Wildcard(field=FieldRef("has_tag_kw"), pattern="tr?e"),
+            "has_tag_kw",
+            id="wildcard-nonfast-target",
+        ),
+    ],
+)
+def test_pattern_on_boolean_exists_field_raises_at_emit(
+    tindex: TIndex, ereg: FieldRegistry, node: ast.Node, match: str
+) -> None:
+    # A hand-built Prefix/Wildcard node bypasses the parser's parse-time
+    # diagnostic entirely, so this is the backstop that catches it before
+    # it can reach tantivy's raw, backend-internal "Field ... is not
+    # defined in the schema" ValueError (BOOLEAN_EXISTS has no schema
+    # column of its own): same shape as the JSON-subpath backstop above.
+    with pytest.raises(UnsupportedQueryError, match=match):
+        emit_ast(node, tindex, ereg)
+
+
 def test_every_field_non_fast_non_text_raises(tindex: TIndex, ereg: FieldRegistry) -> None:
     # 'asn' is registered as a fast U64 field in ereg, so build a second
     # registry with it as non-fast instead: the regex(".*") fallback

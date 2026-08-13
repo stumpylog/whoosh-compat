@@ -706,8 +706,9 @@ parse-then-emit pipeline).
     `test_every_field_on_the_boolean_exists_field_itself` cover the
     double-quoted and bare-star forms directly, without the oracle.
 
-29. **A wildcard/prefix pattern on a numeric field is diagnosed at parse
-    time, not silently mangled (whoosh-bug, not reproduced; issue #17).**
+29. **A wildcard/prefix pattern on a numeric field or a BOOLEAN_EXISTS field
+    is diagnosed at parse time, not silently mangled (whoosh-bug, not
+    reproduced; issue #17, reopened for the BOOLEAN_EXISTS case).**
     Real whoosh's `WildcardPlugin`, for a NUMERIC field, silently drops the
     wildcard character(s) and searches whatever's left as a literal exact
     value: confirmed directly against the oracle, `type_id:1*` parses to
@@ -722,6 +723,22 @@ parse-then-emit pipeline).
     else, or later dies at tantivy search time (`regex_query` doesn't work
     against a numeric field at all).
 
+    A BOOLEAN_EXISTS field (e.g. `has_tag`) has the same silent-mangle
+    defect on real whoosh (`has_tag:t*` executes leniently, mangled to
+    `Term('has_tag', True)`) and gets the same treatment here for the same
+    reason: this synthetic field also has no tantivy schema column of its
+    own (it redirects to its `exists_target`'s), so letting a
+    `Prefix`/`Wildcard` node reach `emit()` would fail there instead,
+    either with an undocumented-shape error or, for a hand-built AST node
+    bypassing the parser, tantivy-py's raw "Field ... is not defined in the
+    schema" `ValueError` leaking through unchanged. The diagnostic fires
+    only for a genuine pattern; `_wildcard_kind_diagnostic` is scoped to run
+    after the `text == "*"` existence-match special case has already
+    resolved to `Every`, so `has_tag:*` is unaffected. The emitter has a
+    matching backstop, `TantivyEmitter._reject_pattern_incompatible_kind`
+    (shared with entry 30's JSON-subpath case), for a hand-built AST node
+    that bypasses the parser.
+
     A bare `field:*` (the "*"-alone existence-match special case, entry 20
     and issue #16) is unaffected: this entry is specifically about a
     genuine wildcard *pattern* (`?`, multiple/leading `*`, or a bracket
@@ -730,8 +747,15 @@ parse-then-emit pipeline).
 
     Test references: `tests/test_parser_fields.py`'s
     `test_wildcard_on_u64_field_is_diagnosed` (trailing-star prefix fold,
-    `?`, a bracket-class wildcard, and a leading star) and
-    `test_bare_star_on_u64_field_is_still_an_existence_match`;
+    `?`, a bracket-class wildcard, and a leading star),
+    `test_bare_star_on_u64_field_is_still_an_existence_match`,
+    `test_wildcard_on_boolean_exists_field_is_diagnosed`, and
+    `test_bare_star_on_boolean_exists_field_is_still_an_existence_match`;
+    `tests/emitter/test_emit_patterns.py`'s
+    `test_pattern_on_boolean_exists_field_raises_at_emit` (fast and
+    non-fast `exists_target`, both `Prefix` and `Wildcard`);
+    `tests/emitter/test_kind_matrix.py`'s `boolean-exists-fast`/
+    `boolean-exists-nonfast` `prefix-star`/`wildcard`/`bracket-class` cells;
     `tests/differential/corpus_docs.txt`'s issue #17 section (skips via the
     existing entry 6 diagnostics-present check, same as any other
     parse-time diagnostic).
@@ -763,7 +787,7 @@ parse-then-emit pipeline).
     check: a JSON field's own kind is never U64). A hand-built `Prefix`/
     `Wildcard` node that bypasses the parser (so it never reaches the
     parse-time diagnostic) is refused a second time at emit, by
-    `TantivyEmitter._reject_subpath_pattern` in `emitters/tantivy_.py`,
+    `TantivyEmitter._reject_pattern_incompatible_kind` in `emitters/tantivy_.py`,
     which raises `UnsupportedQueryError` before any `Query.regex_query`
     call is built, mirroring entry 5's text-range emit-time backstop.
 

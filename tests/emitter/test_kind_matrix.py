@@ -385,32 +385,9 @@ CELLS: list[ParameterSet] = [
     _param("boolean-exists-fast", "bare", "has_tag:true", Search([1, 2, 4])),
     _param("boolean-exists-fast", "single-quoted", "has_tag:'true'", Search([1, 2, 4])),
     _param("boolean-exists-fast", "double-quoted", 'has_tag:"true"', Search([1, 2, 4])),
-    _param(
-        "boolean-exists-fast",
-        "prefix-star",
-        "has_tag:true*",
-        Diag(),
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="issue #17: wildcard/prefix kind diagnostic is scoped to U64 only; "
-            "BOOLEAN_EXISTS currently reaches emit and raises an undocumented-shape "
-            "QueryEmitError instead of a parse-time diagnostic",
-        ),
-    ),
-    _param(
-        "boolean-exists-fast",
-        "wildcard",
-        "has_tag:tr?",
-        Diag(),
-        marks=pytest.mark.xfail(strict=True, reason="issue #17, same as prefix-star"),
-    ),
-    _param(
-        "boolean-exists-fast",
-        "bracket-class",
-        "has_tag:[t-t]*",
-        Diag(),
-        marks=pytest.mark.xfail(strict=True, reason="issue #17, same as prefix-star"),
-    ),
+    _param("boolean-exists-fast", "prefix-star", "has_tag:true*", Diag()),
+    _param("boolean-exists-fast", "wildcard", "has_tag:tr?", Diag()),
+    _param("boolean-exists-fast", "bracket-class", "has_tag:[t-t]*", Diag()),
     _param("boolean-exists-fast", "bare-star", "has_tag:*", Search([1, 2, 4])),
     _param(
         "boolean-exists-fast",
@@ -423,27 +400,9 @@ CELLS: list[ParameterSet] = [
     _param("boolean-exists-nonfast", "bare", "has_tag_kw:true", Search([1, 2, 4])),
     _param("boolean-exists-nonfast", "single-quoted", "has_tag_kw:'true'", Search([1, 2, 4])),
     _param("boolean-exists-nonfast", "double-quoted", 'has_tag_kw:"true"', Search([1, 2, 4])),
-    _param(
-        "boolean-exists-nonfast",
-        "prefix-star",
-        "has_tag_kw:true*",
-        Diag(),
-        marks=pytest.mark.xfail(strict=True, reason="issue #17, same as boolean-exists-fast"),
-    ),
-    _param(
-        "boolean-exists-nonfast",
-        "wildcard",
-        "has_tag_kw:tr?",
-        Diag(),
-        marks=pytest.mark.xfail(strict=True, reason="issue #17, same as boolean-exists-fast"),
-    ),
-    _param(
-        "boolean-exists-nonfast",
-        "bracket-class",
-        "has_tag_kw:[t-t]*",
-        Diag(),
-        marks=pytest.mark.xfail(strict=True, reason="issue #17, same as boolean-exists-fast"),
-    ),
+    _param("boolean-exists-nonfast", "prefix-star", "has_tag_kw:true*", Diag()),
+    _param("boolean-exists-nonfast", "wildcard", "has_tag_kw:tr?", Diag()),
+    _param("boolean-exists-nonfast", "bracket-class", "has_tag_kw:[t-t]*", Diag()),
     _param("boolean-exists-nonfast", "bare-star", "has_tag_kw:*", Search([1, 2, 4])),
     _param(
         "boolean-exists-nonfast",
