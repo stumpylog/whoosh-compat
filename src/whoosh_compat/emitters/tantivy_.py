@@ -463,12 +463,12 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         field kind participate in analysis-based dropping at all": TEXT and
         KEYWORD do (plain or JSON subpath), U64/BOOLEAN_EXISTS/DATE never
         do, matching exactly how ``visit_term``/``_emit_json_term`` and
-        ``visit_phrase``/``_emit_json_phrase`` dispatch on kind (issue #35:
-        the Phrase branch previously skipped this restriction entirely and
-        tokenized every kind, silently dropping e.g. a U64 phrase whose text
-        happened to analyze to nothing under an analyzer shared across
-        kinds, even though standalone emission of the identical node
-        dispatches on kind and never consults those tokens).
+        ``visit_phrase``/``_emit_json_phrase`` dispatch on kind. The Phrase
+        branch previously skipped this restriction entirely and tokenized
+        every kind, silently dropping e.g. a U64 phrase whose text happened
+        to analyze to nothing under an analyzer shared across kinds, even
+        though standalone emission of the identical node dispatches on kind
+        and never consults those tokens.
 
         Returns ``None`` when the field's kind is not subject to the drop
         policy (its emission should just run normally, including raising
@@ -477,9 +477,9 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         this is a read-only preview of what emission will do, not a second
         implementation of it.
 
-        When #14's ``analyze()`` stage lands, this kind-dispatch rule (and
-        the test cases that pin it) needs to carry over into that stage's
-        own tests.
+        A future explicit analysis pipeline stage that subsumes this
+        predicate must preserve the same kind-dispatch rule, and the test
+        cases that pin it.
         """
         if field is not None and field.json_path is not None:
             resolved = self.registry.resolve(field)
