@@ -5,6 +5,7 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Callable
 from collections.abc import Iterable
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from enum import auto
@@ -117,6 +118,21 @@ class FieldRef:
 
 
 @dataclass(frozen=True, slots=True)
+class SubpathSpec:
+    """Per-subpath specification for one entry of a JSON field's
+    ``subpaths``.
+
+    Deliberately trivial for now: every subpath currently behaves exactly as
+    it did when ``subpaths`` was a bare ``tuple[str, ...]`` (it inherits the
+    parent JSON field's analyzer and text semantics). This type exists to
+    freeze the *container shape* (``FieldSpec.subpaths`` as
+    ``Mapping[str, SubpathSpec]``) ahead of per-subpath typing (numeric,
+    date, or boolean subpaths), which is a separate, later change and not
+    implemented here.
+    """
+
+
+@dataclass(frozen=True, slots=True)
 class FieldSpec:
     """Specification for a single field in the schema.
 
@@ -125,6 +141,13 @@ class FieldSpec:
     ``analyzer``); setting one on a kind that ignores it is permitted, not
     validated against, since a host may reasonably share one ``FieldSpec``
     factory across kinds rather than branch on kind to omit them.
+
+    ``subpaths`` accepts either its canonical form, a
+    ``Mapping[str, SubpathSpec]``, or a ``tuple[str, ...]`` as sugar for "all
+    of these subpaths, with the trivial default ``SubpathSpec``";
+    ``__post_init__`` normalizes a tuple into the mapping form, so the value
+    actually stored on a constructed instance is always the mapping, never
+    the tuple a caller may have passed in.
     """
 
     name: str
@@ -135,9 +158,17 @@ class FieldSpec:
     pattern_normalizer: Callable[[str], str] | None = None
     multitoken: Multitoken = Multitoken.DEFAULT
     exists_target: str | None = None
-    subpaths: tuple[str, ...] = ()
+    subpaths: Mapping[str, SubpathSpec] | tuple[str, ...] = ()
     date_only: bool = False
     fast: bool = False
+
+    def __post_init__(self) -> None:
+        if isinstance(self.subpaths, tuple):
+            # Frozen dataclass: normalize through object.__setattr__ rather
+            # than plain assignment. This is the one place a tuple form of
+            # subpaths survives past construction; every reader elsewhere
+            # sees only the normalized mapping.
+            object.__setattr__(self, "subpaths", {path: SubpathSpec() for path in self.subpaths})
 
 
 @dataclass(frozen=True, slots=True)

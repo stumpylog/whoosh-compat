@@ -377,7 +377,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             probe_path = None
             for spec in self.registry:
                 if spec.kind is FieldKind.JSON and spec.subpaths:
-                    probe_path = f"{spec.name}.{spec.subpaths[0]}"
+                    probe_path = f"{spec.name}.{next(iter(spec.subpaths))}"
                     break
             if probe_path is None:
                 # No JSON fields registered: the probe result is moot.

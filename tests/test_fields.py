@@ -9,6 +9,7 @@ from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
+from whoosh_compat.fields import SubpathSpec
 from whoosh_compat.fields import resolve_exists_strategy
 
 # ============================================================================
@@ -31,6 +32,60 @@ def test_field_ref_equality() -> None:
     assert FieldRef("notes", "user") == FieldRef("notes", "user")
     assert FieldRef("notes", "user") != FieldRef("notes", "admin")
     assert FieldRef("notes") != FieldRef("notes", "user")
+
+
+# ============================================================================
+# Test FieldSpec.subpaths: mapping is canonical, tuple is accepted sugar
+# ============================================================================
+
+
+def test_subpaths_tuple_form_normalizes_to_mapping() -> None:
+    """A tuple[str, ...] passed as subpaths is sugar for a mapping of every
+    entry to the trivial default SubpathSpec: the stored, canonical form on
+    the constructed instance is always the mapping.
+    """
+    spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user", "note"))
+    assert spec.subpaths == {"user": SubpathSpec(), "note": SubpathSpec()}
+
+
+def test_subpaths_native_mapping_form_is_kept_as_is() -> None:
+    """Constructing with the native Mapping[str, SubpathSpec] form directly
+    works and round-trips unchanged.
+    """
+    mapping = {"user": SubpathSpec(), "note": SubpathSpec()}
+    spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=mapping)
+    assert spec.subpaths == mapping
+
+
+def test_subpaths_empty_tuple_normalizes_to_empty_mapping() -> None:
+    """An empty tuple (the field's default) normalizes to an empty mapping,
+    not left as a tuple.
+    """
+    spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=())
+    assert spec.subpaths == {}
+
+
+def test_subpaths_default_is_empty_mapping() -> None:
+    """Omitting subpaths entirely also normalizes through __post_init__ to
+    an empty mapping (the dataclass default is the tuple sugar form).
+    """
+    spec = FieldSpec(name="title", kind=FieldKind.TEXT)
+    assert spec.subpaths == {}
+
+
+def test_subpaths_membership_checks_work_against_mapping() -> None:
+    """resolve()'s ``ref.json_path not in spec.subpaths`` membership check
+    (and make_ref's ``subpath in spec.subpaths``) key off the mapping's
+    keys, same as they did against the tuple form.
+    """
+    spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths={"user": SubpathSpec()})
+    registry = FieldRegistry([spec])
+    resolved = registry.resolve(FieldRef("notes", "user"))
+    assert resolved is not None
+    assert resolved.json_path == "user"
+    assert registry.resolve(FieldRef("notes", "missing")) is None
+    ref = registry.make_ref("notes.user")
+    assert ref == FieldRef("notes", "user")
 
 
 # ============================================================================

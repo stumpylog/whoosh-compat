@@ -141,6 +141,22 @@ indexes a collection of specs by canonical name and alias). This is the
 host-integration seam: nothing in `parser/` or `emitters/` hard-codes field
 names or behavior, it all comes from the registry a caller constructs.
 
+`FieldSpec.subpaths` (only meaningful for JSON-kind fields) is
+`Mapping[str, SubpathSpec]`: each registered subpath maps to a
+`SubpathSpec`, a deliberately trivial dataclass (no fields yet) that exists
+to freeze this container's shape ahead of per-subpath typing (a numeric- or
+date-typed subpath), which is a separate, later change. Construction also
+accepts the older `tuple[str, ...]` form as sugar for "every one of these
+subpaths, with the trivial default `SubpathSpec`"; `FieldSpec.__post_init__`
+normalizes a tuple into the mapping form immediately, so the value actually
+stored on a constructed instance, and read everywhere else in the library
+(`FieldRegistry.resolve`'s `ref.json_path not in spec.subpaths`,
+`make_ref`'s `subpath in spec.subpaths`, the JSON-path-support probe in
+`emitters/tantivy_.py`), is always the mapping. Validating the mapping's
+*keys* (rejecting an empty string, a shadowing subpath, and similar) is a
+separate, later change; the container itself only guards against silently
+breaking on such input for now.
+
 Every AST leaf that carries a field (`Term`, `Phrase`, `Prefix`, `Wildcard`,
 `TermRange`, `NumericRange`, `DateRange`, `Every`) holds a `FieldRef`, not a
 raw field-name string. `FieldRegistry.make_ref(raw: str) -> FieldRef | None`
