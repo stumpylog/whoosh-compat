@@ -22,6 +22,7 @@ from datetime import datetime
 from datetime import tzinfo
 
 from whoosh_compat import ast
+from whoosh_compat.ast import analyze
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryEmitError
@@ -53,6 +54,7 @@ __all__ = [
     "SubpathSpec",
     "UnsupportedQueryError",
     "WhooshCompatError",
+    "analyze",
     "ast",
     "parse",
 ]

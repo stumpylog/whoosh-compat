@@ -34,7 +34,6 @@ from whoosh_compat.fields import ExistsStrategy
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
-from whoosh_compat.fields import FieldSpec
 from whoosh_compat.fields import Multitoken
 from whoosh_compat.fields import ResolvedField
 
@@ -255,14 +254,23 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         self.index = index
         self.schema = index.schema
         self.registry = registry
-        # Multitoken.DEFAULT term text resolves against the enclosing
-        # group's semantics; top level behaves like AND.
-        self._group_stack: list[Multitoken] = [Multitoken.AND]
         # Cache for _json_paths_supported(): None means "not probed yet".
         self._json_paths_ok: bool | None = None
 
     def emit(self, node: ast.Node) -> tantivy.Query:
-        """Normalize and emit ``node``, guaranteeing the documented exception contract.
+        """Normalize, analyze, and emit ``node``, guaranteeing the documented
+        exception contract.
+
+        Running :func:`ast.analyze` here, after :func:`ast.normalize` and
+        before visiting, is this tantivy emitter's own choice, not part of
+        the generic :class:`~whoosh_compat.emitters.base.Emitter` protocol:
+        a hypothetical future backend that defers token analysis to its own
+        server could legitimately skip this stage. Once analysis has run,
+        this class is a purely structural visitor: no ``visit_*`` method
+        below tokenizes anything, decides whether a subtree drops out of an
+        enclosing group, or tracks what group a term is nested inside.
+        ``default_mode=Multitoken.AND`` matches this library's own default
+        top-level group (DIVERGENCES.md entries 7 and 15).
 
         Most invalid-input shapes get a specific, well-messaged
         ``QueryEmitError``/``UnsupportedQueryError`` from the ``visit_*``
@@ -277,24 +285,25 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
           this doesn't yet special-case): a bare ``ValueError``, ``TypeError``
           or ``AttributeError`` from the underlying tantivy-py call.
         * A ``None`` (or otherwise non-node) value standing in for a child
-          node, either caught by ``ast.normalize`` while walking the tree
-          (a bare ``AttributeError``) or, once past normalization, by
-          ``ast.Visitor.generic_visit`` finding no ``visit_*`` method for
+          node, either caught by ``ast.normalize``/``ast.analyze`` while
+          walking the tree (a bare ``AttributeError``) or, once past both,
+          by ``ast.Visitor.generic_visit`` finding no ``visit_*`` method for
           the value's type (a bare ``NotImplementedError``).
         * A chain deep enough to exhaust the interpreter's recursion limit
           (a bare ``RecursionError``): this emitter's traversal, like
-          ``ast.normalize``'s former recursive form, walks one Python stack
-          frame per nesting level.
+          ``ast.normalize``/``ast.analyze``, walks one Python stack frame
+          per nesting level.
 
         Converting here, once, keeps every individual ``visit_*`` method
         free to just let its own tantivy-py calls raise naturally rather
         than needing its own try/except for cases already covered by this
-        backstop. ``ast.normalize`` is called inside the same try so a
-        hand-built tree that fails during normalization (not just during
-        visiting) still gets the documented contract.
+        backstop. ``ast.normalize``/``ast.analyze`` are called inside the
+        same try so a hand-built tree that fails during either stage (not
+        just during visiting) still gets the documented contract.
         """
         try:
-            return self.visit(ast.normalize(node))
+            analyzed = ast.analyze(ast.normalize(node), self.registry, default_mode=Multitoken.AND)
+            return self.visit(analyzed)
         except (
             ValueError,
             TypeError,
@@ -313,53 +322,6 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         if resolved is None:
             raise QueryEmitError(f"unknown field {str(field)!r}")
         return resolved
-
-    def _tokens(self, spec: FieldSpec, text: object) -> list[str]:
-        text = str(text)
-        if spec.analyzer is None:
-            return [text] if text else []
-        return list(spec.analyzer(text))
-
-    def _text_term_query(self, resolved: ResolvedField, tokens: list[str]) -> tantivy.Query:
-        """Build the query for one already-tokenized TEXT/KEYWORD term.
-
-        Caller guarantees ``tokens`` is non-empty. The tantivy field name
-        queried is ``resolved.dotted_name``, so a JSON subpath resolution
-        (``"notes.user"``) is handled identically to a plain field
-        (``"body"``) without a separate code path.
-        """
-        spec = resolved.spec
-        field_name = resolved.dotted_name
-
-        if len(tokens) == 1:
-            return tantivy.Query.term_query(self.schema, field_name, tokens[0])
-
-        mode = spec.multitoken
-        if mode is Multitoken.DEFAULT:
-            mode = self._group_stack[-1]
-
-        if mode is Multitoken.FIRST:
-            return tantivy.Query.term_query(self.schema, field_name, tokens[0])
-        if mode is Multitoken.PHRASE:
-            # tantivy-py's phrase_query() takes list[str | tuple[int, str]];
-            # lists are invariant so a plain list[str] doesn't satisfy that
-            # even though every element here is a bare str (no explicit
-            # positions). No slop argument here: this builds a phrase query
-            # out of a multi-token *Term* value under Multitoken.PHRASE
-            # policy, and whoosh has no slop concept to carry for that (a
-            # bare Term never carries one). Distinct from the actual
-            # Phrase-node path (visit_phrase / _emit_json_phrase), which
-            # maps node.slop via max(node.slop - 1, 0).
-            words: list[str | tuple[int, str]] = list(tokens)
-            return tantivy.Query.phrase_query(self.schema, field_name, words)
-
-        term_queries = [tantivy.Query.term_query(self.schema, field_name, t) for t in tokens]
-        if mode is Multitoken.OR:
-            clauses = [(tantivy.Occur.Should, q) for q in term_queries]
-            return _boolean_query(clauses, minimum_number_should_match=1)
-        # Multitoken.AND (and the DEFAULT-at-top-level fallback)
-        clauses = [(tantivy.Occur.Must, q) for q in term_queries]
-        return _boolean_query(clauses)
 
     def _json_paths_supported(self) -> bool:
         """Whether the installed tantivy-py's ``Query.term_query`` can address
@@ -394,177 +356,76 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         """Emit a term query for a JSON subpath (``resolved.dotted_name``).
 
         For a ``Term`` node's value only; a ``Phrase`` node uses the separate
-        ``_emit_json_phrase`` below, which never consults ``spec.multitoken``
-        and carries an explicit slop (DIVERGENCES.md entry 22, issue #34).
+        ``_emit_json_phrase`` below, which carries an explicit slop
+        (DIVERGENCES.md entry 22).
 
-        Runs ``spec.analyzer`` over the value first, exactly like TEXT/KEYWORD
-        terms, so multi-token JSON values follow the same multitoken policy
-        (``_text_term_query`` is reused, not duplicated). When the installed
-        tantivy-py cannot address JSON subpaths via ``term_query`` (see
-        ``_json_paths_supported``), falls back to ``index.parse_query``:
-        the only route currently able to reach a JSON subpath: quoting the
-        analyzed tokens and escaping backslashes/quotes so they round-trip
-        through the query-string grammar.
-
-        The fallback honors ``spec.analyzer``'s output (not the raw text)
-        and, for ``Multitoken.FIRST``, searches only the first token. It
-        cannot honor AND/OR/PHRASE fully: ``index.parse_query``'s carve-out
-        here is deliberately a single quoted leaf (see module docstring),
-        with no programmatic way to build a JSON-subpath boolean/phrase
-        query the way ``_text_term_query`` does for every other field kind,
-        so an AND/OR-mode multi-token value still collapses to one quoted
-        (phrase-like) leaf instead of true AND/OR combinator semantics.
-        This is a known, narrow limitation of the fallback path itself
-        (see DIVERGENCES.md), expected to retire once
-        https://github.com/quickwit-oss/tantivy-py/pull/716 ships and
-        ``_json_paths_supported()`` starts returning True.
+        By the time a ``Term`` reaches this method, :func:`ast.analyze` has
+        already run: a multi-token JSON-subpath value was already resolved
+        into an ``And``/``Or``/``Phrase`` of single-token ``Term`` nodes per
+        the field's ``Multitoken`` policy, so ``text`` here is always
+        exactly one already-analyzed token, and this method has no analysis
+        or multitoken decision left to make; it only decides *how* to query
+        for that one token. When the installed tantivy-py cannot address a
+        JSON subpath via ``term_query`` (see ``_json_paths_supported``), it
+        falls back to ``index.parse_query``, the only route currently able
+        to reach a JSON subpath at all, escaping backslashes/quotes so the
+        token round-trips through the query-string grammar. Because
+        analysis already happened structurally, an AND/OR-mode multi-token
+        JSON value now reaches this fallback as separate single-token calls
+        combined by the ordinary ``visit_and``/``visit_or`` boolean
+        combinators, giving true AND/OR semantics on the fallback path too,
+        not the single-quoted-leaf collapse this fallback used to be limited
+        to (DIVERGENCES.md entry 22, updated).
         """
-        spec = resolved.spec
         full = resolved.dotted_name
-        tokens = self._tokens(spec, text)
-        if not tokens:
-            return tantivy.Query.empty_query()
+        token = str(text)
 
         if self._json_paths_supported():
-            return self._text_term_query(resolved, tokens)
+            return tantivy.Query.term_query(self.schema, full, token)
 
-        mode = spec.multitoken
-        if mode is Multitoken.DEFAULT:
-            mode = self._group_stack[-1]
-        query_text = tokens[0] if mode is Multitoken.FIRST else " ".join(tokens)
+        escaped = token.replace("\\", "\\\\").replace('"', '\\"')
+        return self.index.parse_query(
+            f'{full}:"{escaped}"', default_field_names=[resolved.spec.name]
+        )
 
-        escaped = query_text.replace("\\", "\\\\").replace('"', '\\"')
-        return self.index.parse_query(f'{full}:"{escaped}"', default_field_names=[spec.name])
-
-    def _emit_json_phrase(self, resolved: ResolvedField, text: object, slop: int) -> tantivy.Query:
+    def _emit_json_phrase(self, resolved: ResolvedField, node: ast.Phrase) -> tantivy.Query:
         """Emit a phrase query for a JSON subpath (``resolved.dotted_name``).
 
-        A separate helper from ``_emit_json_term`` rather than a shared one
-        with an extra parameter: a Phrase node's semantics genuinely diverge
-        from a Term's here, not just in the value passed through. It mirrors
-        the plain-field phrase path (``visit_phrase``'s TEXT/KEYWORD branch)
-        exactly: analyzer tokens, the same ``max(slop - 1, 0)`` whoosh-to-
-        tantivy slop mapping, and it never consults ``spec.multitoken``,
-        because that policy governs a multi-token bare *Term* value, not a
-        quoted phrase's words (a phrase is never "the first word" or "all
-        words present in any order").
+        A separate helper from ``_emit_json_term`` rather than a shared one:
+        a Phrase node's semantics genuinely diverge from a Term's here, not
+        just in the value passed through (it carries slop, and never
+        consults ``Multitoken``: a phrase's words are the phrase, not
+        independent tokens a combinator picks among).
 
-        Falls back to ``index.parse_query`` on the same terms as
+        ``node.words`` is already the analyzed token tuple (:func:`ast.analyze`
+        never leaves a multi-token TEXT/KEYWORD ``Phrase`` unanalyzed by the
+        time this is reached), so this method does no tokenization of its
+        own. Falls back to ``index.parse_query`` on the same terms as
         ``_emit_json_term`` when the installed tantivy-py can't address a
         JSON subpath directly (see ``_json_paths_supported``). That single
         quoted-leaf carve-out has no query-string syntax tantivy-py 0.26
         honors for slop (verified directly: appending ``~N`` to the quoted
         phrase does not change the resulting query's slop away from 0), so
         an explicit whoosh slop is silently unsupported/ignored there
-        (DIVERGENCES.md entry 22); the tokens are always joined in full
-        (never truncated to the first token), since Multitoken never applies
-        to a Phrase node on this branch either.
+        (DIVERGENCES.md entry 22).
         """
-        spec = resolved.spec
         full = resolved.dotted_name
-        tokens = self._tokens(spec, text)
-        if not tokens:
-            return tantivy.Query.empty_query()
+        words = node.words if node.words is not None else (str(node.text),)
 
         if self._json_paths_supported():
-            if len(tokens) == 1:
+            if len(words) == 1:
                 # tantivy rejects a single-word phrase query; a term query is
                 # the exact equivalent anyway (mirrors the plain-field path).
-                return tantivy.Query.term_query(self.schema, full, tokens[0])
-            mapped_slop = max(slop - 1, 0)
-            words: list[str | tuple[int, str]] = list(tokens)
-            return tantivy.Query.phrase_query(self.schema, full, words, slop=mapped_slop)
+                return tantivy.Query.term_query(self.schema, full, words[0])
+            mapped_slop = max(node.slop - 1, 0)
+            w: list[str | tuple[int, str]] = list(words)
+            return tantivy.Query.phrase_query(self.schema, full, w, slop=mapped_slop)
 
-        query_text = " ".join(tokens)
+        query_text = " ".join(words)
         escaped = query_text.replace("\\", "\\\\").replace('"', '\\"')
-        return self.index.parse_query(f'{full}:"{escaped}"', default_field_names=[spec.name])
-
-    def _drop_check_tokens(self, field: FieldRef | None, text: object) -> list[str] | None:
-        """Tokens ``text`` (for ``field``) analyzes to, for the zero-token-
-        drop check only. Shared by the ``Term`` and ``Phrase`` branches of
-        ``_node_drops``, since both need the identical answer to "does this
-        field kind participate in analysis-based dropping at all": TEXT and
-        KEYWORD do (plain or JSON subpath), U64/BOOLEAN_EXISTS/DATE never
-        do, matching exactly how ``visit_term``/``_emit_json_term`` and
-        ``visit_phrase``/``_emit_json_phrase`` dispatch on kind. The Phrase
-        branch previously skipped this restriction entirely and tokenized
-        every kind, silently dropping e.g. a U64 phrase whose text happened
-        to analyze to nothing under an analyzer shared across kinds, even
-        though standalone emission of the identical node dispatches on kind
-        and never consults those tokens.
-
-        Returns ``None`` when the field's kind is not subject to the drop
-        policy (its emission should just run normally, including raising
-        for an unresolvable field). Reuses the exact same JSON-subpath
-        resolution and tokenization (``_tokens``) that emission uses, so
-        this is a read-only preview of what emission will do, not a second
-        implementation of it.
-
-        A future explicit analysis pipeline stage that subsumes this
-        predicate must preserve the same kind-dispatch rule, and the test
-        cases that pin it.
-        """
-        if field is not None and field.json_path is not None:
-            resolved = self.registry.resolve(field)
-            if resolved is not None:
-                return self._tokens(resolved.spec, text)
-            # Not a resolvable JSON subpath (an invalid one, constructed
-            # directly rather than by the parser): fall through to
-            # ``_resolve`` below, which raises a clear "unknown field"
-            # error for it instead of silently treating it as droppable.
-        resolved = self._resolve(field)
-        if resolved.spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
-            return self._tokens(resolved.spec, text)
-        return None
-
-    def _node_drops(self, node: ast.Node) -> bool:
-        """Whether ``node`` would drop entirely from an enclosing And/Or
-        group: a zero-token analyzed TEXT/KEYWORD term (plain or JSON
-        subpath), a zero-token analyzed TEXT/KEYWORD phrase (plain or JSON
-        subpath), a nested And/Or group whose own children all drop, or any
-        of those under one or more transparent ``Boosted`` layers. A
-        U64/BOOLEAN_EXISTS/DATE term or phrase never drops via analysis,
-        regardless of whether its field's spec carries an analyzer.
-
-        A pure predicate: it only tokenizes (``_drop_check_tokens``/
-        ``_tokens``), never builds a query, so ``_group_child`` can check
-        drop-ness without paying for a full, discarded emission of the
-        subtree first (issue #6: the previous approach re-emitted every
-        surviving subtree once per enclosing nesting level, doubling work
-        per level of alternating And/Or nesting, exponential in depth).
-        Every node is still visited/emitted at most once overall: this
-        predicate only tokenizes, and ``_group_child`` calls ``self.visit``
-        at most once, for the (at most one) top-level call on a given node.
-        """
-        if isinstance(node, ast.Boosted):
-            return self._node_drops(node.child)
-        if isinstance(node, ast.Term):
-            tokens = self._drop_check_tokens(node.field, node.text)
-            return tokens is not None and not tokens
-        if isinstance(node, ast.Phrase):
-            tokens = self._drop_check_tokens(node.field, node.text)
-            return tokens is not None and not tokens
-        if isinstance(node, (ast.And, ast.Or)):
-            return all(self._node_drops(c) for c in node.children)
-        return False
-
-    def _group_child(self, child: ast.Node) -> tantivy.Query | None:
-        """Visit a direct child of an And/Or group.
-
-        Returns ``None`` when ``child`` drops entirely (see
-        ``_node_drops``): such a node is dropped from its enclosing group
-        entirely (whoosh's own behavior when a field's analyzer consumes a
-        value completely, e.g. an all-stopword value). Without the
-        nested-group case, a group like ``invoice AND ("the" OR "a")``
-        under a stopword analyzer would emit the inner ``Or`` as a live
-        ``Query.empty_query()`` (see ``visit_or``'s "no children survived"
-        branch) which, as a required clause of the outer ``And``, would
-        wrongly match nothing instead of just dropping out and leaving
-        "invoice" to match on its own.
-        """
-        if self._node_drops(child):
-            return None
-        return self.visit(child)
+        return self.index.parse_query(
+            f'{full}:"{escaped}"', default_field_names=[resolved.spec.name]
+        )
 
     # -- leaves --------------------------------------------------------
 
@@ -661,25 +522,14 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         spec = resolved.spec
 
         if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
-            tokens = self._tokens(spec, node.text)
-            if not tokens:
-                # Not inside a group that can drop us: an empty term
-                # standalone simply matches nothing.
-                #
-                # Edge case worth noting explicitly (no code change needed):
-                # visit_not wraps this in a bare self.visit(node.child), not
-                # _group_child, so `NOT term` for a term whose analyzer drops
-                # every token becomes MustNot(empty_query()) here, which
-                # matches *every* document (there is nothing for MustNot to
-                # exclude). This mirrors the *shape* of ast.normalize()'s
-                # Not(Nothing) -> Every rule (see ast.py) but is not evidence
-                # of whoosh parity: real whoosh's own Not.normalize() does
-                # the opposite (Not(NullQuery) stays NullQuery, i.e. "not
-                # nothing" stays "nothing", not "everything"), so this is a
-                # confirmed, deliberate divergence from whoosh, not a
-                # parity-preserving fallback. See DIVERGENCES.md entry 23.
-                return tantivy.Query.empty_query()
-            return self._text_term_query(resolved, tokens)
+            # ast.analyze() has already run by the time a Term reaches this
+            # visitor (see emit()'s docstring): a TEXT/KEYWORD Term here
+            # always carries exactly one already-analyzed token (a
+            # zero-token value was dropped to Nothing() before emission, a
+            # multi-token value was already resolved into And/Or/Phrase per
+            # its field's Multitoken policy). This method has no tokenizing
+            # or drop decision left to make.
+            return tantivy.Query.term_query(self.schema, spec.name, str(node.text))
 
         if spec.kind is FieldKind.U64:
             try:
@@ -721,9 +571,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 # visit_phrase entirely, so a quoted notes.user:"alice"
                 # fell through to the plain-field branch and queried the
                 # wrong tantivy field name, "notes" instead of "notes.user";
-                # issue #34: it then reused _emit_json_term, which dropped
-                # slop and wrongly applied Multitoken to phrase text).
-                return self._emit_json_phrase(json_resolved, node.text, node.slop)
+                # a quoted phrase's slop, which _emit_json_term never carried.
+                return self._emit_json_phrase(json_resolved, node)
             # Falls through to _resolve below, which raises "unknown field"
             # for an invalid subpath reference instead of silently treating
             # it as a plain field.
@@ -732,18 +581,22 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         spec = resolved.spec
 
         if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
-            tokens = self._tokens(spec, node.text)
-            if not tokens:
-                return tantivy.Query.empty_query()
-            if len(tokens) == 1:
+            # ast.analyze() has already tokenized this Phrase by the time it
+            # reaches this visitor: node.words carries the surviving tokens
+            # directly (a zero-token phrase was dropped to Nothing() before
+            # emission; a one-token phrase already collapsed to a Term, so
+            # len(words) >= 2 is guaranteed here in practice). This method
+            # does no tokenizing of its own.
+            words = node.words if node.words is not None else (str(node.text),)
+            if len(words) == 1:
                 # tantivy rejects a single-word phrase query; a term query is
                 # the exact equivalent anyway.
-                return tantivy.Query.term_query(self.schema, spec.name, tokens[0])
+                return tantivy.Query.term_query(self.schema, spec.name, words[0])
             # whoosh's slop counts *positions spanned* (slop=1 means
             # adjacent); tantivy's counts *gaps allowed* (slop=0 adjacent).
             slop = max(node.slop - 1, 0)
-            words: list[str | tuple[int, str]] = list(tokens)
-            return tantivy.Query.phrase_query(self.schema, spec.name, words, slop=slop)
+            w: list[str | tuple[int, str]] = list(words)
+            return tantivy.Query.phrase_query(self.schema, spec.name, w, slop=slop)
 
         if spec.kind is FieldKind.U64:
             if node.text == "*":
@@ -908,12 +761,12 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     # -- boolean combinators --------------------------------------------
 
     def visit_and(self, node: ast.And) -> tantivy.Query:
-        self._group_stack.append(Multitoken.AND)
-        try:
-            raw_children = [self._group_child(c) for c in node.children]
-        finally:
-            self._group_stack.pop()
-        children: list[tantivy.Query] = [c for c in raw_children if c is not None]
+        # ast.analyze() (via ast.normalize(), which it calls internally
+        # before returning) has already dropped any zero-token child and
+        # collapsed a fully-emptied And to Nothing() before emission, so
+        # every child reaching this visitor is a real, surviving node: no
+        # per-child drop check or group-context tracking is needed here.
+        children = [self.visit(c) for c in node.children]
         if not children:
             return tantivy.Query.empty_query()
         if len(children) == 1:
@@ -922,12 +775,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         return _boolean_query(clauses)
 
     def visit_or(self, node: ast.Or) -> tantivy.Query:
-        self._group_stack.append(Multitoken.OR)
-        try:
-            raw_children = [self._group_child(c) for c in node.children]
-        finally:
-            self._group_stack.pop()
-        children: list[tantivy.Query] = [c for c in raw_children if c is not None]
+        children = [self.visit(c) for c in node.children]
         if not children:
             return tantivy.Query.empty_query()
         if len(children) == 1:
@@ -939,48 +787,33 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         child = self.visit(node.child)
         return _boolean_query([(tantivy.Occur.MustNot, child)])
 
-    def _binary_operands(
-        self, left: ast.Node, right: ast.Node
-    ) -> tuple[tantivy.Query | None, tantivy.Query | None]:
-        """Emit both operands of a binary operator, dropping zero-token ones.
-
-        An operand that analyzes to nothing drops out exactly as it would as
-        an And/Or child, and the caller keeps whatever survives. Whoosh
-        reaches the same result by a different route: it discards such a term
-        while parsing, so the operator never gets built and the surviving
-        operand stands alone.
-        """
-        return self._group_child(left), self._group_child(right)
-
     def visit_andnot(self, node: ast.AndNot) -> tantivy.Query:
-        positive, negative = self._binary_operands(node.positive, node.negative)
-        if positive is None or negative is None:
-            return self._lone_operand(positive, negative)
+        # ast.analyze() already resolved DIVERGENCES.md entry 23's
+        # zero-token-operand rule (an operand that newly dropped to nothing
+        # during analysis leaves its sibling standing alone) structurally:
+        # by construction, neither node.positive nor node.negative is ever
+        # itself a bare Nothing() here (normalize()'s AndNot rule collapses
+        # the whole node instead, whenever one genuinely is), so this method
+        # only has the ordinary two-clause query left to build.
+        positive = self.visit(node.positive)
+        negative = self.visit(node.negative)
         clauses = [(tantivy.Occur.Must, positive), (tantivy.Occur.MustNot, negative)]
         return _boolean_query(clauses)
 
     def visit_andmaybe(self, node: ast.AndMaybe) -> tantivy.Query:
-        required, optional = self._binary_operands(node.required, node.optional)
-        if required is None or optional is None:
-            return self._lone_operand(required, optional)
+        required = self.visit(node.required)
+        optional = self.visit(node.optional)
         clauses = [(tantivy.Occur.Must, required), (tantivy.Occur.Should, optional)]
         return _boolean_query(clauses)
 
     def visit_require(self, node: ast.Require) -> tantivy.Query:
-        scored, filter_only = self._binary_operands(node.scored, node.filter_only)
-        if scored is None or filter_only is None:
-            return self._lone_operand(scored, filter_only)
+        scored = self.visit(node.scored)
+        filter_only = self.visit(node.filter_only)
         clauses = [
             (tantivy.Occur.Must, scored),
             (tantivy.Occur.Must, tantivy.Query.const_score_query(filter_only, 0.0)),
         ]
         return _boolean_query(clauses)
-
-    @staticmethod
-    def _lone_operand(left: tantivy.Query | None, right: tantivy.Query | None) -> tantivy.Query:
-        """The surviving operand, or an empty query when both dropped."""
-        survivor = left if left is not None else right
-        return survivor if survivor is not None else tantivy.Query.empty_query()
 
     def visit_boosted(self, node: ast.Boosted) -> tantivy.Query:
         child = self.visit(node.child)
@@ -1016,18 +849,21 @@ def emit(
     says nothing about the second failure mode. Do not read "diagnostics is
     empty" as "emitting is guaranteed to succeed."
 
-    ``emit()`` always normalizes its input first (``ast.normalize()``); the
-    result reflects the normal form, not necessarily the literal tree passed
-    in. This makes ``emit(t)`` and ``emit(normalize(t))`` agree by
-    construction: a hand-built tree containing a literal empty And/Or group
-    or a ``Nothing()`` sibling used to reach a different matched-document set
-    than its normalized equivalent, because the emitter's own drop-detection
-    and ``normalize()``'s algebra disagreed about what such shapes mean (the
-    parser itself never produces them, since it always normalizes before
-    ``parse()`` returns, so only hand-built ASTs passed straight to
-    ``emit()`` could observe the difference). Normalizing here closes that
+    ``emit()`` always runs ``ast.normalize()`` and then ``ast.analyze()`` on
+    its input first; the result reflects that normal, analyzed form, not
+    necessarily the literal tree passed in. This makes ``emit(t)`` and
+    ``emit(analyze(normalize(t), registry))`` agree by construction: a
+    hand-built tree containing a literal empty And/Or group or a
+    ``Nothing()`` sibling reaches the same matched-document set either way,
+    since both call sites go through the identical normalize-then-analyze
+    pipeline before anything is visited (the parser itself never produces
+    such a tree, since it always normalizes before ``parse()`` returns, so
+    only a hand-built AST passed straight to ``emit()`` could observe a
+    difference if this weren't true). Running both stages here closes that
     gap without changing behavior for the ``parse()`` -> ``emit()`` path,
-    since renormalizing an already-normalized tree is a no-op.
+    since renormalizing or re-analyzing an already-normalized, already-
+    analyzed tree is a no-op (``ast.analyze()``'s docstring explains why
+    that holds by construction, not by convention).
 
     Raises:
         QueryEmitError: ``node`` (or a value it contains) cannot be turned

@@ -14,28 +14,52 @@ query string
 forked whoosh parser (taggers + filters, run at named priorities)
     │  (whoosh_compat.parser)
     ▼
-typed, frozen AST
+typed, frozen AST (raw, unanalyzed text)
     │  (whoosh_compat.ast)
     ▼
 normalize()
     │
     ▼
-emitter visitor
+analyze()               ← tantivy-emitter-specific, see below
+    │
+    ▼
+emitter visitor (purely structural)
     │  (whoosh_compat.emitters)
     ▼
 tantivy.Query
 ```
 
 `whoosh_compat.parse()` (`src/whoosh_compat/__init__.py`) drives the first
-three stages and returns a `ParseResult(ast, diagnostics)`. Turning that
+three stages and returns a `ParseResult(ast, diagnostics)`: the tree it
+hands back still carries raw, unanalyzed `Term`/`Phrase` text (the "AST
+carries raw text" contract, unchanged by anything below). Turning that
 `ast.Node` into something a search backend can execute is a separate,
 explicit step: `whoosh_compat.emitters.tantivy_.emit()`. That keeps the AST
 usable by any future backend that doesn't exist yet.
 
-A `FieldRegistry` (`whoosh_compat.fields`) is threaded through both the
-parser and the emitter: it's the seam where the host application tells this
-library what fields exist, what kind of data each one holds, and (for the
-emitter) how to tokenize query text so it matches what's actually indexed.
+`whoosh_compat.ast.analyze()` is the explicit pipeline stage that resolves
+per-field token analysis: it rewrites a multi-token `Term`/`Phrase` leaf into
+the `And`/`Or`/`Phrase` shape its field's `Multitoken` policy calls for,
+drops a leaf that analyzes to zero tokens (and any group that thereby
+empties), re-normalizes, and returns a plain, already-normalized
+`ast.Node`. `TantivyEmitter.emit()` calls it (`analyze(normalize(node),
+registry, default_mode=Multitoken.AND)`) before visiting, which is *this
+emitter's own choice*, not part of the generic `Emitter` protocol
+(`emitters/base.py`): a hypothetical future backend that defers token
+analysis to its own server could call `emit()`-equivalent logic without ever
+calling `analyze()`. Once `analyze()` has run, `TantivyEmitter` is a purely
+structural visitor: no `visit_*` method tokenizes text, decides whether a
+subtree drops out of an enclosing group, or tracks what group a term is
+nested inside; every such decision was already made, once, by `analyze()`.
+See `ast.analyze`'s own docstring for the full worked-out rules (multitoken
+resolution, the `default_mode` parameter, idempotence, and how DIVERGENCES.md
+entry 23's "NOT of a zero-token term" divergence falls out of this pipeline's
+ordering rather than being special-cased).
+
+A `FieldRegistry` (`whoosh_compat.fields`) is threaded through the parser,
+`analyze()`, and the emitter: it's the seam where the host application tells
+this library what fields exist, what kind of data each one holds, and how to
+tokenize query text so it matches what's actually indexed.
 
 ## 2. Why a fork
 
@@ -68,7 +92,7 @@ close to verbatim; everything downstream of "a parse succeeded" is new.
 whoosh_compat/
   __init__.py            # parse(), ParseResult: public API
   fields.py              # FieldSpec, FieldKind, FieldRegistry: host-integration seam
-  ast.py                 # AST dataclasses + Visitor[T] + normalize()
+  ast.py                 # AST dataclasses + Visitor[T] + normalize() + analyze()
   errors.py              # Diagnostic + exception hierarchy
   parser/
     __init__.py
@@ -123,12 +147,19 @@ forked from in turn. Within the forked pipeline:
 **`ast.py`**: frozen dataclasses (`Term`, `And`, `Or`, `Not`, `AndNot`,
 `AndMaybe`, `Require`, `Phrase`, `Prefix`, `Wildcard`, `TermRange`,
 `NumericRange`, `DateRange`, `Every`, `Nothing`, `Boosted`, `ErrorLeaf`), a
-`Visitor[T]` base class that dispatches `visit_<lowercase-classname>`, and a
+`Visitor[T]` base class that dispatches `visit_<lowercase-classname>`, a
 module-level `normalize()` that flattens nested same-type groups, propagates
 `Nothing`/`Every` through boolean combinators, dedupes siblings, and merges
-boost multipliers. This is the library's stability contract: emitters
-(present and future) depend only on `ast.py` and `fields.py`, never on
-`parser/`.
+boost multipliers, and a module-level `analyze()` (§1) that resolves
+per-field token analysis into the tree's own structure. This is the
+library's stability contract: emitters (present and future) depend only on
+`ast.py` and `fields.py`, never on `parser/`. `Term.analyzed` and
+`Phrase.words`/`Phrase.analyzed` are part of that contract too: they carry
+`analyze()`'s own output representation (an analyzed leaf's tokens
+explicitly, rather than a joined string an emitter would have to re-split),
+and are deliberately excluded from equality/hashing the same way
+`startchar`/`endchar` are, since they are analysis provenance, not
+independent semantic content.
 
 **`fields.py`**: `FieldKind` (TEXT, KEYWORD, U64, DATE, DATETIME,
 BOOLEAN_EXISTS, JSON), `Multitoken` (how multi-token field values combine:
@@ -193,7 +224,7 @@ behind a family of JSON-subpath bugs: existence checks and pattern/regex
 builders that silently queried the whole field, and error messages that
 named the field the user typed without its subpath). Emitter helpers that
 build queries or messages from a resolved field (`_exists_query`,
-`_text_term_query`, `_emit_json_term`, the range/prefix/wildcard builders)
+`_emit_json_term`, `_emit_json_phrase`, the range/prefix/wildcard builders)
 now take a `ResolvedField`, not a bare `FieldSpec`: a helper that cannot yet
 honor a subpath has to say so by reading only `.spec`, a visible decision at
 the call site instead of a silent drop inside a resolver that never had the
@@ -252,17 +283,20 @@ correct results on stock tantivy 0.26 with no upstream fix required.
 **The analyzer contract.** `tantivy.Query.term_query` does **not** tokenize
 its input: it builds a term against the literal string passed in. Whoosh,
 by contrast, ran the field's analyzer at parse time. This library moves that
-step to *emit* time deliberately (see §6 for why): `Term`/`Phrase` AST nodes
-carry raw, unanalyzed text, and `TantivyEmitter` calls `FieldSpec.analyzer`
-on that text before building term/phrase queries. A single-token result
-becomes a `term_query`; the multi-token case is governed by
-`FieldSpec.multitoken` (`Multitoken.DEFAULT` resolves to whatever boolean
-group the term's emission happens to be nested inside, tracked by
-`TantivyEmitter._group_stack`; see `DIVERGENCES.md` entry 15 for how this
-differs subtly from Whoosh's own fixed-default-group behavior); a
-zero-token result (the analyzer dropped everything, e.g. an all-stopword
-value) drops the term from its enclosing group rather than producing an
-unsatisfiable clause.
+step later deliberately (see §6 for why): `parse()`'s `Term`/`Phrase` AST
+nodes carry raw, unanalyzed text, and `analyze()` (§1) is what calls
+`FieldSpec.analyzer` on that text, once, structurally, before
+`TantivyEmitter` ever visits the tree. A single-token result becomes a
+`Term` a `visit_term` call turns straight into a `term_query`; the
+multi-token case is governed by `FieldSpec.multitoken` (`Multitoken.DEFAULT`
+resolves to whichever boolean group the term's *position in the tree*
+actually sits inside, computed once by `analyze()`'s own top-down context
+pass, not tracked via any per-visit emitter state; see `DIVERGENCES.md`
+entry 15 for how this differs subtly from Whoosh's own fixed-default-group
+behavior); a zero-token result (the analyzer dropped everything, e.g. an
+all-stopword value) drops the term from its enclosing group rather than
+producing an unsatisfiable clause, via `analyze()`'s own re-normalization,
+not a per-visit drop check.
 
 **The analyzer contract carries no positions.** `FieldSpec.analyzer` is typed
 `Callable[[str], list[str]] | None`: it returns tokens in order, with no
@@ -431,7 +465,12 @@ unhandled types fall through to `generic_visit`, which raises
 `NotImplementedError`) plus a small module-level `emit(node, ...)` function
 following `emitters/tantivy_.py`'s shape. The AST and `FieldRegistry` are
 the entire contract: a Meilisearch or Elasticsearch emitter needs no
-changes to `parser/` or `ast.py`.
+changes to `parser/` or `ast.py`. Calling `ast.analyze()` before visiting is
+optional, not required by the `Emitter` protocol (`emitters/base.py`): a
+backend whose own query engine tokenizes server-side can skip it and visit
+the raw, unanalyzed tree directly, the same way `TantivyEmitter.emit()`
+chooses to call it and a hypothetically different emitter could choose not
+to.
 
 **`FieldSpec` options.** Per-field behavior (aliasing, comma-list
 expansion, which analyzer/pattern-normalizer to run, how multi-token values
@@ -475,8 +514,13 @@ Three layers, each answering a different question:
    group; this fork carries parser fixes absent from the PyPI release) and
    whoosh-compat parse the same corpus of query strings; oracle-side parsing
    uses `normalize=False` to sidestep Whoosh's own tree-normalization pass
-   (this library's `normalize()` has its own dedicated unit tests). Every
-   allowed divergence must match an entry in `tests/differential/allowlist.py`,
+   (this library's `normalize()` has its own dedicated unit tests).
+   whoosh-compat's own side runs its raw parsed tree through the real
+   `ast.analyze()` (the same function `TantivyEmitter.emit()` calls) before
+   the structural comparison, so the harness has no second, hand-synchronized
+   implementation of what analysis does to keep in sync with production
+   behavior. Every allowed divergence must match an entry in
+   `tests/differential/allowlist.py`,
    and each allowlist entry cross-references a numbered entry in
    `DIVERGENCES.md` explaining *why* the difference is intended rather than
    a bug. The convention there is a regex keyed by a reference prefix (e.g.

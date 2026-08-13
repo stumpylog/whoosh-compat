@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import field as dataclass_field
 from datetime import datetime
 from typing import Generic
 from typing import TypeVar
 
 from whoosh_compat.errors import Diagnostic
+from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
+from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
+from whoosh_compat.fields import Multitoken
 
 T = TypeVar("T")
 
@@ -25,16 +29,40 @@ class Node:
     source-offset bookkeeping.
     """
 
-    startchar: int | None = field(default=None, compare=False)
-    endchar: int | None = field(default=None, compare=False)
+    startchar: int | None = dataclass_field(default=None, compare=False)
+    endchar: int | None = dataclass_field(default=None, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
 class Term(Node):
-    """A single term query."""
+    """A single term query.
+
+    ``analyzed`` is ``False`` for every ``Term`` produced by ``parse()``:
+    ``text`` there is raw, unanalyzed query text (see the "analysis happens
+    at emit time" invariant in ARCHITECTURE.md). :func:`analyze` sets it to
+    ``True`` on any ``Term`` it constructs as an analysis result (whether a
+    single surviving token from a TEXT/KEYWORD field, or unchanged because
+    the field's kind never analyzes at all): once ``analyzed`` is ``True``,
+    a second :func:`analyze` pass treats this node as an opaque leaf and
+    never re-runs the field's analyzer over ``text`` again, no matter what
+    characters ``text`` happens to contain. This is what makes
+    ``analyze(analyze(x)) == analyze(x)`` hold *by construction* rather than
+    by luck: a naive design that re-split an analyzed, space-joined string
+    would silently corrupt tokens from a shingle/ngram-style analyzer whose
+    own output tokens themselves contain spaces.
+
+    Excluded from equality/hashing (``compare=False``), like ``startchar``/
+    ``endchar``: it is analysis *provenance* bookkeeping, not semantic
+    content, so an analyzed ``Term`` compares equal to an unanalyzed one
+    carrying the same ``field``/``text`` (this is what lets the differential
+    test harness compare whoosh-compat's post-:func:`analyze` tree directly
+    against a plain, never-analyzed tree built from the oracle's own query
+    objects).
+    """
 
     field: FieldRef | None
     text: str | int | bool
+    analyzed: bool = dataclass_field(default=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,11 +112,41 @@ class Require(Node):
 
 @dataclass(frozen=True, slots=True)
 class Phrase(Node):
-    """Phrase query with optional slop."""
+    """Phrase query with optional slop.
+
+    ``text`` is the raw, unanalyzed phrase text as ``parse()`` produced it
+    (quotes stripped, nothing else done to it); every ``Phrase`` from
+    ``parse()`` has ``words is None`` and ``analyzed is False``.
+    :func:`analyze` runs the field's analyzer over ``text`` and, for a
+    result with two or more surviving tokens, replaces ``words`` with that
+    explicit tuple and sets ``analyzed`` to ``True``, leaving ``text`` as
+    informational only from that point on (a one-token result becomes a
+    :class:`Term` instead, and a zero-token result is dropped, see
+    :func:`analyze`'s docstring). Carrying the tokens as an explicit tuple,
+    rather than a re-joined string an emitter would have to split again, is
+    what makes :func:`analyze` idempotent by construction (amendment 1 of
+    the analysis-pipeline design): a second pass sees ``analyzed=True`` and
+    returns this node unchanged, never re-running the analyzer or
+    re-splitting anything, so an analyzer whose own tokens contain spaces
+    (a shingle/ngram style analyzer) cannot be corrupted by a join/split
+    round trip.
+
+    ``words`` and ``analyzed`` are excluded from equality/hashing
+    (``compare=False``), like ``startchar``/``endchar``: they are analysis
+    representation/provenance, not independent semantic content. ``text`` is
+    kept in sync (space-joined tokens once analyzed) and stays the
+    comparable field, so an analyzed ``Phrase`` still compares equal to a
+    plain, never-analyzed one carrying the same joined ``text`` (this is
+    what lets the differential test harness compare whoosh-compat's post-
+    :func:`analyze` tree directly against a plain tree built from the
+    oracle's own query objects, which has no ``words`` concept at all).
+    """
 
     field: FieldRef | None
     text: str
     slop: int = 1
+    words: tuple[str, ...] | None = dataclass_field(default=None, compare=False)
+    analyzed: bool = dataclass_field(default=False, compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,6 +437,337 @@ def normalize(node: Node) -> Node:
             for k in kids:
                 stack.append((k, False))
     return memo[id(node)]
+
+
+def _leaf_tokens(
+    field: FieldRef | None, text: object, registry: FieldRegistry
+) -> tuple[list[str], FieldSpec] | None:
+    """Tokens ``text`` (addressed at ``field``) analyzes to, plus the spec
+    that produced them, or ``None`` when ``field``'s kind is not subject to
+    analysis at all.
+
+    This is the closed-matrix kind-dispatch rule stated once, here: only
+    TEXT/KEYWORD fields, plain or addressed through a registered JSON
+    field's subpath, ever get tokenized or become eligible for zero-token
+    dropping. U64/DATE/DATETIME/BOOLEAN_EXISTS terms, and a JSON-kind field
+    addressed without a subpath (which cannot reach a ``Term``/``Phrase``
+    leaf at all, see ``FieldRegistry.make_ref``), are returned unanalyzed
+    regardless of whether their spec happens to carry an ``analyzer``.
+
+    Returns ``None`` (rather than raising) for an unresolvable field: an
+    unfielded leaf, or one naming a field/subpath the registry doesn't
+    know. That is not this function's job to diagnose; leaving the node
+    untouched here means the emitter's own field resolution raises the
+    documented error at emit time, exactly as it would for a raw,
+    never-analyzed tree.
+    """
+    if field is None:
+        return None
+    resolved = registry.resolve(field)
+    if resolved is None:
+        return None
+    spec = resolved.spec
+    if field.json_path is None and spec.kind not in (FieldKind.TEXT, FieldKind.KEYWORD):
+        return None
+    value = str(text)
+    tokens = ([value] if value else []) if spec.analyzer is None else list(spec.analyzer(value))
+    return tokens, spec
+
+
+def _analyze_term(node: Term, registry: FieldRegistry, ctx: Multitoken) -> Node:
+    """Rewrite one raw ``Term`` leaf, or return it unchanged.
+
+    ``node.analyzed`` guards re-entry: an already-analyzed ``Term`` is
+    returned as-is, never re-tokenized (see ``Term``'s docstring). A
+    zero-token result becomes ``Nothing()``; a single-token result stays a
+    ``Term`` (marked analyzed); a multi-token result becomes ``And``/``Or``/
+    ``Phrase`` per ``spec.multitoken`` (``ctx``, the enclosing group's
+    combinator, when the field is configured ``Multitoken.DEFAULT``).
+    """
+    if node.analyzed:
+        return node
+    found = _leaf_tokens(node.field, node.text, registry)
+    if found is None:
+        return node
+    tokens, spec = found
+    span = {"startchar": node.startchar, "endchar": node.endchar}
+    field = node.field
+    if not tokens:
+        return Nothing(**span)
+    if len(tokens) == 1:
+        return Term(field=field, text=tokens[0], analyzed=True, **span)
+
+    mode = spec.multitoken
+    if mode is Multitoken.DEFAULT:
+        mode = ctx
+    if mode is Multitoken.FIRST:
+        return Term(field=field, text=tokens[0], analyzed=True, **span)
+    if mode is Multitoken.PHRASE:
+        return Phrase(
+            field=field, text=" ".join(tokens), words=tuple(tokens), analyzed=True, slop=1, **span
+        )
+    children = tuple(Term(field=field, text=t, analyzed=True, **span) for t in tokens)
+    if mode is Multitoken.OR:
+        return Or(children=children, **span)
+    return And(children=children, **span)  # Multitoken.AND, and the DEFAULT-at-top-level case
+
+
+def _analyze_phrase(node: Phrase, registry: FieldRegistry) -> Node:
+    """Rewrite one raw ``Phrase`` leaf, or return it unchanged.
+
+    Never consults ``Multitoken``: a quoted phrase's words are the phrase,
+    not independent tokens a combinator picks among (unlike a multi-token
+    bare ``Term`` value). A zero-token result becomes ``Nothing()`` (matching
+    the enclosing-group-drop rule every other zero-token leaf gets); a
+    surviving result of any length (including exactly one token) stays a
+    ``Phrase``, matching real whoosh's own ``PhrasePlugin``, which always
+    builds a ``Phrase`` query object regardless of word count and never
+    self-collapses a one-word phrase into a plain term at the AST level
+    (only the *emitter*, a backend execution detail, treats a one-word
+    phrase query and an equivalent term query as interchangeable; see
+    ``visit_phrase``). ``text`` is set to the analyzed, space-joined tokens
+    (matching ``text``'s meaning on an unanalyzed ``Phrase``, and how a real
+    whoosh ``Phrase`` query's own words read); the emitter never reads it
+    once ``words`` is populated, so this is informational only, not a
+    join a future analyzer pass could ever be asked to re-split (idempotence
+    still comes entirely from the ``analyzed`` flag guard above, not from
+    what ``text`` happens to contain).
+    """
+    if node.analyzed:
+        return node
+    found = _leaf_tokens(node.field, node.text, registry)
+    if found is None:
+        return node
+    tokens, _spec = found
+    span = {"startchar": node.startchar, "endchar": node.endchar}
+    field = node.field
+    if not tokens:
+        return Nothing(**span)
+    return Phrase(
+        field=field,
+        text=" ".join(tokens),
+        words=tuple(tokens),
+        analyzed=True,
+        slop=node.slop,
+        **span,
+    )
+
+
+def _analyze_binary_drop(
+    node: AndNot | AndMaybe | Require,
+    left_attr: str,
+    right_attr: str,
+    new_left: Node,
+    new_right: Node,
+) -> Node | None:
+    """DIVERGENCES.md entry 23's uniform "zero-token operand" rule for
+    ``AndNot``/``AndMaybe``/``Require``, applied once here for all three
+    instead of duplicated per node type.
+
+    A side that *newly* collapsed to ``Nothing()`` during this analysis pass
+    (as opposed to one that already was ``Nothing()`` in the input tree,
+    which is a genuine, pre-existing empty operand that whoosh's own
+    ``normalize()`` algebra poisons the combinator for, see DIVERGENCES.md
+    entry 27) simply drops out, leaving the other side standing alone: not
+    the whoosh-matching poison/absorb rule ``_normalize_one`` would apply.
+    This is the same "the survivor stands alone regardless of which side
+    dropped" rule the pre-refactor emitter's ``_lone_operand`` implemented
+    at emit time; it now runs once, structurally, during analysis instead.
+
+    Returns ``None`` when neither side newly dropped, telling the caller to
+    fall back to the ordinary ``_normalize_one`` rule (this rule does not
+    apply to a genuinely pre-existing ``Nothing()`` operand).
+    """
+    orig_left = getattr(node, left_attr)
+    orig_right = getattr(node, right_attr)
+    left_dropped = isinstance(new_left, Nothing) and not isinstance(orig_left, Nothing)
+    right_dropped = isinstance(new_right, Nothing) and not isinstance(orig_right, Nothing)
+    if not (left_dropped or right_dropped):
+        return None
+    if left_dropped and right_dropped:
+        return Nothing(startchar=node.startchar, endchar=node.endchar)
+    return new_right if left_dropped else new_left
+
+
+def _analyze_combine(
+    node: Node, children: tuple[Node, ...], registry: FieldRegistry, ctx: Multitoken
+) -> Node:
+    """Combine one node with its already-analyzed-and-normalized
+    ``children`` into ``node``'s replacement, dispatching on ``node``'s own
+    type. This is :func:`analyze`'s per-node step, run bottom-up: ``Term``/
+    ``Phrase`` leaves are rewritten by analysis; every other node with
+    children is rebuilt from the new ones and immediately collapsed the same
+    way :func:`normalize` would (reusing :func:`_normalize_one` directly for
+    every combinator except ``AndNot``/``AndMaybe``/``Require``, which get
+    DIVERGENCES.md entry 23's uniform survivor rule first, see
+    :func:`_analyze_binary_drop`, falling back to the ordinary algebra when
+    that rule doesn't apply). Interleaving the collapse into the same walk
+    (rather than a separate pass afterward) is what lets
+    :func:`_analyze_binary_drop` tell a genuinely pre-existing ``Nothing()``
+    operand apart from one that only became empty during this very pass:
+    by the time a parent is combined, any child subtree that fully emptied
+    out (however deeply nested) has already collapsed to a literal
+    ``Nothing()``. A leaf with no children of its own (``Every``,
+    ``Nothing``, ``ErrorLeaf``, the range types, ``Wildcard``, ``Prefix``)
+    falls through unchanged, since analysis never has anything to do for
+    those kinds.
+    """
+    if isinstance(node, Term):
+        return _analyze_term(node, registry, ctx)
+    if isinstance(node, Phrase):
+        return _analyze_phrase(node, registry)
+    if isinstance(node, (AndNot, AndMaybe, Require)):
+        attrs = {AndNot: ("positive", "negative"), AndMaybe: ("required", "optional")}.get(
+            type(node), ("scored", "filter_only")
+        )
+        left, right = children
+        override = _analyze_binary_drop(node, attrs[0], attrs[1], left, right)
+        if override is not None:
+            return override
+    if isinstance(node, And):
+        # normalize()'s own And rule poisons the whole group on *any*
+        # Nothing() child (rule 3: real whoosh's "an impossible clause makes
+        # the whole conjunction impossible" algebra, e.g. a genuinely empty
+        # range). That is the wrong rule for a child that only became
+        # Nothing() *here*, during analysis, because its own field's
+        # analyzer consumed every token (an all-stopword value): whoosh's
+        # actual behavior for that case is to drop the value as though it
+        # was never typed, not to make the whole enclosing And impossible,
+        # the same "discovered here, not a genuine impossibility" distinction
+        # ``_analyze_binary_drop`` draws for AndNot/AndMaybe/Require. So a
+        # newly-dropped child is filtered out of the list before the
+        # ordinary algebra ever sees it; a genuinely pre-existing Nothing()
+        # (one that was already in ``node.children`` before this pass)
+        # still poisons, unchanged. ``Or`` needs no matching override:
+        # normalize()'s own Or rule already drops any Nothing() child,
+        # newly-dropped or not, which is already the correct behavior here.
+        kept = tuple(
+            new
+            for orig, new in zip(node.children, children, strict=True)
+            if not (isinstance(new, Nothing) and not isinstance(orig, Nothing))
+        )
+        return _normalize_one(node, kept)
+    if isinstance(node, (Or, Not, AndNot, AndMaybe, Require, Boosted)):
+        return _normalize_one(node, children)
+    return node
+
+
+def analyze(
+    node: Node, registry: FieldRegistry, *, default_mode: Multitoken = Multitoken.AND
+) -> Node:
+    """Resolve every TEXT/KEYWORD ``Term``/``Phrase`` leaf's field analysis,
+    turning a raw, unanalyzed tree into one an emitter can visit as a purely
+    structural tree, with no token analysis or drop decisions of its own.
+
+    This is a tantivy-emitter-agnostic pipeline stage, not tantivy-specific
+    itself: a multi-token ``Term`` value becomes ``And``/``Or``/``Phrase``
+    per the field's resolved ``Multitoken`` mode; a zero-token result (all
+    stopwords, or shorter than the analyzer's minimum size) drops out of its
+    enclosing group entirely, the same way an empty parenthesized group
+    already does at parse time; a quoted ``Phrase`` is tokenized the same
+    way, collapsing to a plain ``Term`` when only one token survives. Fields
+    outside the TEXT/KEYWORD/JSON-subpath kinds (U64, DATE, DATETIME,
+    BOOLEAN_EXISTS, a bare JSON field) are never analyzed or dropped,
+    matching the closed kind-dispatch matrix ARCHITECTURE.md documents.
+
+    ``default_mode`` resolves ``Multitoken.DEFAULT`` for a term with no
+    enclosing And/Or group to inherit from (a single top-level multi-token
+    term). Every other ``Multitoken.DEFAULT`` term instead follows its
+    nearest enclosing group's own combinator (an ``Or`` context resolves to
+    OR, an ``And`` context to AND), matching DIVERGENCES.md entry 15's
+    documented, position-dependent design (deliberately not whoosh's own
+    fixed-parser-default-group behavior). ``Not``/``AndNot``/``AndMaybe``/
+    ``Require``/``Boosted`` are transparent to this context: a term inside
+    ``NOT (foo bar)`` with no other enclosing group still resolves against
+    ``default_mode``, not against a group that isn't actually there.
+
+    A ``NOT`` of a term that analyzes to zero tokens is a deliberately
+    named case, not an accident: analysis drops the term, leaving
+    ``Not(Nothing())``, which :func:`normalize`'s pre-existing
+    ``Not(Nothing) -> Every()`` rule then turns into "matches everything",
+    reproducing DIVERGENCES.md entry 23's documented divergence from real
+    whoosh (whose own ``Not(NullQuery)`` stays ``NullQuery``) as the natural
+    consequence of this pipeline's ordering, not as special-cased behavior
+    to preserve. ``AndNot``/``AndMaybe``/``Require`` get one further,
+    explicit rule (also entry 23): an operand that newly drops to zero
+    tokens during this analysis pass lets its sibling stand alone, uniformly
+    regardless of which side dropped; this differs from a genuinely
+    pre-existing empty operand (entry 27's poison/absorb algebra, which
+    still applies unchanged) purely by *when* the emptiness was discovered,
+    a distinction :func:`_analyze_binary_drop` draws directly.
+
+    Idempotent by construction (:func:`Term`/:func:`Phrase`'s ``analyzed``
+    flag), not by relying on the host's ``analyzer`` callable happening to
+    be a fixed point on its own output: ``analyze(analyze(x), registry) ==
+    analyze(x, registry)`` for any ``x`` and ``registry``, since a node
+    already marked analyzed is never re-tokenized or re-split.
+
+    Traverses iteratively, mirroring :func:`normalize`'s own explicit work
+    stack, so a pathologically deep tree costs heap rather than Python
+    call-stack frames, exactly like every other stage in this pipeline that
+    walks a parsed tree.
+
+    Args:
+        node: The AST node to analyze. Normally already normalized (the
+            pipeline calls this as ``analyze(normalize(node), ...)``); a
+            not-yet-normalized tree still analyzes correctly, since this
+            function ends by normalizing its own result.
+        registry: Describes the known fields, their kinds, and their
+            analyzers/``multitoken`` policy.
+        default_mode: The ``Multitoken`` mode a ``Multitoken.DEFAULT``-
+            configured field's term resolves to when it has no enclosing
+            And/Or group to inherit from.
+
+    Returns:
+        A plain ``ast.Node`` tree, already normalized, with every
+        TEXT/KEYWORD leaf's analysis fully resolved.
+    """
+
+    # Phase 1 (top-down): the Multitoken context (AND/OR) applicable to a
+    # DEFAULT-configured term's position in the tree, keyed by id(node) so a
+    # node can be looked up again once phase 2 visits it. And/Or set their
+    # children's context to their own combinator; every other combinator
+    # (Not/AndNot/AndMaybe/Require/Boosted) passes its own context through
+    # unchanged, since none of them are themselves a combining group a term
+    # could inherit AND/OR-ness from.
+    context: dict[int, Multitoken] = {id(node): default_mode}
+    stack: list[Node] = [node]
+    while stack:
+        current = stack.pop()
+        ctx = context[id(current)]
+        if isinstance(current, And):
+            for child in current.children:
+                context[id(child)] = Multitoken.AND
+                stack.append(child)
+        elif isinstance(current, Or):
+            for child in current.children:
+                context[id(child)] = Multitoken.OR
+                stack.append(child)
+        else:
+            for child in _child_nodes(current):
+                context[id(child)] = ctx
+                stack.append(child)
+
+    # Phase 2 (bottom-up): mirrors normalize()'s own memoized work-stack
+    # traversal exactly, except the per-node combine step is
+    # _analyze_combine (leaf rewriting plus interleaved normalization)
+    # instead of _normalize_one alone.
+    memo: dict[int, Node] = {}
+    work: list[tuple[Node, bool]] = [(node, False)]
+    while work:
+        current, children_ready = work.pop()
+        kids = _child_nodes(current)
+        if children_ready or not kids:
+            analyzed_kids = tuple(memo[id(k)] for k in kids)
+            memo[id(current)] = _analyze_combine(
+                current, analyzed_kids, registry, context[id(current)]
+            )
+        else:
+            work.append((current, True))
+            for k in kids:
+                work.append((k, False))
+
+    return normalize(memo[id(node)])
 
 
 class Visitor(Generic[T]):
