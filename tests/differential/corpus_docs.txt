@@ -132,3 +132,42 @@ title:202[0-3]*
 # text reads False instead.
 has_tag:'  false  '
 has_tag:'F '
+
+# --- KNOWN DIVERGENCE (whoosh-bug, allowlist.py): trailing-star bracket
+# fold (DIVERGENCES.md entry 13), unfielded/multifield-expanded form. Same
+# root cause as title:202[0-3]* above, but with no "field:" prefix at all,
+# and a reversed (rather than merely non-numeric) character class: the
+# existing allowlist pattern originally required an explicit field prefix
+# and was broadened after the expanded generator found this shape.
+x[z-a]*
+
+# --- KNOWN DIVERGENCE (design, allowlist.py): "attrs" is a JSON field
+# registered only on whoosh-compat's side (DIVERGENCES.md entry 14,
+# extended), added purely so the generator can reach JSON subpath
+# pattern/existence vocabulary; real whoosh has no such field at all.
+attrs.user:alice
+attrs.user:*
+
+# --- KNOWN DIVERGENCE (design, allowlist.py): "release_date" is a
+# date_only field registered only on whoosh-compat's side (DIVERGENCES.md
+# entry 37); real v2 whoosh has no date-vs-datetime distinction and no such
+# field at all.
+release_date:'2020-03-15 15:30'
+
+# --- KNOWN DIVERGENCE (whoosh-bug, allowlist.py): a double-quoted value on
+# a BOOLEAN_EXISTS field crashes real whoosh at parse time (DIVERGENCES.md
+# entry 38, DivergenceKind.ORACLE_ERROR): BOOLEAN fields have no analyzer,
+# but PhrasePlugin unconditionally tries to tokenize through one.
+has_tag:"true"
+
+# --- KNOWN DIVERGENCE (design, allowlist.py): U64 accepts the full 64-bit
+# domain (DIVERGENCES.md entry 39); real v2 whoosh's NUMERIC fields default
+# to bits=32 and silently fail to parse a value at or above 2**32 (unsigned
+# fields like asn) or 2**31 (signed fields, the library default, like id).
+asn:4294967296
+id:2147483648
+
+# --- KNOWN DIVERGENCE (design, allowlist.py): entry 33's whitespace-padded
+# quoted BOOLEAN_EXISTS reading applies to every registered BOOLEAN_EXISTS
+# field, not just has_tag; the allowlist entry was broadened accordingly.
+has_correspondent:'  false'

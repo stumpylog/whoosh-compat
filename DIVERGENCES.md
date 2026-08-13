@@ -1013,6 +1013,19 @@ parse-then-emit pipeline).
     which was a genuine bug, not an intended divergence; it is now fixed
     and compared normally against the oracle rather than allowlisted.
 
+    This divergence applies uniformly to every registered `BOOLEAN_EXISTS`
+    field, not just `has_tag`: the allowlist entry's field alternation was
+    originally scoped to `has_tag` only (the sole field the hand-curated
+    corpus lines exercised), and was broadened to
+    `has_correspondent`/`has_tag`/`has_type`/`has_custom_fields`/`has_owner`
+    after the expanded generator's `_bool_exists_quoted_atom` (unlike the
+    old corpus lines, drawing from every registered BOOLEAN_EXISTS field)
+    found the identical mismatch on `has_correspondent` and confirmed
+    directly it reproduces on the other three as well: the root cause
+    (`term_query`'s strip-before-check vs `BOOLEAN._obj_to_bool`'s
+    unstripped-then-`bool(qstring)` fallback) is the same code path
+    regardless of which field it runs on.
+
     Test references: `tests/test_parser_fields.py`'s
     `test_bool_word_truthy_check_strips_whitespace` and
     `test_bool_word_empty_after_strip_is_falsy`;
@@ -1022,7 +1035,8 @@ parse-then-emit pipeline).
     `test_boolean_exists_quoted_truthiness_shapes` (result-level, real
     tantivy searches asserting doc-id sets, covering the quoted-empty,
     padded-false, padded-true-looking, and plain true/false control
-    shapes); `tests/differential/allowlist.py`'s matching entry and
+    shapes); `tests/differential/allowlist.py`'s matching entry;
+    `tests/differential/strategies.py`'s `_bool_exists_quoted_atom`; and
     `tests/differential/corpus_docs.txt`'s padded-value lines.
 
 34. **A year at the edge of what `datetime` can represent (`0000`, `9999`) is
@@ -1143,3 +1157,104 @@ parse-then-emit pipeline).
     Test references: `tests/differential/allowlist.py`'s comma-values-boost
     entry; `tests/differential/corpus_docs.txt`'s
     `tag:alpha,beta^2` line.
+
+37. **A `date_only` field is a whoosh-compat-only concept with no whoosh
+    analogue whatsoever (design).** Real v2 whoosh (`whoosh.fields.DATETIME`)
+    has no date-vs-datetime distinction at all: every date/time field is a
+    `DATETIME`, and a bare date value like `created:2020-03-15` is simply a
+    `DATETIME` value whose time-of-day component happens to be unspecified
+    (handled as an *ambiguous* period, per whoosh's own `adatetime`/`timespan`
+    machinery), never a type-level rejection of a time-bearing value.
+    whoosh-compat's `FieldSpec.date_only=True` (`fields.py`) is a real,
+    additional constraint with no whoosh counterpart: a `date_only` field's
+    range/ceiling handling (DIVERGENCES.md entry 32) and, more basically, its
+    acceptance of a bare date literal without a time-of-day component at all
+    are whoosh-compat-only behavior.
+
+    `tests/differential/oracle.py`'s `ORACLE_REGISTRY` registers a
+    `release_date` field (`FieldKind.DATE, date_only=True`) purely so
+    `tests/differential/strategies.py`'s generator (`_date_only_atom`) can
+    reach "time-bearing value on a date-only field" vocabulary at all: this
+    field has no counterpart in `oracle_schema()`/`V2_FIELDS`, so every query
+    addressing it structurally diverges from the oracle's ordinary
+    default-multifield-unknown-field expansion, regardless of the value
+    (confirmed directly for a bare date, a time-bearing bare value, and a
+    time-bearing bracket range: all three mismatch identically), the same
+    "whoosh-compat-only concept" shape entry 14 documents for JSON fields.
+
+    Test references: `tests/differential/allowlist.py`'s `release_date:`
+    entry; `tests/differential/strategies.py`'s `_date_only_atom` (generator
+    reachability); the `date_only` rounding-direction behavior itself is
+    exercised at the unit/emitter level by entry 32's own test references,
+    not by this differential-comparison entry.
+
+38. **A double-quoted value on a BOOLEAN_EXISTS field crashes real whoosh
+    (whoosh bug, not reproduced).** `whoosh.fields.BOOLEAN.__init__` never
+    sets an `analyzer` (confirmed directly: `BOOLEAN().analyzer` raises
+    `AttributeError`), but `whoosh.qparser.plugins.PhrasePlugin.PhraseNode.query`
+    unconditionally calls `fieldobj.process_text(...)`, which needs the
+    field's own analyzer to tokenize the quoted text, regardless of whether
+    the field kind can even meaningfully hold a multi-word phrase. Confirmed
+    directly against the pinned oracle: `has_tag:""`, `has_tag:"true"`,
+    `has_tag:"  false  "`, and `has_tag:"t*"` (empty, valid, whitespace-padded,
+    and pattern-shaped double-quoted values) all raise
+    `Exception: <class 'whoosh.fields.BOOLEAN'> field has no analyzer` while
+    parsing, for every registered `BOOLEAN_EXISTS` field
+    (`has_correspondent`/`has_tag`/`has_type`/`has_custom_fields`/`has_owner`),
+    not just one. This is a genuine whoosh limitation (a `BOOLEAN` field
+    simply cannot support a phrase query at all, in any form), not intended
+    semantics that a query language would deliberately reject a specific
+    value shape for, so whoosh-compat does not reproduce it: a double-quoted
+    value on a `BOOLEAN_EXISTS` field parses to an ordinary `ast.Phrase` and
+    is coerced to a boolean at emit time (`visit_phrase`, the same
+    truthiness rule entry 32 documents for the unquoted/single-quoted form),
+    see `tests/emitter/test_emit_phrase.py::test_phrase_on_boolean_exists_field`.
+
+    Test references: `tests/differential/allowlist.py`'s
+    `has_correspondent|has_tag|has_type|has_custom_fields|has_owner` entry
+    (`DivergenceKind.ORACLE_ERROR`); `tests/differential/strategies.py`'s
+    `_bool_exists_double_quoted_atom`; `tests/emitter/test_emit_phrase.py::test_phrase_on_boolean_exists_field`
+    (result-level: this shape already worked correctly on whoosh-compat's
+    side before this entry existed, it was simply never compared against the
+    oracle).
+
+39. **The U64 domain accepts the full 64-bit range; real v2 whoosh's
+    `NUMERIC` fields are 32-bit, and most of them signed on top of that
+    (design, found by the expanded generator vocabulary).**
+    `whoosh.fields.NUMERIC.__init__` defaults `bits=32` when not passed
+    explicitly, and `oracle_schema()`'s clone of paperless-ngx v2 never
+    overrides it for any of `id`/`asn`/`correspondent_id`/`type_id`/
+    `path_id`/`num_notes`/`custom_field_count`/`owner_id`/`page_count`:
+    confirmed directly, `_SCHEMA["asn"].bits == 32` for every one of them.
+    The real per-field ceiling isn't uniform, though, since `NUMERIC` also
+    defaults `signed=True`: `asn`/`num_notes`/`custom_field_count` pass
+    `signed=False` explicitly (real max `2**32 - 1` = `4294967295`,
+    confirmed via `_SCHEMA[name].signed`), but every other field above
+    leaves `signed` at its default of `True` (real max only `2**31 - 1` =
+    `2147483647`, half the unsigned range, the sign bit consuming the top
+    bit of the same 32). Real whoosh therefore silently fails to parse any
+    value at or above a given field's own ceiling (`oracle_parse("id:2147483648", ...)`
+    -> `NullQuery`, confirmed directly, even though `2147483648` parses fine
+    on the *unsigned* `asn` field), even though it is a perfectly valid
+    non-negative integer either way. whoosh-compat's `FieldKind.U64` instead
+    validates against the full 64-bit domain uniformly, for every U64 field
+    regardless of the real schema's per-field signedness (`_parse_u64`,
+    `parser/default.py`, `_U64_MAX = 2**64 - 1`), matching tantivy's actual
+    u64 column type (the v3 schema this library targets), not v2's narrower,
+    per-field 32-bit whoosh fields. This is not a bug on either side: v2's
+    schema genuinely had these narrower (and inconsistent) real ranges, and
+    v3's tantivy columns genuinely are uniformly 64-bit; whoosh-compat
+    deliberately does not shrink its domain check to match the narrower,
+    superseded, per-field-inconsistent schema. Confirmed each field's own
+    boundary is exact: a field's real maximum (`4294967295` for the three
+    unsigned fields, `2147483647` for the rest) parses identically on both
+    sides; one past it is the minimal reproduction of the divergence.
+
+    Test references: `tests/differential/allowlist.py`'s U64-field/large-value
+    entry; `tests/differential/strategies.py`'s `_numeric_atom` and
+    `_WHOOSH32_FIELD_MAX` (`whoosh32_max`/`whoosh32_overflow`/`u64_max`
+    shapes, computed per field from `_SCHEMA` rather than assumed uniform,
+    after `id:4294967295` was initially, incorrectly, expected to match);
+    `tests/differential/corpus_docs.txt`'s
+    `asn:4294967296` (unsigned field) and `id:2147483648` (signed field)
+    lines.

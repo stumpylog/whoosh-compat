@@ -40,6 +40,7 @@ from collections.abc import Iterable
 
 from hypothesis import strategies as st
 
+from tests.differential.oracle import _SCHEMA
 from tests.differential.oracle import ORACLE_REGISTRY
 from tests.differential.oracle import _analyze
 from whoosh_compat import ast
@@ -71,6 +72,29 @@ JSON_SUBPATHS: tuple[str, ...] = (
     "notes.note",
     "custom_fields.value",
     "custom_fields.name",
+)
+# Bare (subpath-less) canonical names of every registered JSON field, for
+# exercising the "bare JSON field name demotes to a text search" shape
+# (DIVERGENCES.md entries 14/29, FieldRegistry.is_bare_json_field).
+JSON_FIELDS: tuple[str, ...] = tuple(s.name for s in ORACLE_REGISTRY if s.kind is FieldKind.JSON)
+# "attrs" (unlike JSON_SUBPATHS's notes.*/custom_fields.* names) is a
+# genuinely registered JSON field in ORACLE_REGISTRY, added specifically so
+# this module can generate real JSON-subpath pattern/existence/quoted-value
+# queries (DIVERGENCES.md entry 14's oracle.py comment): the oracle still has
+# no matching field at all, so every query against it structurally diverges
+# the same way notes.user/custom_fields.value already do, just via a field
+# that (unlike those two) isn't also a plain-TEXT field on the oracle side.
+REGISTERED_JSON_SUBPATHS: tuple[str, ...] = tuple(
+    f"{spec.name}.{subpath}"
+    for spec in ORACLE_REGISTRY
+    if spec.kind is FieldKind.JSON
+    for subpath in spec.subpaths
+)
+# A date_only field (DIVERGENCES.md entry 37): real v2 whoosh has no
+# date-vs-datetime distinction at all, so this field exists purely so the
+# generator can reach "time-bearing value on a date-only field" shapes.
+DATE_ONLY_FIELDS: tuple[str, ...] = tuple(
+    s.name for s in ORACLE_REGISTRY if s.kind is FieldKind.DATE
 )
 
 # Verified (not assumed) to analyze to zero tokens under the oracle's own
@@ -312,11 +336,250 @@ def _bool_exists_atom(draw: st.DrawFn) -> str:
     return f"{field}:{value}"
 
 
+# --------------------------------------------------------------------------
+# Additional leaves, added to close vocabulary gaps a full-library review
+# found: shapes that were reachable *in principle* by the grammar but had no
+# generator support, so a real defect in each of them survived both manual
+# review and the existing fuzzer. Same treatment as every atom above: each
+# one is a leaf `_leaves()` mixes in, so `_extend`'s combinators nest it
+# arbitrarily deep, pair it with other leaves under every binary operator,
+# and place it under NOT/boost, not just generate it standalone.
+# --------------------------------------------------------------------------
+
+_U64_MAX = 2**64 - 1
+# Real v2 whoosh's NUMERIC fields (oracle_schema()) all use the library
+# default bits=32 (none of asn/id/*_id/num_notes/etc pass bits=64):
+# confirmed directly (`_SCHEMA["asn"].bits == 32`). whoosh-compat's U64 kind
+# instead assumes the full 64-bit domain tantivy's actual v3 u64 columns
+# support. DIVERGENCES.md entry 39 documents the resulting divergence for
+# any value at/above each field's real-whoosh ceiling. That ceiling isn't
+# uniform, though: a NUMERIC field's real 32-bit domain depends on its own
+# `signed` flag (`asn`/`num_notes`/`custom_field_count` pass
+# `signed=False`, so their true max is 2**32 - 1; every other NUMERIC field
+# in oracle_schema() leaves `signed` at its library default of True, so
+# their true max is only 2**31 - 1), confirmed by inspecting `_SCHEMA`
+# directly rather than assuming a single shared boundary (the first version
+# of this atom did, and "id:4294967295" turned out to still mismatch,
+# since "id" is signed).
+_WHOOSH32_FIELD_MAX: dict[str, int] = {
+    name: (2 ** (_SCHEMA[name].bits - 1) - 1)
+    if _SCHEMA[name].signed
+    else (2 ** _SCHEMA[name].bits - 1)
+    for name in NUM_FIELDS
+}
+
+
+@st.composite
+def _numeric_atom(draw: st.DrawFn) -> str:
+    """Bare/single-/double-quoted numeric values on a U64 field, including
+    negative and out-of-u64-domain magnitudes, the exact u64 domain
+    boundaries (0 and 2**64 - 1), and each field's own real-whoosh 32-bit
+    NUMERIC boundary (its exact max, still valid on both sides, and one past
+    it, the minimal reproduction of DIVERGENCES.md entry 39).
+
+    Most shapes here are parseable text that whoosh-compat's ``_parse_u64``
+    diagnoses as ``BAD_NUMBER`` at parse time (``parser/default.py``), which
+    the differential harness skips uniformly (DIVERGENCES.md entry 6): the
+    point of generating them is reachability/crash-safety
+    (``test_parse_never_raises``, ``test_normalize_is_total_and_idempotent``),
+    not a new oracle-comparison outcome. ``u64_max``/``whoosh32_overflow``
+    are the exception: both are valid, undiagnosed u64 values that still
+    structurally diverge from the oracle (entry 39), since real whoosh's
+    32-bit field can never hold either one. Quoting matters: a single-quoted
+    value still reaches ``term_query`` (an ``ast.Term``, exactly like an
+    unquoted value), while a double-quoted value reaches ``visit_phrase``'s
+    own, separately implemented U64 domain check.
+    """
+
+    field = draw(st.sampled_from(NUM_FIELDS))
+    shape = draw(
+        st.sampled_from(
+            [
+                "valid",
+                "negative",
+                "oob_small",
+                "oob_huge",
+                "boundary_lo",
+                "u64_max",
+                "whoosh32_max",
+                "whoosh32_overflow",
+            ]
+        )
+    )
+    if shape == "valid":
+        text = str(draw(st.integers(min_value=0, max_value=100_000)))
+    elif shape == "negative":
+        text = f"-{draw(st.integers(min_value=1, max_value=100_000))}"
+    elif shape == "oob_small":
+        # Just past the u64 ceiling: the domain check's off-by-one boundary.
+        text = str(_U64_MAX + draw(st.integers(min_value=1, max_value=10)))
+    elif shape == "oob_huge":
+        text = str(_U64_MAX + draw(st.integers(min_value=100_000, max_value=10**12)))
+    elif shape == "boundary_lo":
+        text = "0"
+    elif shape == "u64_max":
+        text = str(_U64_MAX)
+    elif shape == "whoosh32_max":
+        text = str(_WHOOSH32_FIELD_MAX[field])
+    else:
+        text = str(_WHOOSH32_FIELD_MAX[field] + 1)
+    quote = draw(st.sampled_from(["bare", "single", "double"]))
+    if quote == "single":
+        value = f"'{text}'"
+    elif quote == "double":
+        value = f'"{text}"'
+    else:
+        value = text
+    return f"{field}:{value}"
+
+
+@st.composite
+def _bool_exists_quoted_atom(draw: st.DrawFn) -> str:
+    """Single-quoted (``Term``) BOOLEAN_EXISTS values not already covered by
+    the plain ``_bool_exists_atom`` above: empty, whitespace-padded (both of
+    which DIVERGENCES.md entry 33 documents for the non-empty/padded case),
+    and a pattern value (diagnosed, DIVERGENCES.md entry 29).
+    """
+
+    field = draw(st.sampled_from(BOOL_EXISTS_FIELDS))
+    shape = draw(
+        st.sampled_from(["empty", "pad_leading", "pad_trailing", "case_variant", "pattern"])
+    )
+    if shape == "empty":
+        return f"{field}:''"
+    if shape == "pad_leading":
+        v = draw(st.sampled_from(["true", "false"]))
+        return f"{field}:'  {v}'"
+    if shape == "pad_trailing":
+        v = draw(st.sampled_from(["true", "false"]))
+        return f"{field}:'{v}  '"
+    if shape == "case_variant":
+        v = draw(st.sampled_from(["T", "F", "Yes", "No"]))
+        return f"{field}:'{v}'"
+    return f"{field}:t*"
+
+
+@st.composite
+def _bool_exists_double_quoted_atom(draw: st.DrawFn) -> str:
+    """Double-quoted (``Phrase``) BOOLEAN_EXISTS values: a distinct AST node
+    type from the single-quoted ``Term`` shapes above (real whoosh's
+    ``BOOLEAN`` field has no analyzer at all, so *any* ``PhrasePlugin`` value
+    on one of these fields crashes the oracle at parse time, confirmed
+    directly; see DIVERGENCES.md entry 38, ``DivergenceKind.ORACLE_ERROR``).
+    """
+
+    field = draw(st.sampled_from(BOOL_EXISTS_FIELDS))
+    value = draw(st.sampled_from(["", "true", "false", "  false  ", "t*"]))
+    return f'{field}:"{value}"'
+
+
+@st.composite
+def _bare_json_atom(draw: st.DrawFn) -> str:
+    """A registered JSON field addressed with no subpath at all
+    (DIVERGENCES.md entries 14/29): demotes to an ordinary text search."""
+
+    field = draw(st.sampled_from(JSON_FIELDS))
+    text = draw(plain_word)
+    return f"{field}:{text}"
+
+
+@st.composite
+def _json_registered_atom(draw: st.DrawFn) -> str:
+    """Plain/quoted term values on a *genuinely registered* JSON subpath
+    (``attrs.user`` etc, unlike ``_json_atom``'s unregistered ``notes.user``
+    style names): still structurally diverges from the oracle (real whoosh
+    has no JSON field type at all), same mechanism as DIVERGENCES.md entry
+    14, just reached through a field that (unlike ``notes``/``custom_fields``)
+    isn't also a plain-TEXT field on the oracle side.
+    """
+
+    path = draw(st.sampled_from(REGISTERED_JSON_SUBPATHS))
+    quote = draw(st.sampled_from(["bare", "single", "double"]))
+    text = draw(plain_word)
+    if quote == "single":
+        value = f"'{text}'"
+    elif quote == "double":
+        value = f'"{text}"'
+    else:
+        value = text
+    return f"{path}:{value}"
+
+
+@st.composite
+def _json_pattern_atom(draw: st.DrawFn) -> str:
+    """Wildcard/prefix/existence values on a JSON subpath
+    (DIVERGENCES.md entry 30: diagnosed at parse time, other than the bare
+    ``*`` existence-check special case)."""
+
+    path = draw(st.sampled_from(REGISTERED_JSON_SUBPATHS))
+    base = draw(wildcard_base)
+    shape = draw(st.sampled_from(["trailing", "infix_question", "wrapped_star", "bare_star"]))
+    if shape == "trailing":
+        pattern = f"{base}*"
+    elif shape == "infix_question":
+        pattern = f"{base}?{base}"
+    elif shape == "wrapped_star":
+        pattern = f"*{base}*"
+    else:
+        pattern = "*"
+    return f"{path}:{pattern}"
+
+
+@st.composite
+def _degenerate_wildcard_atom(draw: st.DrawFn) -> str:
+    """A trailing-star pattern whose bracket character class is reversed
+    (``[z-a]``) or empty (``[]``): both fold to a ``Wildcard`` on
+    whoosh-compat's side and a ``Prefix`` that keeps the literal bracket text
+    (not a real character class) on real whoosh's, the same
+    DIVERGENCES.md entry 13 whoosh-bug the existing ``bracket_trailing``
+    shape in ``_wildcard_atom`` documents, just with a degenerate class body
+    and, deliberately, an unfielded (multifield-expanded) form: the existing
+    entry 13 allowlist pattern required an explicit ``field:`` prefix, which
+    an unfielded pattern like this one never has, and was broadened here to
+    also match it (verified directly: the root cause, real whoosh's
+    ``SPECIAL_CHARS``/fold-check omitting ``"["``, applies identically
+    whether or not the pattern is fielded).
+    """
+
+    field = draw(st.one_of(st.none(), st.sampled_from(TEXT_FIELDS + KEYWORD_FIELDS)))
+    base = draw(wildcard_base)
+    cls = draw(st.sampled_from(["[z-a]", "[]"]))
+    pattern = f"{base}{cls}*"
+    return f"{field}:{pattern}" if field else pattern
+
+
+@st.composite
+def _date_only_atom(draw: st.DrawFn) -> str:
+    """Time-bearing values on a ``date_only`` field (DIVERGENCES.md entries
+    32 and 37): a bare/quoted single value or a bracket range, always with an
+    explicit time-of-day component. ``date_only`` has no whoosh equivalent at
+    all (entry 37), so every shape here structurally diverges from the
+    oracle by construction, the same as ``JSON_SUBPATHS``/``REGISTERED_JSON_SUBPATHS``
+    above; it exists so the generator can reach this field-kind/value-shape
+    combination for crash-safety and normalize()-idempotence purposes.
+    """
+
+    field = draw(st.sampled_from(DATE_ONLY_FIELDS))
+    year = draw(st.integers(min_value=1900, max_value=2100))
+    month = draw(st.integers(min_value=1, max_value=12))
+    day = draw(st.integers(min_value=1, max_value=28))
+    hour = draw(st.integers(min_value=0, max_value=23))
+    minute = draw(st.integers(min_value=0, max_value=59))
+    shape = draw(st.sampled_from(["bare", "range"]))
+    if shape == "bare":
+        return f"{field}:'{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}'"
+    day2 = min(day + 1, 28)
+    return (
+        f"{field}:[{year:04d}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}"
+        f" TO {year:04d}-{month:02d}-{day2:02d} {hour:02d}:{minute:02d}]"
+    )
+
+
 _every_atom = st.sampled_from(["*", "*:*"] + [f"{f}:*" for f in TEXT_FIELDS + KEYWORD_FIELDS])
 
-# issue #10: a literal empty group, so _extend's combinators below can place
-# it (and nest it, and pair it with other leaves) anywhere in the tree, same
-# as any other awkward leaf this module generates.
+# A literal empty group, so _extend's combinators below can place it (and
+# nest it, and pair it with other leaves) anywhere in the tree, same as any
+# other awkward leaf this module generates.
 _empty_group_atom = st.just("()")
 
 
@@ -332,11 +595,24 @@ def _leaves() -> st.SearchStrategy[str]:
         _bool_exists_atom(),
         _every_atom,
         _empty_group_atom,
+        _degenerate_wildcard_atom(),
     ]
+    if NUM_FIELDS:
+        strategies.append(_numeric_atom())
+    if BOOL_EXISTS_FIELDS:
+        strategies.append(_bool_exists_quoted_atom())
+        strategies.append(_bool_exists_double_quoted_atom())
     if KEYWORD_FIELDS:
         strategies.append(_comma_atom())
     if JSON_SUBPATHS:
         strategies.append(_json_atom())
+    if JSON_FIELDS:
+        strategies.append(_bare_json_atom())
+    if REGISTERED_JSON_SUBPATHS:
+        strategies.append(_json_registered_atom())
+        strategies.append(_json_pattern_atom())
+    if DATE_ONLY_FIELDS:
+        strategies.append(_date_only_atom())
     return st.one_of(*strategies)
 
 

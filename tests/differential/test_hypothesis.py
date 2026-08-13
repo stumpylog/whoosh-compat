@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import tantivy
 from hypothesis import example
 from hypothesis import given
 from hypothesis import settings
@@ -23,7 +25,12 @@ from tests.differential.strategies import ast_shape
 from tests.differential.strategies import query_text
 from tests.differential.strategies import seed_corpus
 from tests.differential.strategies import zero_token_leaf_count
+from whoosh_compat import ast
 from whoosh_compat.ast import normalize
+from whoosh_compat.emitters.tantivy_ import emit as emit_
+from whoosh_compat.fields import FieldKind
+from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
 
 BERLIN = ZoneInfo("Europe/Berlin")
 BASE = datetime(2026, 8, 4, 10, 30, tzinfo=BERLIN)
@@ -92,8 +99,68 @@ _DIVERGENCE_SEEDS = (
     "added:'2020 12:30'",  # entry 21: year + colon-time ambiguity
     "NOT title:the",  # entry 23: NOT of a zero-token term
 )
+
+# Explicit, seeded examples of the generator vocabulary a full-library review
+# found unreachable (see strategies.py's new atoms): each shape below is
+# proven reachable by construction rather than left to chance draws, per the
+# acceptance criteria for widening this fuzzer's vocabulary.
+_NEW_VOCABULARY_SEEDS = (
+    # Empty groups: bare, nested, repeated, and mixed with a real clause.
+    "()",
+    "(())",
+    "() AND ()",
+    "title:foo AND ()",
+    "NOT ()",
+    # Bare JSON field name (no subpath): demotes to a text search.
+    "attrs:foo",
+    # Quoted values on non-TEXT fields.
+    'asn:"100"',
+    "asn:'100'",
+    "notes.user:'alice'",
+    'notes.user:"alice"',
+    # Negative and out-of-u64-range numerics, bare and quoted.
+    "asn:-5",
+    "asn:18446744073709551616",
+    'asn:"-5"',
+    'asn:"18446744073709551616"',
+    "asn:0",
+    "asn:18446744073709551615",
+    "asn:4294967295",  # real whoosh's unsigned 32-bit NUMERIC maximum: matches
+    "asn:4294967296",  # entry 39: minimal reproduction, mismatches
+    "id:2147483647",  # real whoosh's signed 32-bit NUMERIC maximum: matches
+    "id:2147483648",  # entry 39: minimal reproduction (signed field), mismatches
+    "has_correspondent:'  false'",  # entry 33, broadened past has_tag
+    # Reversed and degenerate character classes.
+    "x[z-a]*",
+    "title:x[z-a]*",
+    "title:[]*",
+    # JSON subpath pattern and existence shapes, on a genuinely registered
+    # JSON field (attrs, unlike the unregistered notes/custom_fields names).
+    "attrs.user:pre*",
+    "attrs.user:w?ld",
+    "attrs.user:*lice*",
+    "attrs.user:*",
+    # Quoted values on BOOLEAN_EXISTS fields, single- and double-quoted.
+    "has_tag:''",
+    "has_tag:'  false  '",
+    "has_tag:'F '",
+    "has_tag:t*",
+    'has_tag:""',
+    'has_tag:"true"',
+    'has_tag:"  false  "',
+    'has_tag:"t*"',
+    # Time-bearing values on a date-only field.
+    "release_date:'2020-03-15 15:30'",
+    "release_date:[2020-03-15 15:30 TO 2020-03-16 15:30]",
+)
 _SEED_QUERIES = tuple(
-    dict.fromkeys((*seed_corpus("corpus_paperless.txt", "corpus_docs.txt"), *_DIVERGENCE_SEEDS))
+    dict.fromkeys(
+        (
+            *seed_corpus("corpus_paperless.txt", "corpus_docs.txt"),
+            *_DIVERGENCE_SEEDS,
+            *_NEW_VOCABULARY_SEEDS,
+        )
+    )
 )
 
 
@@ -222,3 +289,116 @@ def test_parse_never_raises_wild(q: str) -> None:
         basedate=BASE,
     )
     assert result.ast is not None or result.diagnostics
+
+
+# --------------------------------------------------------------------------
+# Nesting-depth-and-cost-budget property: a full-library review found that
+# the dominant shape that defeats ast.normalize()'s flattening (and that
+# emit()'s own iterative rewrite, DIVERGENCES.md's normalize()/emit()
+# performance notes, was written to fix) is *alternating* And/Or nesting,
+# not a single repeated operator (which normalize() flattens into one wide
+# node trivially). This property builds exactly that shape to a controlled
+# depth and asserts both a crash-safety property (no bare exception escapes
+# parse(), at every depth, including past the parser's own
+# _MAX_GROUP_NESTING_DEPTH=200 cap, parser/plugins.py) and a cost-budget
+# property (parse-plus-emit stays within a loose, non-flaky time ceiling
+# that an exponential-blowup regression would still fail by a wide margin).
+# --------------------------------------------------------------------------
+
+
+def _alternating_query(depth: int) -> str:
+    """Build a query string nested ``depth`` levels deep, alternating AND/OR
+    at each level: ``(((title:leaf0) AND (tag:leaf1)) OR (tag:leaf2)) AND ...``.
+
+    Deliberately alternating rather than a single repeated operator:
+    ``ast.normalize()`` flattens a run of the *same* associative operator
+    into one wide node in a single pass, which hides an exponential-blowup
+    regression; alternating operators defeat that flattening the same way
+    the review that prompted this property described.
+    """
+
+    parts = [f"title:leaf{i % 7}" if i % 2 == 0 else f"tag:leaf{i % 7}" for i in range(depth + 1)]
+    expr = parts[0]
+    for i, part in enumerate(parts[1:]):
+        op = "AND" if i % 2 == 0 else "OR"
+        expr = f"({expr}) {op} ({part})"
+    return expr
+
+
+# The parser's own nesting-depth cap (parser/plugins.py's
+# _MAX_GROUP_NESTING_DEPTH); depths are drawn on both sides of it so this
+# property demonstrably exercises the cap itself, not just depths safely
+# under it "by luck".
+_MAX_GROUP_NESTING_DEPTH = 200
+
+
+@given(st.integers(min_value=1, max_value=60))
+@settings(max_examples=30, deadline=None)
+@example(depth=1)
+@example(depth=_MAX_GROUP_NESTING_DEPTH - 1)  # just under the cap
+@example(depth=_MAX_GROUP_NESTING_DEPTH)  # exactly at the cap
+@example(depth=_MAX_GROUP_NESTING_DEPTH + 50)  # comfortably past the cap
+def test_alternating_nesting_depth_cost_budget(depth: int) -> None:
+    q = _alternating_query(depth)
+
+    start = time.perf_counter()
+    result = wc.parse(
+        q, registry=ORACLE_REGISTRY, default_fields=V2_FIELDS, tz=BERLIN, basedate=BASE
+    )
+    elapsed = time.perf_counter() - start
+
+    # Crash-safety: parse() never raises, at any depth, including well past
+    # the nesting cap; past the cap the result must carry a diagnostic
+    # (DIVERGENCES.md entry 31) rather than a bare success with a silently
+    # truncated tree or (the regression this guards against) an unbounded
+    # RecursionError/exponential hang.
+    assert result.ast is not None
+    if depth > _MAX_GROUP_NESTING_DEPTH:
+        assert result.diagnostics, (
+            f"depth {depth} exceeds the {_MAX_GROUP_NESTING_DEPTH}-level nesting cap"
+            " but produced no diagnostic"
+        )
+
+    # Cost budget: loose enough not to flake on a slow machine (an ordinary
+    # depth-60 alternating parse takes low milliseconds), tight enough that
+    # an exponential blowup in normalize()'s flattening or emit()'s subtree
+    # handling would blow through it by orders of magnitude rather than
+    # merely brushing it.
+    assert elapsed < 5.0, f"parse() took {elapsed:.2f}s at depth {depth}, budget is 5.0s"
+
+    if not result.diagnostics:
+        emit_start = time.perf_counter()
+        _emit_alternating(result.ast)
+        emit_elapsed = time.perf_counter() - emit_start
+        assert emit_elapsed < 5.0, (
+            f"emit() took {emit_elapsed:.2f}s at depth {depth}, budget is 5.0s"
+        )
+
+
+def _emit_alternating(node: ast.Node) -> tantivy.Query:
+    return emit_(node, index=_COST_BUDGET_INDEX, registry=_COST_BUDGET_REGISTRY)
+
+
+def _build_cost_budget_index() -> tantivy.Index:
+    sb = tantivy.SchemaBuilder()
+    sb.add_text_field("title", stored=True)
+    sb.add_text_field("tag", stored=True)
+    schema = sb.build()
+    index = tantivy.Index(schema)
+    w = index.writer()
+    doc = tantivy.Document()
+    doc.add_text("title", "leaf0 leaf1 leaf2 leaf3 leaf4 leaf5 leaf6")
+    doc.add_text("tag", "leaf0 leaf1 leaf2 leaf3 leaf4 leaf5 leaf6")
+    w.add_document(doc)
+    w.commit()
+    index.reload()
+    return index
+
+
+_COST_BUDGET_INDEX = _build_cost_budget_index()
+_COST_BUDGET_REGISTRY = FieldRegistry(
+    [
+        FieldSpec("title", FieldKind.TEXT, analyzer=lambda t: t.split()),
+        FieldSpec("tag", FieldKind.TEXT, analyzer=lambda t: t.split()),
+    ]
+)

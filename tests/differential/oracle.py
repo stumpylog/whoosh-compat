@@ -200,6 +200,24 @@ def _make_oracle_registry() -> FieldRegistry:
             FieldSpec("checksum", FieldKind.TEXT, analyzer=_analyze),
             FieldSpec("page_count", FieldKind.U64),
             FieldSpec("original_filename", FieldKind.TEXT, analyzer=_analyze),
+            # The two fields below have no counterpart at all in
+            # oracle_schema()/V2_FIELDS: real v2 whoosh has neither a JSON
+            # field type nor a date-only/date-vs-datetime distinction, so any
+            # query addressing either of these always structurally diverges
+            # from the oracle (DIVERGENCES.md entries 14 and 37). They exist
+            # purely so the differential generator (tests/differential/
+            # strategies.py) can reach JSON subpath pattern/existence
+            # generator vocabulary and date_only time-bearing-value generator
+            # vocabulary at all; neither is wired into V2_FIELDS, so their
+            # presence doesn't change how any other field's default-multifield
+            # expansion behaves.
+            FieldSpec(
+                "attrs",
+                FieldKind.JSON,
+                subpaths=("user", "note", "value", "name"),
+                analyzer=_analyze,
+            ),
+            FieldSpec("release_date", FieldKind.DATE, date_only=True),
         ]
     )
 

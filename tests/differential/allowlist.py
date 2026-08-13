@@ -200,6 +200,28 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         ),
         DivergenceKind.MISMATCH,
     ),
+    # design (DIVERGENCES.md entry 14, extended): "attrs" is a JSON field
+    # genuinely registered in ORACLE_REGISTRY (added specifically so
+    # strategies.py can generate real JSON-subpath pattern/existence/quoted-
+    # value queries, see oracle.py's comment next to the FieldSpec), but real
+    # v2 whoosh has no such field at all, so a query addressing it always
+    # structurally diverges from the oracle, same mechanism as the
+    # notes./custom_fields. entries above. The regex covers both the
+    # bare-JSON-name case ("attrs:foo", which actually still matches the
+    # oracle: FieldRegistry.make_ref demotes it identically to a genuinely
+    # unregistered field, verified directly) implicitly not matching here
+    # since it has no dot, and every "attrs.<subpath>:" shape, which does.
+    (
+        re.compile(r"\battrs\.(user|note|value|name)\b"),
+        (
+            "DIVERGENCES.md entry 14 (design, extended): dot-inclusive"
+            " FieldsPlugin tagger tags 'attrs.<subpath>:' differently than"
+            " whoosh's non-dot-aware tagger; 'attrs' is registered as a JSON"
+            " field only on whoosh-compat's side (added purely to reach"
+            " generator vocabulary), real whoosh has no such field at all"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
     # NOTE: DIVERGENCES.md entry 8 ("attached -foo searches for foo") describes
     # a divergence between whoosh-compat and paperless-ngx's live tantivy-based
     # search (not one between whoosh-compat and real whoosh): it does
@@ -345,7 +367,15 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # is a check that's missing for every field/pattern, not just this one
     # corpus line, as the grammar-aware fuzzer confirmed (title:0[0-0]*).
     (
-        re.compile(r"\b\w+:[^\s()]*\[[^\]]*\]\*(?:\s|$|\))"),
+        # The field prefix is optional ((?:\w+:)?): broadened after the
+        # expanded generator's dedicated degenerate/reversed-class atom
+        # (strategies._degenerate_wildcard_atom) produced an *unfielded*,
+        # multifield-expanded instance of this same pattern
+        # ("x[z-a]*", no "field:" text anywhere in the query at all): the
+        # root cause (real whoosh's SPECIAL_CHARS/fold-check omitting "[")
+        # applies identically whether or not the pattern is fielded, and
+        # verified directly against the oracle both ways.
+        re.compile(r"\b(?:\w+:)?[^\s()]*\[[^\]]*\]\*(?:\s|$|\))"),
         "whoosh-bug (DIVERGENCES.md entry 13): Wildcard.normalize() bracket fold drops the character class on a trailing-star pattern",
         DivergenceKind.MISMATCH,
     ),
@@ -487,9 +517,22 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # single-quoted BOOLEAN_EXISTS value that has leading or trailing
     # whitespace inside the quotes; a quoted empty value ("''") is
     # deliberately excluded, since that shape no longer diverges (both
-    # sides now agree it's False) and is compared normally instead.
+    # sides now agree it's False) and is compared normally instead. Field
+    # alternation broadened from "has_tag" only to every registered
+    # BOOLEAN_EXISTS field after the expanded generator's
+    # _bool_exists_quoted_atom (which, unlike the old has_tag-only manual
+    # corpus line, draws from all of BOOL_EXISTS_FIELDS) found the identical
+    # mismatch on "has_correspondent" and confirmed directly it applies
+    # uniformly to has_type/has_custom_fields/has_owner too: the root cause
+    # (term_query's strip-before-check vs BOOLEAN._obj_to_bool's
+    # unstripped-then-bool(qstring) fallback) is the same code path for
+    # every BOOLEAN_EXISTS field, not something specific to has_tag.
     (
-        re.compile(r"\bhas_tag:'\s+\S.*'|\bhas_tag:'.*\S\s+'"),
+        re.compile(
+            r"\b(?:has_correspondent|has_tag|has_type|has_custom_fields|has_owner):"
+            r"'\s+\S.*'|\b(?:has_correspondent|has_tag|has_type|has_custom_fields|has_owner):"
+            r"'.*\S\s+'"
+        ),
         (
             "DIVERGENCES.md entry 33: a whitespace-padded quoted"
             " BOOLEAN_EXISTS value reads False in whoosh-compat (stripped"
@@ -521,6 +564,83 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
             " the whole split AndGroup in whoosh-compat but to each split"
             " term individually in whoosh, since the comma split happens at"
             " parse time here vs. analysis time there"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
+    # design (DIVERGENCES.md entry 37): "release_date" is a date_only field
+    # registered only in ORACLE_REGISTRY (added purely so the generator can
+    # reach "time-bearing value on a date-only field" vocabulary,
+    # strategies._date_only_atom): real v2 whoosh has no date-vs-datetime
+    # distinction and no such field, so every query against it structurally
+    # diverges from the oracle's default-multifield-unknown-field expansion,
+    # the same "whoosh-compat-only concept" shape as entry 14's JSON fields.
+    # Scoped to the field name itself (any value): confirmed directly that a
+    # bare date, a time-bearing bare value, and a time-bearing range all
+    # mismatch identically, since the oracle never recognizes the field at
+    # all regardless of what value follows it.
+    (
+        re.compile(r"\brelease_date:"),
+        (
+            "DIVERGENCES.md entry 37 (design): date_only is a"
+            " whoosh-compat-only concept with no whoosh equivalent; the"
+            " field itself is unregistered on the real v2 whoosh schema"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
+    # whoosh-bug (DIVERGENCES.md entry 38): real whoosh's BOOLEAN field has
+    # no analyzer at all (whoosh.fields.BOOLEAN.__init__ never sets one), but
+    # PhrasePlugin.PhraseNode.query unconditionally tries to tokenize a
+    # double-quoted value through the field's analyzer before building a
+    # Phrase query; confirmed directly that this raises
+    # "<class 'whoosh.fields.BOOLEAN'> field has no analyzer" for *every*
+    # double-quoted value on a BOOLEAN_EXISTS field (empty, valid, padded,
+    # even a pattern-shaped value), not just a specific one. whoosh-compat
+    # has no equivalent crash: a double-quoted value on one of these fields
+    # parses to an ordinary ast.Phrase and is coerced to a boolean at emit
+    # time (visit_phrase), same as documented for entry 8. Not reproduced:
+    # a real whoosh limitation, not intended semantics.
+    (
+        re.compile(r"\b(?:has_correspondent|has_tag|has_type|has_custom_fields|has_owner):\""),
+        (
+            "whoosh-bug (DIVERGENCES.md entry 38): BOOLEAN fields have no"
+            " analyzer in real whoosh, so PhrasePlugin crashes while"
+            " tokenizing any double-quoted value on one; whoosh-compat"
+            " parses it as an ordinary Phrase and coerces at emit time"
+            " instead of reproducing the crash"
+        ),
+        DivergenceKind.ORACLE_ERROR,
+    ),
+    # design (DIVERGENCES.md entry 39, found by the expanded generator's
+    # _numeric_atom): real v2 whoosh's NUMERIC fields all default to
+    # bits=32 (oracle_schema() never passes bits= explicitly), so a value at
+    # or above each field's real 32-bit ceiling silently fails to parse on
+    # the oracle side, while whoosh-compat's U64 kind validates against the
+    # full 64-bit domain (tantivy's actual column type). That ceiling isn't
+    # uniform: asn/num_notes/custom_field_count pass signed=False (real max
+    # 2**32 - 1 = 4294967295), while id/correspondent_id/type_id/path_id/
+    # owner_id/page_count leave signed at its library default of True (real
+    # max only 2**31 - 1 = 2147483647); confirmed directly per field via
+    # _SCHEMA rather than assumed. Scoped to the literal values the
+    # generator actually produces one past each boundary (2**32 for the
+    # unsigned fields, 2**31 for the signed ones), plus 2**64 - 1 (the u64
+    # domain's own ceiling, always out of range regardless of signedness);
+    # confirmed directly that each field's own exact max (4294967295 for the
+    # unsigned three, 2147483647 for the rest) is NOT included here since it
+    # parses identically on both sides.
+    (
+        re.compile(
+            r"\b(?:asn|num_notes|custom_field_count):'?\"?4294967296\b"
+            r"|\b(?:id|correspondent_id|type_id|path_id|owner_id|page_count):"
+            r"'?\"?2147483648\b"
+            r"|\b(?:id|asn|correspondent_id|type_id|path_id|owner_id|num_notes"
+            r"|custom_field_count|page_count):'?\"?18446744073709551615\b"
+        ),
+        (
+            "DIVERGENCES.md entry 39 (design): whoosh-compat's U64 domain is"
+            " the full 64-bit range (tantivy's actual column type); real v2"
+            " whoosh's NUMERIC fields default to bits=32 (and, for most of"
+            " them, signed=True, halving the usable range again) and"
+            " silently fail to parse a value at or above that real ceiling"
         ),
         DivergenceKind.MISMATCH,
     ),
