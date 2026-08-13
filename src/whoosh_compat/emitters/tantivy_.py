@@ -456,37 +456,54 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         escaped = query_text.replace("\\", "\\\\").replace('"', '\\"')
         return self.index.parse_query(f'{full}:"{escaped}"', default_field_names=[spec.name])
 
-    def _term_drop_tokens(self, node: ast.Term) -> list[str] | None:
-        """Tokens ``node`` analyzes to, for the zero-token-drop check only.
+    def _drop_check_tokens(self, field: FieldRef | None, text: object) -> list[str] | None:
+        """Tokens ``text`` (for ``field``) analyzes to, for the zero-token-
+        drop check only. Shared by the ``Term`` and ``Phrase`` branches of
+        ``_node_drops``, since both need the identical answer to "does this
+        field kind participate in analysis-based dropping at all": TEXT and
+        KEYWORD do (plain or JSON subpath), U64/BOOLEAN_EXISTS/DATE never
+        do, matching exactly how ``visit_term``/``_emit_json_term`` and
+        ``visit_phrase``/``_emit_json_phrase`` dispatch on kind (issue #35:
+        the Phrase branch previously skipped this restriction entirely and
+        tokenized every kind, silently dropping e.g. a U64 phrase whose text
+        happened to analyze to nothing under an analyzer shared across
+        kinds, even though standalone emission of the identical node
+        dispatches on kind and never consults those tokens).
 
-        Returns ``None`` when ``node``'s field kind is not subject to the
-        drop policy (its emission should just run normally, including
-        raising for an unresolvable field). Reuses the exact same
-        JSON-subpath resolution and tokenization (``_tokens``) that
-        ``visit_term``/``_emit_json_term`` use, so this is a read-only
-        preview of what emission will do, not a second implementation of it.
+        Returns ``None`` when the field's kind is not subject to the drop
+        policy (its emission should just run normally, including raising
+        for an unresolvable field). Reuses the exact same JSON-subpath
+        resolution and tokenization (``_tokens``) that emission uses, so
+        this is a read-only preview of what emission will do, not a second
+        implementation of it.
+
+        When #14's ``analyze()`` stage lands, this kind-dispatch rule (and
+        the test cases that pin it) needs to carry over into that stage's
+        own tests.
         """
-        if node.field is not None and node.field.json_path is not None:
-            resolved = self.registry.resolve(node.field)
+        if field is not None and field.json_path is not None:
+            resolved = self.registry.resolve(field)
             if resolved is not None:
-                return self._tokens(resolved.spec, node.text)
+                return self._tokens(resolved.spec, text)
             # Not a resolvable JSON subpath (an invalid one, constructed
             # directly rather than by the parser): fall through to
             # ``_resolve`` below, which raises a clear "unknown field"
             # error for it instead of silently treating it as droppable.
-        resolved = self._resolve(node.field)
+        resolved = self._resolve(field)
         if resolved.spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
-            return self._tokens(resolved.spec, node.text)
+            return self._tokens(resolved.spec, text)
         return None
 
     def _node_drops(self, node: ast.Node) -> bool:
         """Whether ``node`` would drop entirely from an enclosing And/Or
         group: a zero-token analyzed TEXT/KEYWORD term (plain or JSON
-        subpath), a zero-token analyzed Phrase, a nested And/Or group whose
-        own children all drop, or any of those under one or more
-        transparent ``Boosted`` layers.
+        subpath), a zero-token analyzed TEXT/KEYWORD phrase (plain or JSON
+        subpath), a nested And/Or group whose own children all drop, or any
+        of those under one or more transparent ``Boosted`` layers. A
+        U64/BOOLEAN_EXISTS/DATE term or phrase never drops via analysis,
+        regardless of whether its field's spec carries an analyzer.
 
-        A pure predicate: it only tokenizes (``_term_drop_tokens``/
+        A pure predicate: it only tokenizes (``_drop_check_tokens``/
         ``_tokens``), never builds a query, so ``_group_child`` can check
         drop-ness without paying for a full, discarded emission of the
         subtree first (issue #6: the previous approach re-emitted every
@@ -499,11 +516,11 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         if isinstance(node, ast.Boosted):
             return self._node_drops(node.child)
         if isinstance(node, ast.Term):
-            tokens = self._term_drop_tokens(node)
+            tokens = self._drop_check_tokens(node.field, node.text)
             return tokens is not None and not tokens
         if isinstance(node, ast.Phrase):
-            resolved = self._resolve(node.field)
-            return not self._tokens(resolved.spec, node.text)
+            tokens = self._drop_check_tokens(node.field, node.text)
+            return tokens is not None and not tokens
         if isinstance(node, (ast.And, ast.Or)):
             return all(self._node_drops(c) for c in node.children)
         return False

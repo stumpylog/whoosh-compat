@@ -608,14 +608,14 @@ def test_json_subpath_phrase_ignores_multitoken_first(tindex: TIndex) -> None:
 
 def test_u64_phrase_drop_check_does_not_apply_text_policy() -> None:
     """issue #35: the group-membership zero-token drop check
-    (_node_drops/_term_drop_tokens) restricts itself to TEXT/KEYWORD for a
-    Term, but its Phrase branch tokenizes with spec.analyzer regardless of
-    field kind. Configuring an analyzer on a U64 spec is explicitly
-    supported (a host may share one FieldSpec factory across kinds), so a
-    double-quoted numeric value whose analyzer happens to consume its text
-    must not be silently dropped from an enclosing And/Or group: standalone
-    emission of the identical node builds a correct term query, and group
-    membership must agree with that.
+    (_node_drops/_drop_check_tokens) restricts itself to TEXT/KEYWORD for a
+    Term, and now (post-fix) also restricts itself for a Phrase, matching
+    how visit_phrase dispatches on kind. Configuring an analyzer on a U64
+    spec is explicitly supported (a host may share one FieldSpec factory
+    across kinds), so a double-quoted numeric value whose analyzer happens
+    to consume its text must not be silently dropped from an enclosing
+    And/Or group: standalone emission of the identical node builds a
+    correct term query, and group membership must agree with that.
     """
     sb = tantivy.SchemaBuilder()
     sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
@@ -654,13 +654,14 @@ def test_u64_phrase_drop_check_does_not_apply_text_policy() -> None:
         "enclosing And as if it were a TEXT/KEYWORD zero-token value"
     )
 
-
-test_u64_phrase_drop_check_does_not_apply_text_policy = pytest.mark.xfail(
-    strict=True,
-    reason="issue #35: _node_drops' Phrase branch tokenizes with spec.analyzer for "
-    "every field kind, unlike its Term counterpart (_term_drop_tokens), which "
-    "restricts the drop policy to TEXT/KEYWORD",
-)(test_u64_phrase_drop_check_does_not_apply_text_policy)
+    standalone = _parse('asn:"0"', registry=reg, default_fields=["content"])
+    assert not standalone.diagnostics
+    standalone_q = emit_(standalone.ast, index=ix, registry=reg)
+    standalone_ids = sorted(s.doc(a)["id"][0] for _, a in s.search(standalone_q, 10).hits)
+    assert standalone_ids == [5], (
+        'asn:"0" emitted standalone must still match doc 5 (asn=0), proving '
+        "emission itself is correct and only group membership was ever in question"
+    )
 
 
 def test_boolean_exists_phrase_in_group_is_not_dropped() -> None:
