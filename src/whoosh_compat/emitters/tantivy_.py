@@ -970,5 +970,19 @@ def emit(
     index: tantivy.Index,
     registry: FieldRegistry,
 ) -> tantivy.Query:
-    """Emit a ``tantivy.Query`` for ``node`` against ``registry``."""
-    return TantivyEmitter(index=index, registry=registry).emit(node)
+    """Emit a ``tantivy.Query`` for ``node`` against ``registry``.
+
+    ``emit()`` always normalizes its input first (``ast.normalize()``); the
+    result reflects the normal form, not necessarily the literal tree passed
+    in. This makes ``emit(t)`` and ``emit(normalize(t))`` agree by
+    construction: a hand-built tree containing a literal empty And/Or group
+    or a ``Nothing()`` sibling used to reach a different matched-document set
+    than its normalized equivalent, because the emitter's own drop-detection
+    and ``normalize()``'s algebra disagreed about what such shapes mean (the
+    parser itself never produces them, since it always normalizes before
+    ``parse()`` returns, so only hand-built ASTs passed straight to
+    ``emit()`` could observe the difference). Normalizing here closes that
+    gap without changing behavior for the ``parse()`` -> ``emit()`` path,
+    since renormalizing an already-normalized tree is a no-op.
+    """
+    return TantivyEmitter(index=index, registry=registry).emit(ast.normalize(node))
