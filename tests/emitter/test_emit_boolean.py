@@ -174,6 +174,51 @@ def test_boolean_exists(
     assert search_ids(tindex[0], q) == expected
 
 
+# -- DIVERGENCES.md entry 33: BOOLEAN_EXISTS truthiness on quoted values ----
+#
+# has_tag:'' (quoted empty) now agrees with real whoosh: both sides fall
+# through to a falsy result (bool("") is False on whoosh's side; an
+# empty-after-strip value is now explicitly falsy on whoosh-compat's).
+#
+# has_tag:'  false  ' and has_tag:'F ' are the *remaining*, intended
+# divergence: real whoosh checks the unstripped lowered text against its
+# trues/falses sets and falls through to bool(qstring) for anything else, so
+# whitespace-padded text that isn't an exact match reads True on whoosh's
+# side (a non-empty string is always truthy). whoosh-compat strips before
+# the membership check, so the same padded text reads False. Plain
+# has_tag:true/has_tag:false controls are unaffected by either change.
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        pytest.param("has_tag:''", [3, 5], id="quoted-empty-agrees-with-whoosh-false"),
+        pytest.param(
+            "has_tag:'  false  '",
+            [3, 5],
+            id="padded-false-diverges-from-whoosh-true",
+        ),
+        pytest.param(
+            "has_tag:'F '",
+            [3, 5],
+            id="padded-true-looking-diverges-from-whoosh-true",
+        ),
+        pytest.param("has_tag:true", [1, 2, 4], id="plain-true-control"),
+        pytest.param("has_tag:false", [3, 5], id="plain-false-control"),
+    ],
+)
+def test_boolean_exists_quoted_truthiness_shapes(
+    tindex: TIndex,
+    ereg: FieldRegistry,
+    parse: Callable[[str], ast.Node],
+    query: str,
+    expected: list[int],
+) -> None:
+    node = parse(query)
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == expected
+
+
 # -- exists checks on a fast JSON field (issue #7) --------------------------
 #
 # A JSON fast field's subpath columns are only checked by exists_query when

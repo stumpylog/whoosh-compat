@@ -290,6 +290,15 @@ def test_bool_word_truthy_check_strips_whitespace(reg: FieldRegistry) -> None:
     assert parse("has_tag:'  yes  '", reg) == ast.Term(field=FieldRef("has_tag"), text=True)
 
 
+def test_bool_word_empty_after_strip_is_falsy(reg: FieldRegistry) -> None:
+    # A quoted empty value strips down to "", which sat outside the falses
+    # tuple ("" not in ("f", "false", "no", "0")) and so read as truthy: the
+    # only shape where whoosh-compat's stripped rule actually disagreed with
+    # whoosh (real whoosh's bool("") fallthrough is also False). Treating an
+    # empty-after-strip value as falsy brings this case into agreement.
+    assert parse("has_tag:''", reg) == ast.Term(field=FieldRef("has_tag"), text=False)
+
+
 def test_json_subpath(reg: FieldRegistry) -> None:
     assert parse("notes.user:alice", reg) == ast.Term(field=FieldRef("notes", "user"), text="alice")
 

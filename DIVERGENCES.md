@@ -897,3 +897,45 @@ parse-then-emit pipeline).
     `test_date_only_same_day_range_times_on_both_ends_matches`, and
     `test_date_only_noon_and_3pm_consistently_match_their_day` (result-level,
     real tantivy searches asserting doc-id sets).
+
+33. **A whitespace-padded quoted value on a BOOLEAN_EXISTS field reads False
+    in whoosh-compat but True in real whoosh (design, not reproduced).**
+    Real whoosh's `BOOLEAN._obj_to_bool` checks the *unstripped* lowered
+    query text against its `trues`/`falses` frozensets
+    (`t true yes 1` / `f false no 0`) and, for anything that doesn't match
+    exactly, falls through to plain `bool(qstring)`: any non-empty string is
+    truthy under that fallthrough, so a padded value like
+    `has_tag:'  false  '` or `has_tag:'F '` (whitespace after the `f`, so
+    the lowered text isn't exactly `"f"`) reads True on the real-whoosh
+    side, confirmed directly against the oracle. `QueryParser.term_query`'s
+    BOOLEAN_EXISTS branch (`parser/default.py`) strips and lowercases the
+    text before the same membership check, so identical padded text reads
+    False on whoosh-compat's side instead: stripping first was chosen so a
+    hand-typed value with incidental leading/trailing whitespace behaves
+    the same as its trimmed form, which is judged the more predictable
+    reading for a boolean-shaped field, not something worth chasing parity
+    on. The emitter's `_is_truthy` (`emitters/tantivy_.py`) applies the
+    identical stripped rule, since a hand-built `ast.Term` that bypasses the
+    parser must agree with whatever the parser would have produced for the
+    same text (a pre-existing invariant, not new here).
+
+    A quoted *empty* value (`has_tag:''`) is not part of this divergence:
+    stripping an empty string still yields an empty string, and an
+    empty-after-strip value is now explicitly treated as falsy on both
+    sides of whoosh-compat, which agrees with real whoosh's own
+    `bool("")` fallthrough (also False). Before this, whoosh-compat's rule
+    read `has_tag:''` as True (empty string is `not in` the falses tuple),
+    which was a genuine bug, not an intended divergence; it is now fixed
+    and compared normally against the oracle rather than allowlisted.
+
+    Test references: `tests/test_parser_fields.py`'s
+    `test_bool_word_truthy_check_strips_whitespace` and
+    `test_bool_word_empty_after_strip_is_falsy`;
+    `tests/emitter/test_emit_terms.py`'s
+    `test_boolean_exists_raw_string_text`;
+    `tests/emitter/test_emit_boolean.py`'s
+    `test_boolean_exists_quoted_truthiness_shapes` (result-level, real
+    tantivy searches asserting doc-id sets, covering the quoted-empty,
+    padded-false, padded-true-looking, and plain true/false control
+    shapes); `tests/differential/allowlist.py`'s matching entry and
+    `tests/differential/corpus_docs.txt`'s padded-value lines.

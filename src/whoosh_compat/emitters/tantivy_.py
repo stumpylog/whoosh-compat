@@ -46,14 +46,16 @@ def _is_truthy(value: object) -> bool:
     """Truthiness for BOOLEAN_EXISTS term text.
 
     Mirrors the parser's own coercion rule (``parser/default.py``): the
-    strings ``f``/``false``/``no``/``0`` (case-insensitive) are falsy,
-    everything else is truthy. By the time a ``Term`` reaches this emitter
-    its text has usually already been coerced to ``bool`` by the parser, but
-    this function also accepts a raw string so directly-constructed AST
-    nodes (as used in tests) behave the same way.
+    strings ``f``/``false``/``no``/``0`` (case-insensitive) are falsy, an
+    empty string (after stripping) is also falsy, and everything else is
+    truthy. By the time a ``Term`` reaches this emitter its text has usually
+    already been coerced to ``bool`` by the parser, but this function also
+    accepts a raw string so directly-constructed AST nodes (as used in
+    tests) behave the same way.
     """
     if isinstance(value, str):
-        return value.strip().lower() not in _FALSY_TEXT
+        stripped = value.strip().lower()
+        return bool(stripped) and stripped not in _FALSY_TEXT
     return bool(value)
 
 

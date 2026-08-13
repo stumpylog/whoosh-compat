@@ -388,6 +388,24 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " is dropped on whoosh's"
         ),
     ),
+    # design (DIVERGENCES.md entry 33): a whitespace-padded quoted value on a
+    # BOOLEAN_EXISTS field reads False in whoosh-compat (strips before the
+    # trues/falses membership check) but True in real whoosh
+    # (BOOLEAN._obj_to_bool checks the *unstripped* text, then falls through
+    # to bool(qstring), which is True for any non-empty string). Scoped to a
+    # single-quoted BOOLEAN_EXISTS value that has leading or trailing
+    # whitespace inside the quotes; a quoted empty value ("''") is
+    # deliberately excluded, since that shape no longer diverges (both
+    # sides now agree it's False) and is compared normally instead.
+    (
+        re.compile(r"\bhas_tag:'\s+\S.*'|\bhas_tag:'.*\S\s+'"),
+        (
+            "DIVERGENCES.md entry 33: a whitespace-padded quoted"
+            " BOOLEAN_EXISTS value reads False in whoosh-compat (stripped"
+            " before the trues/falses check) but True in whoosh"
+            " (unstripped check falls through to bool(qstring))"
+        ),
+    ),
 ]
 
 

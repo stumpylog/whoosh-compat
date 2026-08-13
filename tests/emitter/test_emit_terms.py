@@ -144,6 +144,8 @@ def test_zero_token_term_dropped_through_boosted_parsed(
         pytest.param("0", [3, 5], id="str-zero-is-falsy"),
         pytest.param("YES", [1, 2, 4], id="str-yes-is-truthy-case-insensitive"),
         pytest.param("  false  ", [3, 5], id="str-falsy-strips-whitespace"),
+        pytest.param("", [3, 5], id="str-empty-after-strip-is-falsy"),
+        pytest.param("   ", [3, 5], id="str-whitespace-only-is-falsy"),
     ],
 )
 def test_boolean_exists_raw_string_text(

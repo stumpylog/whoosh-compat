@@ -23,6 +23,7 @@ shopname product1
 Wär*
 tag:foo,bar
 has_tag:false
+has_tag:''
 -foo
 
 # --- issue #10: empty groups are dropped at parse time rather than
@@ -109,3 +110,11 @@ tag:steuer AND tag:valentin AND (title:*2025 OR (NOT title:*202[0-3] AND NOT tit
 # tests/emitter/test_acceptance_e2e.py for the same bug demonstrated at the
 # search-result level.
 title:202[0-3]*
+
+# --- KNOWN DIVERGENCE (design, allowlist.py): a whitespace-padded quoted
+# BOOLEAN_EXISTS value (DIVERGENCES.md entry 33). Real whoosh's unstripped
+# trues/falses check falls through to bool(qstring), True for any non-empty
+# string; whoosh-compat strips before the same check, so identical padded
+# text reads False instead.
+has_tag:'  false  '
+has_tag:'F '
