@@ -18,6 +18,7 @@ uv sync --group dev              # install (uv-managed; the venv is .venv)
 uv run ruff check .              # lint
 uv run ruff format --check .     # format check (parser/ forks are excluded, see pyproject)
 uv run mypy src                  # type check
+uv run mypy tests                # type check the test suite
 uv run pytest tests              # full suite
 uv run pytest tests --cov --cov-branch --cov-report=term-missing
 

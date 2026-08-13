@@ -9,6 +9,8 @@ only. These tests exercise both branches (whichever the installed tantivy-py
 actually supports) plus, explicitly, the escaping-fallback code path.
 """
 
+from collections.abc import Callable
+
 import pytest
 
 from whoosh_compat import ast
@@ -20,6 +22,7 @@ from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 from whoosh_compat.fields import Multitoken
 
+from .conftest import TIndex
 from .conftest import emit_ast
 from .conftest import search_ids
 
@@ -34,18 +37,22 @@ from .conftest import search_ids
         pytest.param('a"b\\c', [5], id="quote-and-backslash-round-trip"),
     ],
 )
-def test_json_subpath_term(tindex, ereg, text, expected):
+def test_json_subpath_term(
+    tindex: TIndex, ereg: FieldRegistry, text: str, expected: list[int]
+) -> None:
     node = ast.Term(field=FieldRef("notes", "user"), text=text)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
 
-def test_json_subpath_term_parsed(tindex, ereg, parse):
+def test_json_subpath_term_parsed(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
     q = emit_ast(parse("notes.user:alice"), tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_json_subpath_term_as_group_child(tindex, ereg):
+def test_json_subpath_term_as_group_child(tindex: TIndex, ereg: FieldRegistry) -> None:
     # Regression: a JSON subpath term as a direct child of an And group used
     # to raise QueryEmitError("unknown field 'notes.user'") because
     # _group_child called self._resolve(child.field) directly instead of
@@ -61,7 +68,9 @@ def test_json_subpath_term_as_group_child(tindex, ereg):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_json_subpath_zero_token_term_dropped_as_group_child(tindex, ereg):
+def test_json_subpath_zero_token_term_dropped_as_group_child(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     # The zero-token drop policy must apply to JSON subpath terms exactly
     # like ordinary TEXT/KEYWORD terms: a JSON subpath term that analyzes to
     # zero tokens is dropped from the enclosing group rather than raising or
@@ -76,7 +85,7 @@ def test_json_subpath_zero_token_term_dropped_as_group_child(tindex, ereg):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_json_subpath_multitoken_and(tindex, ereg):
+def test_json_subpath_multitoken_and(tindex: TIndex, ereg: FieldRegistry) -> None:
     # A JSON subpath value that analyzes to multiple tokens must follow the
     # same multitoken policy as TEXT fields: emit_json's term_query path
     # reuses _text_term_query rather than duplicating its handling (see
@@ -88,7 +97,9 @@ def test_json_subpath_multitoken_and(tindex, ereg):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_json_subpath_matches_index_parse_query_directly(tindex, ereg):
+def test_json_subpath_matches_index_parse_query_directly(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     # Parity: emitting notes.user:alice must find exactly what a hand-rolled
     # index.parse_query call for the same subpath finds, regardless of
     # whether the emitter took the term_query or parse_query branch.
@@ -99,13 +110,15 @@ def test_json_subpath_matches_index_parse_query_directly(tindex, ereg):
     assert search_ids(index, q) == search_ids(index, reference)
 
 
-def test_json_subpath_zero_tokens_matches_nothing(tindex, ereg):
+def test_json_subpath_zero_tokens_matches_nothing(tindex: TIndex, ereg: FieldRegistry) -> None:
     node = ast.Term(field=FieldRef("notes", "user"), text="")
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == []
 
 
-def test_dotted_field_that_is_not_a_json_subpath_falls_back_to_resolve(tindex, ereg):
+def test_dotted_field_that_is_not_a_json_subpath_falls_back_to_resolve(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     # visit_term's `if resolved is not None` skip branch: a field name
     # containing "." that resolve_json() doesn't recognize (unlike
     # test_json_subpath_unknown_subpath_falls_back_to_plain_field, this
@@ -116,7 +129,7 @@ def test_dotted_field_that_is_not_a_json_subpath_falls_back_to_resolve(tindex, e
         emit_ast(node, tindex, ereg)
 
 
-def test_json_subpath_parse_query_fallback_honors_multitoken_first(tindex):
+def test_json_subpath_parse_query_fallback_honors_multitoken_first(tindex: TIndex) -> None:
     # Regression: the older-tantivy JSON fallback (index.parse_query) used
     # to discard the analyzed tokens entirely and quote the raw text
     # verbatim, ignoring the field's configured Multitoken policy. With
@@ -140,7 +153,7 @@ def test_json_subpath_parse_query_fallback_honors_multitoken_first(tindex):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_json_paths_supported_false_when_no_json_field_registered(tindex):
+def test_json_paths_supported_false_when_no_json_field_registered(tindex: TIndex) -> None:
     # _json_paths_supported()'s probe loop finds no JSON+subpaths field, so
     # probe_path stays None and the result is cached as False without ever
     # calling tantivy.Query.term_query.
@@ -149,7 +162,7 @@ def test_json_paths_supported_false_when_no_json_field_registered(tindex):
     assert emitter._json_paths_supported() is False
 
 
-def test_json_paths_supported_is_cached_across_calls(tindex, ereg):
+def test_json_paths_supported_is_cached_across_calls(tindex: TIndex, ereg: FieldRegistry) -> None:
     # Second call on the same emitter instance hits the cached-result branch
     # (`if self._json_paths_ok is None` is False the second time) instead of
     # re-probing.
@@ -159,7 +172,9 @@ def test_json_paths_supported_is_cached_across_calls(tindex, ereg):
     assert first == second
 
 
-def test_json_subpath_unknown_subpath_falls_back_to_plain_field(tindex, ereg, parse):
+def test_json_subpath_unknown_subpath_falls_back_to_plain_field(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
     # "notes.bogus" isn't in the registry's subpaths for "notes": the
     # FieldsPlugin/registry demote it back to an unfielded term against the
     # default field, same as whoosh treats any other unknown field.

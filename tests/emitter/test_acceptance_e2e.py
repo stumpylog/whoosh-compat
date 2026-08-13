@@ -46,6 +46,7 @@ from whoosh.fields import NUMERIC
 from whoosh.fields import TEXT
 from whoosh.fields import Schema
 from whoosh.filedb.filestore import RamStorage
+from whoosh.index import Index as WhooshIndex
 from whoosh.lang.porter import stem as porter_stem
 from whoosh.qparser import QueryParser
 from whoosh.support.charset import accent_map
@@ -59,6 +60,7 @@ from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 
+from .conftest import TIndex
 from .conftest import lower_fold
 from .conftest import search_ids
 from .conftest import whoosh_search_ids
@@ -81,7 +83,13 @@ BASE = datetime(2020, 4, 15, 10, 30, tzinfo=BERLIN)
 DEFAULT_FIELDS = ["content", "title", "tag"]
 
 
-def tantivy_search_ids(tindex, ereg, q, basedate=BASE, tz=BERLIN):
+def tantivy_search_ids(
+    tindex: TIndex,
+    ereg: FieldRegistry,
+    q: str,
+    basedate: datetime = BASE,
+    tz: ZoneInfo = BERLIN,
+) -> list[int]:
     """The tantivy-side counterpart of ``whoosh_search_ids``: parse ``q``
     with whoosh-compat, emit a ``tantivy.Query``, and search ``tindex``.
     """
@@ -125,9 +133,12 @@ _SCENARIO_WORDS = [
 ]
 
 
-def test_00_analyzer_parity_precondition(ereg):
+def test_00_analyzer_parity_precondition(ereg: FieldRegistry) -> None:
     whoosh_analyzer = StandardAnalyzer()
-    our_analyzer = ereg.resolve(FieldRef("content")).analyzer
+    spec = ereg.resolve(FieldRef("content"))
+    assert spec is not None
+    assert spec.analyzer is not None
+    our_analyzer = spec.analyzer
     for word in _SCENARIO_WORDS:
         whoosh_tokens = [t.text for t in whoosh_analyzer(word)]
         our_tokens = our_analyzer(word)
@@ -208,7 +219,9 @@ SCENARIOS_EQUAL = [
 
 
 @pytest.mark.parametrize(("q", "expected"), SCENARIOS_EQUAL)
-def test_scenario_equal(windex, tindex, ereg, q, expected):
+def test_scenario_equal(
+    windex: WhooshIndex, tindex: TIndex, ereg: FieldRegistry, q: str, expected: list[int]
+) -> None:
     assert whoosh_search_ids(windex, q, BASE, BERLIN) == expected
     assert tantivy_search_ids(tindex, ereg, q) == expected
 
@@ -219,7 +232,9 @@ def test_scenario_equal(windex, tindex, ereg, q, expected):
 # ---------------------------------------------------------------------------
 
 
-def test_created_previous_month_unquoted_is_a_documented_divergence(windex, tindex, ereg):
+def test_created_previous_month_unquoted_is_a_documented_divergence(
+    windex: WhooshIndex, tindex: TIndex, ereg: FieldRegistry
+) -> None:
     """design (allowlist.py): an *unquoted* multi-word natural-date keyword
      needs paperless-ngx's app-level ``rewrite_natural_date_keywords`` string
      rewrite (which the oracle harness replicates, ``oracle._rewrite_natural_date_keywords``)
@@ -238,7 +253,9 @@ def test_created_previous_month_unquoted_is_a_documented_divergence(windex, tind
         emit_(result.ast, index=tindex[0], registry=ereg)
 
 
-def test_notes_user_json_subpath_has_no_v2_analogue(windex, tindex, ereg):
+def test_notes_user_json_subpath_has_no_v2_analogue(
+    windex: WhooshIndex, tindex: TIndex, ereg: FieldRegistry
+) -> None:
     """design (DIVERGENCES JSON-subpath entry): ``notes.user:`` is a
     whoosh-compat-only JSON dotted-path concept
     (:meth:`FieldRegistry.resolve_json`). Real whoosh has no JSON field type
@@ -303,7 +320,7 @@ DOCS_13568 = [
 
 
 @pytest.fixture(scope="module")
-def windex_13568():
+def windex_13568() -> WhooshIndex:
     schema = oracle_schema()
     ix = RamStorage().create_index(schema)
     w = ix.writer()
@@ -321,7 +338,7 @@ def windex_13568():
 
 
 @pytest.fixture(scope="module")
-def tindex_13568():
+def tindex_13568() -> TIndex:
     sb = tantivy.SchemaBuilder()
     sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
     sb.add_text_field("title", stored=True)
@@ -346,7 +363,7 @@ def tindex_13568():
 
 
 @pytest.fixture
-def ereg_13568():
+def ereg_13568() -> FieldRegistry:
     return FieldRegistry(
         [
             FieldSpec("title", FieldKind.TEXT, analyzer=lower_fold, pattern_normalizer=str.lower),
@@ -363,7 +380,9 @@ def ereg_13568():
     )
 
 
-def test_issue_13568_acceptance(windex_13568, tindex_13568, ereg_13568):
+def test_issue_13568_acceptance(
+    windex_13568: WhooshIndex, tindex_13568: TIndex, ereg_13568: FieldRegistry
+) -> None:
     expected = [1, 3]
     assert whoosh_search_ids(windex_13568, ISSUE_13568_QUERY, BASE, BERLIN) == expected
 
@@ -429,8 +448,11 @@ DOCS_STEM = [
 ]
 
 
+WhooshStemIndex = tuple[WhooshIndex, Schema]
+
+
 @pytest.fixture(scope="module")
-def windex_stem():
+def windex_stem() -> WhooshStemIndex:
     analyzer = StemmingAnalyzer() | CharsetFilter(accent_map)
     schema = Schema(id=NUMERIC(stored=True, unique=True), content=TEXT(analyzer=analyzer))
     ix = RamStorage().create_index(schema)
@@ -441,7 +463,7 @@ def windex_stem():
     return ix, schema
 
 
-def _windex_stem_ids(windex_stem, q_str):
+def _windex_stem_ids(windex_stem: WhooshStemIndex, q_str: str) -> list[int]:
     ix, schema = windex_stem
     q = QueryParser("content", schema).parse(q_str)
     with ix.searcher() as s:
@@ -449,7 +471,7 @@ def _windex_stem_ids(windex_stem, q_str):
 
 
 @pytest.fixture(scope="module")
-def tindex_stem():
+def tindex_stem() -> TIndex:
     sb = tantivy.SchemaBuilder()
     sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
     sb.add_text_field("content", stored=True)
@@ -473,7 +495,7 @@ def tindex_stem():
 
 
 @pytest.fixture
-def ereg_stem():
+def ereg_stem() -> FieldRegistry:
     return FieldRegistry(
         [
             FieldSpec(
@@ -486,13 +508,15 @@ def ereg_stem():
     )
 
 
-def _tindex_stem_ids(tindex_stem, ereg_stem, q_str):
+def _tindex_stem_ids(tindex_stem: TIndex, ereg_stem: FieldRegistry, q_str: str) -> list[int]:
     result = wc_parse(q_str, registry=ereg_stem, default_fields=["content"])
     query = emit_(result.ast, index=tindex_stem[0], registry=ereg_stem)
     return search_ids(tindex_stem[0], query)
 
 
-def test_stemming_term_query_matches_other_inflected_forms(windex_stem, tindex_stem, ereg_stem):
+def test_stemming_term_query_matches_other_inflected_forms(
+    windex_stem: WhooshStemIndex, tindex_stem: TIndex, ereg_stem: FieldRegistry
+) -> None:
     # "jumping" stems to "jump", matching docs 1 ("jumping") and 2 ("jumps"),
     # both of which also stem to "jump": proof point 1: stemmed term
     # queries match other morphological forms of the same word.
@@ -502,7 +526,9 @@ def test_stemming_term_query_matches_other_inflected_forms(windex_stem, tindex_s
     assert _tindex_stem_ids(tindex_stem, ereg_stem, q) == expected
 
 
-def test_folded_wildcard_matches_diacritic_variant(windex_stem, tindex_stem, ereg_stem):
+def test_folded_wildcard_matches_diacritic_variant(
+    windex_stem: WhooshStemIndex, tindex_stem: TIndex, ereg_stem: FieldRegistry
+) -> None:
     # pattern_normalizer folds "Wär" -> "war" (character-level only, no
     # stemming attempted on a wildcard fragment): proof point 2: folded
     # wildcard matches.
@@ -512,7 +538,9 @@ def test_folded_wildcard_matches_diacritic_variant(windex_stem, tindex_stem, ere
     assert _tindex_stem_ids(tindex_stem, ereg_stem, q) == expected
 
 
-def test_stemmed_wildcard_caveat_diverges(windex_stem, tindex_stem, ereg_stem):
+def test_stemmed_wildcard_caveat_diverges(
+    windex_stem: WhooshStemIndex, tindex_stem: TIndex, ereg_stem: FieldRegistry
+) -> None:
     """Proof point 3: a wildcard over a stemmed index matches INDEX TOKENS,
     not surface forms: querying "running*" can miss a doc whose token was
     stemmed down to something that isn't a prefix match for the literal

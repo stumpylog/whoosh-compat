@@ -166,7 +166,7 @@ def test_single_quote_tagger_marks_is_quoted() -> None:
     node = tagger.match(None, "'foo,bar'", 0)
     assert isinstance(node, syntax.WordNode)
     assert node.text == "foo,bar"
-    assert node.is_quoted is True
+    assert getattr(node, "is_quoted", False) is True
 
 
 def test_word_node_default_is_not_quoted() -> None:
@@ -308,7 +308,7 @@ def test_comma_values_splits_unquoted_field(registry: FieldRegistry) -> None:
     assert len(result) == 1
     sub = result[0]
     assert isinstance(sub, syntax.AndGroup)
-    assert [n.text for n in sub] == ["foo", "bar"]
+    assert [n.text for n in sub] == ["foo", "bar"]  # type: ignore[attr-defined]
     assert all(n.fieldname == "tag" for n in sub)
 
 

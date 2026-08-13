@@ -1,7 +1,9 @@
 from datetime import datetime
+from typing import Any
 
 import pytest
 
+from whoosh_compat.parser.times import DateLike
 from whoosh_compat.parser.times import TimeError
 from whoosh_compat.parser.times import adatetime
 from whoosh_compat.parser.times import ceil
@@ -16,13 +18,13 @@ from whoosh_compat.parser.times import relative_days
 from whoosh_compat.parser.times import timespan
 
 
-def test_adatetime_floor_ceil():
+def test_adatetime_floor_ceil() -> None:
     at = adatetime(year=2020, month=3)
     assert at.floor() == datetime(2020, 3, 1, 0, 0, 0, 0)
     assert at.ceil() == datetime(2020, 3, 31, 23, 59, 59, 999999)
 
 
-def test_timespan_disambiguate():
+def test_timespan_disambiguate() -> None:
     ts = timespan(adatetime(year=2020), adatetime(year=2021))
     ts = ts.disambiguated(datetime(2026, 8, 4))
     assert ts.start == datetime(2020, 1, 1, 0, 0, 0, 0)
@@ -37,7 +39,7 @@ def test_timespan_disambiguate():
         pytest.param(2, 2, -1, -7, id="same-weekday-last-wraps-a-week"),
     ],
 )
-def test_relative_days(current_wday, wday, dir, expected):
+def test_relative_days(current_wday: int, wday: int, dir: int, expected: int) -> None:
     assert relative_days(current_wday, wday, dir) == expected
 
 
@@ -66,30 +68,30 @@ def test_relative_days(current_wday, wday, dir, expected):
         ),
     ],
 )
-def test_adatetime_invalid_components_raise(kwargs, message):
+def test_adatetime_invalid_components_raise(kwargs: dict[str, int], message: str) -> None:
     with pytest.raises(TimeError, match=message):
         adatetime(**kwargs)
 
 
-def test_adatetime_eq_against_datetime():
+def test_adatetime_eq_against_datetime() -> None:
     fully_specified = adatetime(2020, 3, 4, 5, 6, 7, 8)
     assert fully_specified == datetime(2020, 3, 4, 5, 6, 7, 8)
     assert adatetime(year=2020) != datetime(2020, 3, 4, 5, 6, 7, 8)
     assert adatetime(year=2020) != "not a date"
 
 
-def test_adatetime_repr_and_tuple():
+def test_adatetime_repr_and_tuple() -> None:
     at = adatetime(year=2020, month=3, day=4)
     assert at.tuple() == (2020, 3, 4, None, None, None, None)
     assert repr(at) == "adatetime(2020, 3, 4, None, None, None, None)"
 
 
-def test_adatetime_date():
+def test_adatetime_date() -> None:
     at = adatetime(year=2020, month=3, day=4)
     assert at.date() == datetime(2020, 3, 4).date()
 
 
-def test_adatetime_copy_is_independent():
+def test_adatetime_copy_is_independent() -> None:
     at = adatetime(year=2020, month=3)
     copied = at.copy()
     copied.month = 9
@@ -97,25 +99,25 @@ def test_adatetime_copy_is_independent():
     assert copied.month == 9
 
 
-def test_adatetime_replace():
+def test_adatetime_replace() -> None:
     at = adatetime(year=2009, month=10, day=31)
     replaced = at.replace(year=2010)
     assert replaced.tuple() == (2010, 10, 31, None, None, None, None)
     assert at.year == 2009  # original untouched
 
 
-def test_adatetime_replace_unknown_key_raises():
+def test_adatetime_replace_unknown_key_raises() -> None:
     at = adatetime(year=2009)
     with pytest.raises(KeyError):
         at.replace(century=20)
 
 
-def test_adatetime_eq_same_class():
+def test_adatetime_eq_same_class() -> None:
     assert adatetime(year=2020, month=3) == adatetime(year=2020, month=3)
     assert adatetime(year=2020, month=3) != adatetime(year=2020, month=4)
 
 
-def test_adatetime_floor_ceil_all_fields_specified():
+def test_adatetime_floor_ceil_all_fields_specified() -> None:
     # Exercises the branches where each unit is already non-None (no
     # default substitution needed) for both floor() and ceil().
     at = adatetime(2020, 3, 4, 5, 6, 7, 8)
@@ -123,7 +125,7 @@ def test_adatetime_floor_ceil_all_fields_specified():
     assert at.ceil() == datetime(2020, 3, 4, 5, 6, 7, 8)
 
 
-def test_adatetime_floor_ceil_no_year_raises():
+def test_adatetime_floor_ceil_no_year_raises() -> None:
     at = adatetime(month=3, day=4)
     with pytest.raises(ValueError, match="Date has no year"):
         at.floor()
@@ -131,13 +133,13 @@ def test_adatetime_floor_ceil_no_year_raises():
         at.ceil()
 
 
-def test_adatetime_disambiguated_fully_specified_returns_datetime():
+def test_adatetime_disambiguated_fully_specified_returns_datetime() -> None:
     at = adatetime(2020, 3, 4, 5, 6, 7, 8)
     result = at.disambiguated(datetime(2026, 1, 1))
     assert result == datetime(2020, 3, 4, 5, 6, 7, 8)
 
 
-def test_adatetime_disambiguated_ambiguous_returns_timespan():
+def test_adatetime_disambiguated_ambiguous_returns_timespan() -> None:
     at = adatetime(year=2020, month=3)
     result = at.disambiguated(datetime(2026, 1, 1))
     assert isinstance(result, timespan)
@@ -152,12 +154,12 @@ def test_adatetime_disambiguated_ambiguous_returns_timespan():
         pytest.param(datetime(2020, 1, 1), "not-a-date", id="bad-end"),
     ],
 )
-def test_timespan_init_rejects_non_datetime(start, end):
+def test_timespan_init_rejects_non_datetime(start: Any, end: Any) -> None:
     with pytest.raises(TimeError):
         timespan(start, end)
 
 
-def test_timespan_eq_and_repr():
+def test_timespan_eq_and_repr() -> None:
     a = timespan(datetime(2020, 1, 1), datetime(2020, 1, 2))
     b = timespan(datetime(2020, 1, 1), datetime(2020, 1, 2))
     assert a == b
@@ -167,7 +169,7 @@ def test_timespan_eq_and_repr():
     )
 
 
-def test_timespan_disambiguate_time_only_uses_basedate():
+def test_timespan_disambiguate_time_only_uses_basedate() -> None:
     # Both sides have no date component ("3am to 5pm"), so basedate supplies
     # year/month/day for each side (times.py:301-306).
     start = adatetime(hour=3)
@@ -177,7 +179,7 @@ def test_timespan_disambiguate_time_only_uses_basedate():
     assert ts.end.date() == datetime(2026, 8, 4).date()
 
 
-def test_timespan_disambiguate_no_year_either_side_uses_basedate_year():
+def test_timespan_disambiguate_no_year_either_side_uses_basedate_year() -> None:
     # Neither side has a year, but at least one has a month/day so
     # has_no_date() is False: both years fall back to the basedate
     # (times.py:314-316).
@@ -186,7 +188,7 @@ def test_timespan_disambiguate_no_year_either_side_uses_basedate_year():
     assert ts.end.year == 2026
 
 
-def test_timespan_disambiguate_end_year_missing_uses_max_of_start_and_basedate_year():
+def test_timespan_disambiguate_end_year_missing_uses_max_of_start_and_basedate_year() -> None:
     # end.year = max(start.year, basedate.year) (times.py:320-321).
     ts = timespan(adatetime(year=2020, month=1), adatetime(month=6)).disambiguated(
         datetime(2026, 1, 1)
@@ -195,14 +197,14 @@ def test_timespan_disambiguate_end_year_missing_uses_max_of_start_and_basedate_y
     assert ts.end.year == 2026
 
 
-def test_timespan_disambiguate_start_year_missing_uses_end_year():
+def test_timespan_disambiguate_start_year_missing_uses_end_year() -> None:
     ts = timespan(adatetime(month=1), adatetime(year=2020, month=6)).disambiguated(
         datetime(2026, 1, 1)
     )
     assert ts.start.year == 2020
 
 
-def test_timespan_disambiguate_end_dm_copied_to_start():
+def test_timespan_disambiguate_end_dm_copied_to_start() -> None:
     # End has month/day, start doesn't, and start's time-of-day isn't after
     # end's: so start borrows end's month/day (times.py:342-344).
     ts = timespan(
@@ -212,7 +214,7 @@ def test_timespan_disambiguate_end_dm_copied_to_start():
     assert ts.start.day == 15
 
 
-def test_timespan_disambiguate_end_dm_falls_back_to_basedate_when_time_inverted():
+def test_timespan_disambiguate_end_dm_falls_back_to_basedate_when_time_inverted() -> None:
     # End has month/day, start doesn't, but start's time is later than end's
     #: so start falls back to the basedate's month/day (times.py:339-341).
     ts = timespan(
@@ -222,7 +224,7 @@ def test_timespan_disambiguate_end_dm_falls_back_to_basedate_when_time_inverted(
     assert ts.start.day == 9
 
 
-def test_timespan_disambiguate_start_dm_copied_to_end_uses_basedate():
+def test_timespan_disambiguate_start_dm_copied_to_end_uses_basedate() -> None:
     # Start has month/day, end doesn't: end borrows the basedate's
     # month/day (times.py:345-347). Basedate shares start's month/day so the
     # resulting order stays start <= end and no swap kicks in.
@@ -233,40 +235,53 @@ def test_timespan_disambiguate_start_dm_copied_to_end_uses_basedate():
     assert ts.end.day == 9
 
 
-def test_timespan_disambiguate_swaps_out_of_order_explicit_years():
+def test_timespan_disambiguate_swaps_out_of_order_explicit_years() -> None:
     # Both years explicit but start > end: swap rather than shift a year.
     ts = timespan(adatetime(year=2021, month=1), adatetime(year=2020, month=6)).disambiguated(
         datetime(2026, 1, 1)
     )
+    # disambiguated() always fully concretizes both sides to real datetimes
+    # (never leaves an ambiguous adatetime); the isinstance asserts prove
+    # that here and let the ordering comparisons below type-check (adatetime
+    # has no ordering operators at all, so `DateLike < DateLike` can't be
+    # verified statically without narrowing first).
+    assert isinstance(ts.start, datetime)
+    assert isinstance(ts.end, datetime)
     assert ts.start < ts.end
 
 
-def test_timespan_disambiguate_reduces_ambiguous_start_year():
+def test_timespan_disambiguate_reduces_ambiguous_start_year() -> None:
     ts = timespan(adatetime(month=11), adatetime(year=2020, month=1)).disambiguated(
         datetime(2026, 1, 1)
     )
+    assert isinstance(ts.start, datetime)
+    assert isinstance(ts.end, datetime)
     assert ts.start <= ts.end
 
 
-def test_timespan_disambiguate_increases_ambiguous_end_year():
+def test_timespan_disambiguate_increases_ambiguous_end_year() -> None:
     ts = timespan(adatetime(year=2020, month=11), adatetime(month=1)).disambiguated(
         datetime(2026, 1, 1)
     )
+    assert isinstance(ts.start, datetime)
+    assert isinstance(ts.end, datetime)
     assert ts.start <= ts.end
 
 
-def test_timespan_disambiguate_increases_ambiguous_end_year_past_start():
+def test_timespan_disambiguate_increases_ambiguous_end_year_past_start() -> None:
     # end.year is ambiguous and gets filled to start.year via max(), but the
     # resulting month/day still puts end before start: so end.year is
     # bumped by one more (times.py:360-361), not swapped.
     ts = timespan(adatetime(year=2025, month=6, day=1), adatetime(month=1, day=1)).disambiguated(
         datetime(2020, 1, 1)
     )
+    assert isinstance(ts.start, datetime)
+    assert isinstance(ts.end, datetime)
     assert ts.start < ts.end
     assert ts.end.year == 2026
 
 
-def test_timespan_disambiguate_same_day_end_time_before_start_rolls_over():
+def test_timespan_disambiguate_same_day_end_time_before_start_rolls_over() -> None:
     # "3pm to 5am" on the same disambiguated day should push the end to the
     # next day (times.py:369-371).
     ts = timespan(adatetime(hour=15), adatetime(hour=5)).disambiguated(datetime(2026, 8, 4))
@@ -279,24 +294,28 @@ def test_timespan_disambiguate_same_day_end_time_before_start_rolls_over():
         pytest.param(datetime(2020, 1, 1), True, id="datetime-passthrough-floor"),
     ],
 )
-def test_floor_ceil_passthrough_for_datetime(value, expected):
+def test_floor_ceil_passthrough_for_datetime(value: datetime, expected: bool) -> None:
     assert floor(value) is value
     assert ceil(value) is value
 
 
-def test_fill_in_datetime_passthrough():
+def test_fill_in_datetime_passthrough() -> None:
     dt = datetime(2020, 1, 1)
     assert fill_in(dt, datetime(2026, 1, 1)) is dt
 
 
-def test_fill_in_timespan_basedate_passthrough():
+def test_fill_in_timespan_basedate_passthrough() -> None:
     # A handful of grammar elements ("previous week"/"previous quarter")
     # resolve to an already-disambiguated timespan used as the basedate.
     ts = timespan(datetime(2020, 1, 1), datetime(2020, 1, 7))
-    assert fill_in(adatetime(year=2021), ts) is ts
+    # fill_in's own implementation explicitly special-cases a timespan
+    # basedate (see its docstring), even though its declared basedate type
+    # is the narrower `datetime` (a pre-existing, unrelated looseness in
+    # that signature, out of scope here).
+    assert fill_in(adatetime(year=2021), ts) is ts  # type: ignore[arg-type]
 
 
-def test_fill_in_fills_missing_units_from_basedate():
+def test_fill_in_fills_missing_units_from_basedate() -> None:
     result = fill_in(adatetime(month=6), datetime(2026, 8, 4, 10, 30, 0, 0))
     assert result == datetime(2026, 6, 4, 10, 30, 0, 0)
 
@@ -310,7 +329,7 @@ def test_fill_in_fills_missing_units_from_basedate():
         pytest.param(datetime(2020, 1, 1), False, id="datetime-always-has-date"),
     ],
 )
-def test_has_no_date(at, expected):
+def test_has_no_date(at: DateLike, expected: bool) -> None:
     assert has_no_date(at) is expected
 
 
@@ -323,7 +342,7 @@ def test_has_no_date(at, expected):
         pytest.param(datetime(2020, 1, 1), False, id="datetime-always-has-time"),
     ],
 )
-def test_has_no_time(at, expected):
+def test_has_no_time(at: DateLike, expected: bool) -> None:
     assert has_no_time(at) is expected
 
 
@@ -335,7 +354,7 @@ def test_has_no_time(at, expected):
         pytest.param(datetime(2020, 1, 1), False, id="datetime-never-ambiguous"),
     ],
 )
-def test_is_ambiguous(at, expected):
+def test_is_ambiguous(at: DateLike, expected: bool) -> None:
     assert is_ambiguous(at) is expected
 
 
@@ -350,21 +369,25 @@ def test_is_ambiguous(at, expected):
         ),
     ],
 )
-def test_is_void(at, expected):
-    assert is_void(at) is expected
+def test_is_void(at: DateLike | timespan, expected: bool) -> None:
+    # is_void's own implementation explicitly handles a timespan (see its
+    # docstring), even though its declared parameter type is the narrower
+    # DateLike (a pre-existing, unrelated looseness in that signature, out
+    # of scope here).
+    assert is_void(at) is expected  # type: ignore[arg-type]
 
 
-def test_fix_ambiguous_returns_unchanged():
+def test_fix_ambiguous_returns_unchanged() -> None:
     at = adatetime(year=2020)
     assert fix(at) is at
 
 
-def test_fix_datetime_returns_unchanged():
+def test_fix_datetime_returns_unchanged() -> None:
     dt = datetime(2020, 1, 1)
     assert fix(dt) is dt
 
 
-def test_fix_fully_specified_returns_datetime():
+def test_fix_fully_specified_returns_datetime() -> None:
     at = adatetime(2020, 3, 4, 5, 6, 7, 8)
     result = fix(at)
     assert result == datetime(2020, 3, 4, 5, 6, 7, 8)

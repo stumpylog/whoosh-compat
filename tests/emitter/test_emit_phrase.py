@@ -1,6 +1,7 @@
 """Phrase emission (including the 1- and 0-token degenerate cases)."""
 
 import contextlib
+from collections.abc import Callable
 
 import pytest
 import tantivy
@@ -14,6 +15,7 @@ from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 
+from .conftest import TIndex
 from .conftest import emit_ast
 from .conftest import search_ids
 
@@ -33,18 +35,22 @@ from .conftest import search_ids
         pytest.param("!!!", 1, [], id="zero-tokens-matches-nothing"),
     ],
 )
-def test_phrase(tindex, ereg, text, slop, expected):
+def test_phrase(
+    tindex: TIndex, ereg: FieldRegistry, text: str, slop: int, expected: list[int]
+) -> None:
     node = ast.Phrase(field=FieldRef("content"), text=text, slop=slop)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
 
-def test_phrase_parsed(tindex, ereg, parse):
+def test_phrase_parsed(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
     q = emit_ast(parse('content:"shopname product1"'), tindex, ereg)
     assert search_ids(tindex[0], q) == [2, 4]
 
 
-def test_zero_token_phrase_dropped_as_group_child(tindex, ereg):
+def test_zero_token_phrase_dropped_as_group_child(tindex: TIndex, ereg: FieldRegistry) -> None:
     # Regression: a zero-token analyzed Phrase (e.g. an all-stopword value)
     # nested inside an And must be dropped from the enclosing group exactly
     # like a zero-token Term already is, not emitted as a live-but-empty
@@ -67,7 +73,7 @@ def test_zero_token_phrase_dropped_as_group_child(tindex, ereg):
 # -- analyzer contract (ARCHITECTURE.md's "analyzer contract" section) -------
 
 
-def _gapped_index_fixture():
+def _gapped_index_fixture() -> tuple[tantivy.Index, tantivy.Schema, FieldRegistry]:
     """A standalone tantivy index whose *index-time* tokenizer drops a
     stopword without renumbering positions, so consecutive query tokens land
     on non-consecutive index positions.
@@ -132,7 +138,7 @@ def _gapped_index_fixture():
         pytest.param(2, [1], id="slop-widened-by-gap-width-recovers-match"),
     ],
 )
-def test_phrase_misses_across_index_time_position_gap(slop, expected):
+def test_phrase_misses_across_index_time_position_gap(slop: int, expected: list[int]) -> None:
     index, _schema, registry = _gapped_index_fixture()
     node = ast.Phrase(field=FieldRef("content"), text="alpha beta", slop=slop)
     q = emit_(node, index=index, registry=registry)
@@ -149,7 +155,7 @@ def test_phrase_misses_across_index_time_position_gap(slop, expected):
 # swap (two positions), which is whoosh slop >= 3 under the slop-1 mapping.
 
 
-def _reversed_pair_fixture():
+def _reversed_pair_fixture() -> tuple[tantivy.Index, tantivy.Schema, FieldRegistry]:
     sb = tantivy.SchemaBuilder()
     sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
     sb.add_text_field("content", stored=True)
@@ -181,7 +187,7 @@ def _reversed_pair_fixture():
         pytest.param(3, [1], id="slop-3-diverges-tantivy-over-matches-reversed-pair"),
     ],
 )
-def test_phrase_reversed_pair_slop_boundary(slop, expected):
+def test_phrase_reversed_pair_slop_boundary(slop: int, expected: list[int]) -> None:
     index, _schema, registry = _reversed_pair_fixture()
     node = ast.Phrase(field=FieldRef("content"), text="one two", slop=slop)
     q = emit_(node, index=index, registry=registry)
@@ -193,7 +199,7 @@ def test_phrase_reversed_pair_slop_boundary(slop, expected):
 # -- tantivy-py's type-mismatched term_query/phrase_query escapes emit(). ---
 
 
-def test_phrase_on_u64_field_matches_unquoted_term(tindex, ereg):
+def test_phrase_on_u64_field_matches_unquoted_term(tindex: TIndex, ereg: FieldRegistry) -> None:
     # asn:"100" (a quoted, single-word value) used to raise ValueError:
     # Expected U64 type for field asn, got '100' (tantivy-py rejects a
     # string against a u64 field's term_query).
@@ -202,7 +208,9 @@ def test_phrase_on_u64_field_matches_unquoted_term(tindex, ereg):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_phrase_on_u64_field_bad_number_raises_query_emit_error(tindex, ereg):
+def test_phrase_on_u64_field_bad_number_raises_query_emit_error(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     node = ast.Phrase(field=FieldRef("asn"), text="notanumber", slop=1)
     with pytest.raises(QueryEmitError, match="not a valid number"):
         emit_ast(node, tindex, ereg)
@@ -219,7 +227,13 @@ def test_phrase_on_u64_field_bad_number_raises_query_emit_error(tindex, ereg):
         pytest.param("has_tag", [1, 2, 4], id="boolean-exists-docs-with-tags"),
     ],
 )
-def test_quoted_star_phrase_matches_unquoted_star(tindex, ereg, parse, field, expected):
+def test_quoted_star_phrase_matches_unquoted_star(
+    tindex: TIndex,
+    ereg: FieldRegistry,
+    parse: Callable[[str], ast.Node],
+    field: str,
+    expected: list[int],
+) -> None:
     phrase_node = ast.Phrase(field=FieldRef(field), text="*", slop=1)
     every_node = parse(f"{field}:*")
     assert search_ids(tindex[0], emit_ast(phrase_node, tindex, ereg)) == expected
@@ -233,19 +247,25 @@ def test_quoted_star_phrase_matches_unquoted_star(tindex, ereg, parse, field, ex
         pytest.param("false", [3, 5], id="falsy-phrase"),
     ],
 )
-def test_phrase_on_boolean_exists_field(tindex, ereg, text, expected):
+def test_phrase_on_boolean_exists_field(
+    tindex: TIndex, ereg: FieldRegistry, text: str, expected: list[int]
+) -> None:
     node = ast.Phrase(field=FieldRef("has_tag"), text=text, slop=1)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
 
-def test_phrase_on_json_subpath_single_word_matches_unquoted_term(tindex, ereg):
+def test_phrase_on_json_subpath_single_word_matches_unquoted_term(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     node = ast.Phrase(field=FieldRef("notes", "user"), text="alice", slop=1)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_phrase_on_json_subpath_multi_word_does_not_raise(tindex, ereg):
+def test_phrase_on_json_subpath_multi_word_does_not_raise(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     # No doc's notes.user is "bob smith"; the point is that this doesn't
     # raise (JSON subpath phrases used to route to the wrong tantivy field
     # name entirely, see the module docstring), not that it matches.
@@ -254,13 +274,17 @@ def test_phrase_on_json_subpath_multi_word_does_not_raise(tindex, ereg):
     assert search_ids(tindex[0], q) == []
 
 
-def test_phrase_on_bare_json_field_raises_query_emit_error(tindex, ereg):
+def test_phrase_on_bare_json_field_raises_query_emit_error(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     node = ast.Phrase(field=FieldRef("notes"), text="alice", slop=1)
     with pytest.raises(QueryEmitError, match="JSON field"):
         emit_ast(node, tindex, ereg)
 
 
-def test_date_kind_phrase_raises_unsupported_query_error(tindex, ereg):
+def test_date_kind_phrase_raises_unsupported_query_error(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     # issue #24: same NotImplementedError -> UnsupportedQueryError fix as
     # visit_term's DATE/DATETIME fallback.
     node = ast.Phrase(field=FieldRef("created"), text="2020-01-01", slop=1)
@@ -283,7 +307,9 @@ def test_date_kind_phrase_raises_unsupported_query_error(tindex, ereg):
         pytest.param("notes.user", "alice", id="json-subpath"),
     ],
 )
-def test_phrase_emission_never_raises_undocumented_exception(tindex, ereg, field, text):
+def test_phrase_emission_never_raises_undocumented_exception(
+    tindex: TIndex, ereg: FieldRegistry, field: str, text: str
+) -> None:
     name, _, subpath = field.partition(".")
     ref = FieldRef(name, subpath or None)
     node = ast.Phrase(field=ref, text=text, slop=1)

@@ -7,6 +7,7 @@ not by eyeballing the raw document text. See the module-level token map.
 """
 
 import fnmatch
+from collections.abc import Callable
 
 import pytest
 
@@ -18,6 +19,7 @@ from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 
+from .conftest import TIndex
 from .conftest import emit_ast
 from .conftest import search_ids
 
@@ -37,7 +39,7 @@ CONTENT_TOKENS = {
 }
 
 
-def fnmatch_ids(tokens, pattern):
+def fnmatch_ids(tokens: dict[int, list[str]], pattern: str) -> list[int]:
     """The doc ids fnmatch (the ground-truth oracle) says ``pattern`` hits."""
     pattern = pattern.lower()  # == the fields' pattern_normalizer
     return sorted(
@@ -86,11 +88,15 @@ def fnmatch_ids(tokens, pattern):
         pytest.param("[9-1-5-3]", None, "[\\-]", id="empty-range-chunks-are-merged-away"),
     ],
 )
-def test_glob_to_regex(pattern, normalizer, expected):
+def test_glob_to_regex(
+    pattern: str, normalizer: Callable[[str], str] | None, expected: str
+) -> None:
     assert glob_to_regex(pattern, normalizer) == expected
 
 
-def test_glob_to_regex_escapes_class_internal_set_operators(tindex, ereg):
+def test_glob_to_regex_escapes_class_internal_set_operators(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     # Python's `re` accepts "[a[]"; Rust's regex crate (tantivy) reads "[",
     # "&" and "~" inside a class as nested-class / set-operator syntax and
     # rejects the pattern. Escaping them keeps both engines happy and does
@@ -132,7 +138,14 @@ def test_glob_to_regex_escapes_class_internal_set_operators(tindex, ereg):
         pytest.param("title", TITLE_TOKENS, "[]", [], id="empty-bracket-class"),
     ],
 )
-def test_wildcard_emission(tindex, ereg, field, tokens, pattern, expected):
+def test_wildcard_emission(
+    tindex: TIndex,
+    ereg: FieldRegistry,
+    field: str,
+    tokens: dict[int, list[str]],
+    pattern: str,
+    expected: list[int],
+) -> None:
     # Keep the fnmatch oracle result honest alongside the emitter's result.
     assert fnmatch_ids(tokens, pattern) == expected
     q = emit_ast(ast.Wildcard(field=FieldRef(field), pattern=pattern), tindex, ereg)
@@ -142,14 +155,14 @@ def test_wildcard_emission(tindex, ereg, field, tokens, pattern, expected):
 # -- prefix emission ---------------------------------------------------------
 
 
-def test_prefix(tindex, ereg):
+def test_prefix(tindex: TIndex, ereg: FieldRegistry) -> None:
     expected = fnmatch_ids(CONTENT_TOKENS, "shopn*")
     assert expected == [2, 4]
     q = emit_ast(ast.Prefix(field=FieldRef("content"), text="shopn"), tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
 
-def test_prefix_normalizes_and_escapes(tindex, ereg):
+def test_prefix_normalizes_and_escapes(tindex: TIndex, ereg: FieldRegistry) -> None:
     # Prefix text is a *literal*: it is normalized then regex-escaped, so a
     # "[" in it matches only a real "[" (nothing in the fixture).
     q = emit_ast(ast.Prefix(field=FieldRef("title"), text="Wär"), tindex, ereg)
@@ -171,13 +184,15 @@ def test_prefix_normalizes_and_escapes(tindex, ereg):
         pytest.param("tag", [1, 2, 4], id="non-fast-text-field-excludes-doc-without-value"),
     ],
 )
-def test_every_field(tindex, ereg, field, expected):
+def test_every_field(
+    tindex: TIndex, ereg: FieldRegistry, field: str | None, expected: list[int]
+) -> None:
     ref = FieldRef(field) if field is not None else None
     q = emit_ast(ast.Every(field=ref), tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
 
-def test_every_field_non_fast_non_text_raises(tindex, ereg):
+def test_every_field_non_fast_non_text_raises(tindex: TIndex, ereg: FieldRegistry) -> None:
     # 'asn' is registered as a fast U64 field in ereg, so build a second
     # registry with it as non-fast instead: the regex(".*") fallback
     # visit_every otherwise applies to any non-fast field only actually

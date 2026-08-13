@@ -1,5 +1,6 @@
 import re
 import time
+from collections.abc import Callable
 
 import pytest
 import tantivy
@@ -12,11 +13,12 @@ from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 
+from .conftest import TIndex
 from .conftest import emit_ast
 from .conftest import search_ids
 
 
-def test_implicit_and(tindex, ereg):
+def test_implicit_and(tindex: TIndex, ereg: FieldRegistry) -> None:
     node = ast.And(
         children=(
             ast.Term(field=FieldRef("content"), text="shopname"),
@@ -27,7 +29,7 @@ def test_implicit_and(tindex, ereg):
     assert search_ids(tindex[0], q) == [4]
 
 
-def test_or_min_should(tindex, ereg):
+def test_or_min_should(tindex: TIndex, ereg: FieldRegistry) -> None:
     node = ast.Or(
         children=(
             ast.Term(field=FieldRef("content"), text="invoice"),
@@ -38,7 +40,7 @@ def test_or_min_should(tindex, ereg):
     assert search_ids(tindex[0], q) == [1, 2]
 
 
-def test_or_all_children_dropped_is_empty(tindex, ereg):
+def test_or_all_children_dropped_is_empty(tindex: TIndex, ereg: FieldRegistry) -> None:
     node = ast.Or(
         children=(
             ast.Term(field=FieldRef("content"), text="!!!"),
@@ -49,7 +51,7 @@ def test_or_all_children_dropped_is_empty(tindex, ereg):
     assert search_ids(tindex[0], q) == []
 
 
-def test_or_single_surviving_child_returned_unwrapped(tindex, ereg):
+def test_or_single_surviving_child_returned_unwrapped(tindex: TIndex, ereg: FieldRegistry) -> None:
     node = ast.Or(
         children=(
             ast.Term(field=FieldRef("content"), text="invoice"),
@@ -60,13 +62,13 @@ def test_or_single_surviving_child_returned_unwrapped(tindex, ereg):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_not_padded(tindex, ereg):
+def test_not_padded(tindex: TIndex, ereg: FieldRegistry) -> None:
     node = ast.Not(child=ast.Term(field=FieldRef("content"), text="invoice"))
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [2, 3, 4, 5]
 
 
-def test_nested_all_negative(tindex, ereg):
+def test_nested_all_negative(tindex: TIndex, ereg: FieldRegistry) -> None:
     # The quickwit-oss/tantivy#3025 shape: a group whose clauses are all
     # MustNot must still be padded so it behaves as "all docs except...",
     # both at the inner And and if it ever bubbles up unpadded.
@@ -85,7 +87,7 @@ def test_nested_all_negative(tindex, ereg):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_andnot(tindex, ereg):
+def test_andnot(tindex: TIndex, ereg: FieldRegistry) -> None:
     node = ast.AndNot(
         positive=ast.Term(field=FieldRef("content"), text="shopname"),
         negative=ast.Term(field=FieldRef("content"), text="product2"),
@@ -94,7 +96,7 @@ def test_andnot(tindex, ereg):
     assert search_ids(tindex[0], q) == [2]
 
 
-def test_andmaybe(tindex, ereg):
+def test_andmaybe(tindex: TIndex, ereg: FieldRegistry) -> None:
     node = ast.AndMaybe(
         required=ast.Term(field=FieldRef("tag"), text="billing"),
         optional=ast.Term(field=FieldRef("content"), text="invoice"),
@@ -103,7 +105,7 @@ def test_andmaybe(tindex, ereg):
     assert search_ids(tindex[0], q) == [1, 2]
 
 
-def test_require_filters_not_scores(tindex, ereg):
+def test_require_filters_not_scores(tindex: TIndex, ereg: FieldRegistry) -> None:
     node = ast.Require(
         scored=ast.Term(field=FieldRef("tag"), text="billing"),
         filter_only=ast.Term(field=FieldRef("title"), text="2020"),
@@ -135,7 +137,9 @@ def test_require_filters_not_scores(tindex, ereg):
         pytest.param("content:!!! ANDNOT invoice", id="andnot-zero-token-positive"),
     ],
 )
-def test_zero_token_operand_leaves_the_survivor(tindex, ereg, parse, query):
+def test_zero_token_operand_leaves_the_survivor(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node], query: str
+) -> None:
     node = parse(query)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
@@ -146,7 +150,9 @@ def test_zero_token_operand_leaves_the_survivor(tindex, ereg, parse, query):
 # none.
 
 
-def test_not_zero_token_term_matches_everything(tindex, ereg, parse):
+def test_not_zero_token_term_matches_everything(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
     node = parse("NOT content:!!!")
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1, 2, 3, 4, 5]
@@ -160,7 +166,9 @@ def test_not_zero_token_term_matches_everything(tindex, ereg, parse):
         pytest.param(True, [1, 2, 4], id="exists-true-matches-docs-with-tags"),
     ],
 )
-def test_boolean_exists(tindex, ereg, value, expected):
+def test_boolean_exists(
+    tindex: TIndex, ereg: FieldRegistry, value: bool, expected: list[int]
+) -> None:
     node = ast.Term(field=FieldRef("has_tag"), text=value)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
@@ -174,7 +182,7 @@ def test_boolean_exists(tindex, ereg, value, expected):
 # under "attrs" (ereg's fast JSON field); docs 2 and 3 have none.
 
 
-def test_every_field_fast_json(tindex, ereg):
+def test_every_field_fast_json(tindex: TIndex, ereg: FieldRegistry) -> None:
     node = ast.Every(field=FieldRef("attrs"))
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1, 4, 5]
@@ -187,7 +195,9 @@ def test_every_field_fast_json(tindex, ereg):
         pytest.param(False, [2, 3], id="exists-false-matches-docs-without-attrs"),
     ],
 )
-def test_boolean_exists_fast_json(tindex, ereg, value, expected):
+def test_boolean_exists_fast_json(
+    tindex: TIndex, ereg: FieldRegistry, value: bool, expected: list[int]
+) -> None:
     node = ast.Term(field=FieldRef("has_attrs"), text=value)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
@@ -196,7 +206,7 @@ def test_boolean_exists_fast_json(tindex, ereg, value, expected):
 # -- BOOLEAN_EXISTS targeting a non-fast field (end-to-end) -----------------
 
 
-def _non_fast_text_target_fixture():
+def _non_fast_text_target_fixture() -> tuple[tantivy.Index, tantivy.Schema, FieldRegistry]:
     """A standalone tantivy index/registry: a BOOLEAN_EXISTS field whose
     exists_target is a non-fast TEXT field, actually searched.
 
@@ -253,7 +263,7 @@ def _non_fast_text_target_fixture():
         ),
     ],
 )
-def test_boolean_exists_non_fast_text_target(value, expected):
+def test_boolean_exists_non_fast_text_target(value: bool, expected: list[int]) -> None:
     index, _schema, registry = _non_fast_text_target_fixture()
     node = ast.Term(field=FieldRef("has_body"), text=value)
     q = emit_(node, index=index, registry=registry)
@@ -263,7 +273,7 @@ def test_boolean_exists_non_fast_text_target(value, expected):
 # -- BOOLEAN_EXISTS targeting a non-fast KEYWORD field (end-to-end) ---------
 
 
-def _non_fast_keyword_target_fixture():
+def _non_fast_keyword_target_fixture() -> tuple[tantivy.Index, tantivy.Schema, FieldRegistry]:
     """A standalone tantivy index/registry: a BOOLEAN_EXISTS field whose
     exists_target is a non-fast KEYWORD field, actually searched.
 
@@ -310,14 +320,14 @@ def _non_fast_keyword_target_fixture():
         ),
     ],
 )
-def test_boolean_exists_non_fast_keyword_target(value, expected):
+def test_boolean_exists_non_fast_keyword_target(value: bool, expected: list[int]) -> None:
     index, _schema, registry = _non_fast_keyword_target_fixture()
     node = ast.Term(field=FieldRef("has_label"), text=value)
     q = emit_(node, index=index, registry=registry)
     assert search_ids(index, q) == expected
 
 
-def test_registry_rejects_non_fast_non_text_non_keyword_exists_target():
+def test_registry_rejects_non_fast_non_text_non_keyword_exists_target() -> None:
     """A non-fast, non-TEXT, non-KEYWORD exists_target (e.g. a non-fast U64
     field) has no way to answer 'exists' at all: regex_query only matches a
     text/string field, and exists_query requires a fast field. This is now
@@ -336,7 +346,7 @@ def test_registry_rejects_non_fast_non_text_non_keyword_exists_target():
 # -- Every(field) and BOOLEAN_EXISTS agree on the same field -----------------
 
 
-def test_every_field_and_boolean_exists_agree(tindex, ereg):
+def test_every_field_and_boolean_exists_agree(tindex: TIndex, ereg: FieldRegistry) -> None:
     """``field:*`` (Every(field)) and a BOOLEAN_EXISTS field targeting the
     *same* field return the exact same document set, because both go
     through ``_exists_query`` reading the single strategy the registry
@@ -348,7 +358,9 @@ def test_every_field_and_boolean_exists_agree(tindex, ereg):
     assert search_ids(tindex[0], every_q) == search_ids(tindex[0], boolean_exists_q) == [1, 2, 4]
 
 
-def test_every_field_on_the_boolean_exists_field_itself(tindex, ereg):
+def test_every_field_on_the_boolean_exists_field_itself(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     # has_tag:* (Every(field="has_tag"), a BOOLEAN_EXISTS field, not one of
     # its targets) used to raise UnsupportedQueryError: BOOLEAN_EXISTS has
     # no resolved exists strategy of its own (it has no physical column;
@@ -362,7 +374,9 @@ def test_every_field_on_the_boolean_exists_field_itself(tindex, ereg):
     assert search_ids(tindex[0], every_q) == search_ids(tindex[0], boolean_exists_q) == [1, 2, 4]
 
 
-def test_every_field_and_boolean_exists_agree_across_targets(tindex, ereg):
+def test_every_field_and_boolean_exists_agree_across_targets(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     """The same "has tags" condition, reached through two different targets
     with two different resolved strategies (``has_tag`` -> the fast U64
     ``tag_id`` presence marker -> FAST_FIELD, ``tag:*`` -> the non-fast
@@ -374,23 +388,25 @@ def test_every_field_and_boolean_exists_agree_across_targets(tindex, ereg):
     assert search_ids(tindex[0], every_q) == search_ids(tindex[0], boolean_exists_q) == [1, 2, 4]
 
 
-def test_nothing(tindex, ereg):
+def test_nothing(tindex: TIndex, ereg: FieldRegistry) -> None:
     q = emit_ast(ast.Nothing(), tindex, ereg)
     assert search_ids(tindex[0], q) == []
 
 
-def test_every(tindex, ereg):
+def test_every(tindex: TIndex, ereg: FieldRegistry) -> None:
     q = emit_ast(ast.Every(), tindex, ereg)
     assert search_ids(tindex[0], q) == [1, 2, 3, 4, 5]
 
 
-def test_boosted(tindex, ereg):
+def test_boosted(tindex: TIndex, ereg: FieldRegistry) -> None:
     node = ast.Boosted(child=ast.Term(field=FieldRef("content"), text="invoice"), boost=2.0)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_boosted_bad_boost_type_raises_query_emit_error(tindex, ereg):
+def test_boosted_bad_boost_type_raises_query_emit_error(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     # issue #24: a safety-net case, not one of the individually-fixed
     # branches: tantivy.Query.boost_query itself raises a bare TypeError
     # for a non-numeric boost (only reachable via a hand-built AST; the
@@ -399,12 +415,12 @@ def test_boosted_bad_boost_type_raises_query_emit_error(tindex, ereg):
     # AttributeError) -> QueryEmitError conversion, which exists precisely
     # to guarantee the "never a bare exception" contract for shapes that
     # don't have (and don't need) their own specific handling.
-    node = ast.Boosted(child=ast.Term(field=FieldRef("content"), text="invoice"), boost="bad")
+    node = ast.Boosted(child=ast.Term(field=FieldRef("content"), text="invoice"), boost="bad")  # type: ignore[arg-type]
     with pytest.raises(QueryEmitError):
         emit_ast(node, tindex, ereg)
 
 
-def test_boosted_group_child_with_tokens_is_wrapped(tindex, ereg):
+def test_boosted_group_child_with_tokens_is_wrapped(tindex: TIndex, ereg: FieldRegistry) -> None:
     # _group_child's Boosted branch when the inner term has real tokens (not
     # dropped): the boost_query wrapping itself, as opposed to the
     # zero-token-drop case covered in test_emit_terms.py.
@@ -421,7 +437,7 @@ def test_boosted_group_child_with_tokens_is_wrapped(tindex, ereg):
 # -- nested group whose children all drop must itself drop ------------------
 
 
-def _stopword_registry():
+def _stopword_registry() -> FieldRegistry:
     """A standalone registry whose "content" analyzer drops "the"/"a" as
     stopwords, reused against the shared `tindex` fixture's real doc content
     (doc 1's content is "invoice total amount").
@@ -433,13 +449,13 @@ def _stopword_registry():
     """
     stopwords = {"the", "a"}
 
-    def analyzer(text):
+    def analyzer(text: str) -> list[str]:
         return [t for t in re.split(r"\W+", text.lower()) if t and t not in stopwords]
 
     return FieldRegistry([FieldSpec("content", FieldKind.TEXT, analyzer=analyzer)])
 
 
-def test_nested_or_all_dropped_is_dropped_from_and(tindex):
+def test_nested_or_all_dropped_is_dropped_from_and(tindex: TIndex) -> None:
     # Repro from the task: invoice AND ("the" OR "a") must match doc 1, not [].
     ereg = _stopword_registry()
     node = ast.And(
@@ -457,7 +473,7 @@ def test_nested_or_all_dropped_is_dropped_from_and(tindex):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_nested_and_all_dropped_is_dropped_from_or(tindex):
+def test_nested_and_all_dropped_is_dropped_from_or(tindex: TIndex) -> None:
     ereg = _stopword_registry()
     node = ast.Or(
         children=(
@@ -474,7 +490,7 @@ def test_nested_and_all_dropped_is_dropped_from_or(tindex):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_deeply_nested_group_all_dropped_is_dropped(tindex):
+def test_deeply_nested_group_all_dropped_is_dropped(tindex: TIndex) -> None:
     # Arbitrary nesting depth: And(Or(And(the, a))) inside the outer And.
     ereg = _stopword_registry()
     node = ast.And(
@@ -496,7 +512,7 @@ def test_deeply_nested_group_all_dropped_is_dropped(tindex):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_nested_group_all_dropped_through_boosted_composes(tindex):
+def test_nested_group_all_dropped_through_boosted_composes(tindex: TIndex) -> None:
     # The nested-group drop rule must compose with the existing Boosted
     # unwrapping: Boosted(Or(all-dropped)) is still dropped, not turned into
     # a live boost_query(empty_query(), ...) clause.
@@ -519,7 +535,7 @@ def test_nested_group_all_dropped_through_boosted_composes(tindex):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_nested_group_with_surviving_child_is_not_dropped(tindex):
+def test_nested_group_with_surviving_child_is_not_dropped(tindex: TIndex) -> None:
     # Sanity check on the other side of the fix: a nested group with at
     # least one surviving child must NOT be dropped.
     ereg = _stopword_registry()
@@ -538,7 +554,7 @@ def test_nested_group_with_surviving_child_is_not_dropped(tindex):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_non_text_term_as_direct_group_child(tindex, ereg):
+def test_non_text_term_as_direct_group_child(tindex: TIndex, ereg: FieldRegistry) -> None:
     # _group_child's `if spec.kind in (TEXT, KEYWORD)` skip branch: a U64
     # term as a direct child of an And group (the zero-token-drop check only
     # applies to TEXT/KEYWORD; other kinds fall straight through to visit()).
@@ -561,13 +577,13 @@ def test_non_text_term_as_direct_group_child(tindex, ereg):
 # -- (that shape prevents the drop check from short-circuiting).
 
 
-def _alternating_drop_tree(depth):
+def _alternating_drop_tree(depth: int) -> ast.Node:
     """Alternating And/Or, `depth` levels deep: each level's first child is
     a zero-token term ("the", dropped by _stopword_analyzer below) and the
     second child is the next level down, bottoming out in a real, surviving
     term. Matches issue #6's repro shape exactly.
     """
-    node = ast.Term(field=FieldRef("content"), text="invoice")
+    node: ast.Node = ast.Term(field=FieldRef("content"), text="invoice")
     for i in range(depth):
         cls = ast.And if i % 2 == 0 else ast.Or
         node = cls(
@@ -579,12 +595,12 @@ def _alternating_drop_tree(depth):
     return node
 
 
-def _stopword_analyzer(calls, text):
+def _stopword_analyzer(calls: list[str], text: str) -> list[str]:
     calls.append(text)
     return [] if text == "the" else [text]
 
 
-def _alternating_drop_fixture(calls):
+def _alternating_drop_fixture(calls: list[str]) -> tuple[tantivy.Index, FieldRegistry]:
     sb = tantivy.SchemaBuilder()
     sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
     sb.add_text_field("content", stored=True)
@@ -604,8 +620,8 @@ def _alternating_drop_fixture(calls):
     return index, registry
 
 
-def test_alternating_nesting_emit_is_not_exponential():
-    calls = []
+def test_alternating_nesting_emit_is_not_exponential() -> None:
+    calls: list[str] = []
     index, registry = _alternating_drop_fixture(calls)
     node = _alternating_drop_tree(40)
 
@@ -621,8 +637,8 @@ def test_alternating_nesting_emit_is_not_exponential():
     assert len(calls) < 2000, f"analyzer called {len(calls)} times for depth 40 (expected < 2000)"
 
 
-def test_alternating_nesting_emit_is_fast():
-    calls = []
+def test_alternating_nesting_emit_is_fast() -> None:
+    calls: list[str] = []
     index, registry = _alternating_drop_fixture(calls)
     node = _alternating_drop_tree(40)
 
@@ -633,11 +649,11 @@ def test_alternating_nesting_emit_is_fast():
     assert elapsed < 1.0, f"depth-40 emit took {elapsed:.3f}s (expected well under 1s)"
 
 
-def test_nested_all_drop_group_is_still_dropped_from_parent():
+def test_nested_all_drop_group_is_still_dropped_from_parent() -> None:
     # Unaffected by the fix: a nested group whose children all drop is
     # still dropped from its enclosing group, not emitted as a live
     # unsatisfiable clause.
-    calls = []
+    calls: list[str] = []
     index, registry = _alternating_drop_fixture(calls)
     node = ast.And(
         children=(

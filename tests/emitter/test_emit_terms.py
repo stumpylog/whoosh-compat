@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import pytest
 import tantivy
 
@@ -11,16 +13,19 @@ from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 from whoosh_compat.fields import Multitoken
 
+from .conftest import TIndex
 from .conftest import emit_ast
 from .conftest import search_ids
 
 
-def test_term(tindex, ereg, parse):
+def test_term(tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]) -> None:
     q = emit_ast(parse("content:invoice"), tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_emit_has_no_schema_parameter(tindex, ereg, parse):
+def test_emit_has_no_schema_parameter(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
     # issue #27: schema is recoverable from index.schema, so every call site
     # could pass a value that could be derived (and could pass an
     # inconsistent pair); dropped from the public signature.
@@ -28,10 +33,10 @@ def test_emit_has_no_schema_parameter(tindex, ereg, parse):
     q = emit_(node, index=tindex[0], registry=ereg)
     assert search_ids(tindex[0], q) == [1]
     with pytest.raises(TypeError, match="schema"):
-        emit_(node, index=tindex[0], schema=tindex[1], registry=ereg)
+        emit_(node, index=tindex[0], schema=tindex[1], registry=ereg)  # type: ignore[call-arg]
 
 
-def test_multitoken_and(tindex, ereg):
+def test_multitoken_and(tindex: TIndex, ereg: FieldRegistry) -> None:
     # A single field value with multiple tokens, combined per Multitoken
     # resolution (DEFAULT -> enclosing group semantics; top level == AND).
     # docs 2 and 4 both contain "shopname" and "product1" in content.
@@ -40,12 +45,14 @@ def test_multitoken_and(tindex, ereg):
     assert search_ids(tindex[0], q) == [2, 4]
 
 
-def test_u64(tindex, ereg):
+def test_u64(tindex: TIndex, ereg: FieldRegistry) -> None:
     q = emit_ast(ast.Term(field=FieldRef("asn"), text=100), tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_u64_term_non_numeric_text_raises_query_emit_error(tindex, ereg):
+def test_u64_term_non_numeric_text_raises_query_emit_error(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     # issue #24: parsed input can't reach this (term_query diagnoses a bad
     # U64 value at parse time), but a hand-built ast.Term can. visit_phrase's
     # U64 branch already wrapped int(); visit_term's didn't.
@@ -54,7 +61,7 @@ def test_u64_term_non_numeric_text_raises_query_emit_error(tindex, ereg):
         emit_ast(node, tindex, ereg)
 
 
-def test_date_kind_term_raises_unsupported_query_error(tindex, ereg):
+def test_date_kind_term_raises_unsupported_query_error(tindex: TIndex, ereg: FieldRegistry) -> None:
     # issue #24: DATE/DATETIME term emission was never implemented (the
     # parser always converts these via DateParserPlugin first), but a
     # hand-built ast.Term addressing a DATE field bypasses that; it used to
@@ -64,7 +71,7 @@ def test_date_kind_term_raises_unsupported_query_error(tindex, ereg):
         emit_ast(node, tindex, ereg)
 
 
-def test_zero_token_term_dropped(tindex, ereg):
+def test_zero_token_term_dropped(tindex: TIndex, ereg: FieldRegistry) -> None:
     grp = ast.And(
         children=(
             ast.Term(field=FieldRef("content"), text="invoice"),
@@ -75,12 +82,12 @@ def test_zero_token_term_dropped(tindex, ereg):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_zero_token_term_standalone_matches_nothing(tindex, ereg):
+def test_zero_token_term_standalone_matches_nothing(tindex: TIndex, ereg: FieldRegistry) -> None:
     q = emit_ast(ast.Term(field=FieldRef("content"), text="!!!"), tindex, ereg)
     assert search_ids(tindex[0], q) == []
 
 
-def test_zero_token_term_dropped_through_boosted(tindex, ereg):
+def test_zero_token_term_dropped_through_boosted(tindex: TIndex, ereg: FieldRegistry) -> None:
     # Regression: a zero-token term wrapped in Boosted must still be
     # dropped from the enclosing And, not turned into a live-but-
     # unmatchable Must clause (boost_query(empty_query(), ...)) that would
@@ -95,7 +102,9 @@ def test_zero_token_term_dropped_through_boosted(tindex, ereg):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_zero_token_term_dropped_through_nested_boosted(tindex, ereg):
+def test_zero_token_term_dropped_through_nested_boosted(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     grp = ast.And(
         children=(
             ast.Term(field=FieldRef("content"), text="invoice"),
@@ -109,7 +118,7 @@ def test_zero_token_term_dropped_through_nested_boosted(tindex, ereg):
     assert search_ids(tindex[0], q) == [1]
 
 
-def test_all_dropped_through_boosted_is_empty(tindex, ereg):
+def test_all_dropped_through_boosted_is_empty(tindex: TIndex, ereg: FieldRegistry) -> None:
     grp = ast.And(
         children=(ast.Boosted(child=ast.Term(field=FieldRef("content"), text="!!!"), boost=2.0),)
     )
@@ -117,7 +126,9 @@ def test_all_dropped_through_boosted_is_empty(tindex, ereg):
     assert search_ids(tindex[0], q) == []
 
 
-def test_zero_token_term_dropped_through_boosted_parsed(tindex, ereg, parse):
+def test_zero_token_term_dropped_through_boosted_parsed(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
     node = parse("invoice !!!^2")
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == [1]
@@ -135,7 +146,9 @@ def test_zero_token_term_dropped_through_boosted_parsed(tindex, ereg, parse):
         pytest.param("  false  ", [3, 5], id="str-falsy-strips-whitespace"),
     ],
 )
-def test_boolean_exists_raw_string_text(tindex, ereg, text, expected):
+def test_boolean_exists_raw_string_text(
+    tindex: TIndex, ereg: FieldRegistry, text: str, expected: list[int]
+) -> None:
     node = ast.Term(field=FieldRef("has_tag"), text=text)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
@@ -144,17 +157,17 @@ def test_boolean_exists_raw_string_text(tindex, ereg, text, expected):
 # -- _resolve() error paths --------------------------------------------------
 
 
-def test_unfielded_term_raises(tindex, ereg):
+def test_unfielded_term_raises(tindex: TIndex, ereg: FieldRegistry) -> None:
     with pytest.raises(QueryEmitError, match="unfielded"):
         emit_ast(ast.Term(field=None, text="x"), tindex, ereg)
 
 
-def test_unknown_field_raises(tindex, ereg):
+def test_unknown_field_raises(tindex: TIndex, ereg: FieldRegistry) -> None:
     with pytest.raises(QueryEmitError, match="unknown field"):
         emit_ast(ast.Term(field=FieldRef("nosuchfield"), text="x"), tindex, ereg)
 
 
-def test_json_field_term_without_subpath_raises(tindex, ereg):
+def test_json_field_term_without_subpath_raises(tindex: TIndex, ereg: FieldRegistry) -> None:
     with pytest.raises(QueryEmitError, match="JSON field"):
         emit_ast(ast.Term(field=FieldRef("notes"), text="x"), tindex, ereg)
 
@@ -163,7 +176,7 @@ def test_json_field_term_without_subpath_raises(tindex, ereg):
 # test_multitoken_and above) -------------------------------------------------
 
 
-def _multitoken_registry(mode):
+def _multitoken_registry(mode: Multitoken) -> FieldRegistry:
     return FieldRegistry(
         [
             FieldSpec(
@@ -189,7 +202,7 @@ def _multitoken_registry(mode):
         pytest.param(Multitoken.OR, "product2 bogus", [4], id="or-any-token-matches"),
     ],
 )
-def test_multitoken_modes(tindex, mode, text, expected):
+def test_multitoken_modes(tindex: TIndex, mode: Multitoken, text: str, expected: list[int]) -> None:
     ereg = _multitoken_registry(mode)
     node = ast.Term(field=FieldRef("content"), text=text)
     q = emit_ast(node, tindex, ereg)
@@ -199,7 +212,7 @@ def test_multitoken_modes(tindex, mode, text, expected):
 # -- registered non-JSON field whose name contains a dot --------------------
 
 
-def _dotted_plain_field_fixture():
+def _dotted_plain_field_fixture() -> tuple[tantivy.Index, tantivy.Schema, FieldRegistry]:
     """A standalone tantivy index/registry with a plain (non-JSON) TEXT
     field whose name contains a dot, alongside "content". `_term_drop_tokens`
     used to route any field name containing "." straight to `resolve_json`,
@@ -244,7 +257,7 @@ def _dotted_plain_field_fixture():
     return index, schema, registry
 
 
-def test_dotted_plain_field_zero_token_term_dropped():
+def test_dotted_plain_field_zero_token_term_dropped() -> None:
     index, _schema, registry = _dotted_plain_field_fixture()
     grp = ast.And(
         children=(
@@ -256,7 +269,7 @@ def test_dotted_plain_field_zero_token_term_dropped():
     assert search_ids(index, q) == [1]
 
 
-def test_dotted_plain_field_term_with_tokens_still_emits():
+def test_dotted_plain_field_term_with_tokens_still_emits() -> None:
     index, _schema, registry = _dotted_plain_field_fixture()
     q = emit_(
         ast.Term(field=FieldRef("field.with.dots"), text="anything"),
@@ -269,7 +282,7 @@ def test_dotted_plain_field_term_with_tokens_still_emits():
 # -- Prefix without a pattern_normalizer -------------------------------------
 
 
-def test_prefix_without_normalizer(tindex):
+def test_prefix_without_normalizer(tindex: TIndex) -> None:
     # visit_prefix's `if spec.pattern_normalizer is not None` skip branch:
     # a registry field with no pattern_normalizer configured at all.
     ereg = FieldRegistry(

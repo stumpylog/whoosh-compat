@@ -18,6 +18,7 @@ from tests.differential.oracle import oracle_parse
 from tests.differential.oracle import to_ast
 from tests.differential.oracle import unmapped_reason
 from whoosh_compat.ast import normalize
+from whoosh_compat.fields import FieldRegistry
 
 BERLIN = ZoneInfo("Europe/Berlin")
 BASE = datetime(2026, 8, 4, 10, 30, tzinfo=BERLIN)
@@ -31,7 +32,7 @@ CORPORA = [
 
 
 @pytest.mark.parametrize("q", CORPORA)
-def test_matches_oracle(q, oracle_reg):
+def test_matches_oracle(q: str, oracle_reg: FieldRegistry) -> None:
     oracle_query = oracle_parse(q, BASE, BERLIN)
     expected = to_ast(oracle_query, oracle_reg)
     if expected is None:

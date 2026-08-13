@@ -1,22 +1,43 @@
+from __future__ import annotations
+
 import re
 import unicodedata
+from collections.abc import Callable
 from datetime import UTC
 from datetime import datetime
+from datetime import tzinfo
+from typing import NamedTuple
 
 import pytest
 import tantivy
 from whoosh.filedb.filestore import RamStorage
+from whoosh.index import Index as WhooshIndex
 
 from tests.differential.oracle import oracle_parse
 from tests.differential.oracle import oracle_schema
+from whoosh_compat import ast
 from whoosh_compat import parse as _parse
 from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 
-DOCS = [  # (id, title, content, tags, asn, created_iso, added_iso, notes)
-    (
+TIndex = tuple[tantivy.Index, tantivy.Schema]
+
+
+class Doc(NamedTuple):
+    id: int
+    title: str
+    content: str
+    tags: list[str]
+    asn: int
+    created_iso: str
+    added_iso: str
+    notes: dict[str, str] | None
+
+
+DOCS: list[Doc] = [
+    Doc(
         1,
         "Billing 2020",
         "invoice total amount",
@@ -26,7 +47,7 @@ DOCS = [  # (id, title, content, tags, asn, created_iso, added_iso, notes)
         "2020-03-15T10:00:00Z",
         {"note": "check this", "user": "alice"},
     ),
-    (
+    Doc(
         2,
         "Billing 2019",
         "receipt shopname product1",
@@ -36,7 +57,7 @@ DOCS = [  # (id, title, content, tags, asn, created_iso, added_iso, notes)
         "2019-06-01T09:00:00Z",
         None,
     ),
-    (
+    Doc(
         3,
         "Wärrantyplan",
         "plan warranty basement",
@@ -46,7 +67,7 @@ DOCS = [  # (id, title, content, tags, asn, created_iso, added_iso, notes)
         "2018-03-23T08:00:00Z",
         None,
     ),
-    (
+    Doc(
         4,
         "Report 2020",
         "shopname product1 product2",
@@ -63,7 +84,7 @@ DOCS = [  # (id, title, content, tags, asn, created_iso, added_iso, notes)
     # rest of the emitter suite (see conftest module docstring note below):
     # except where a doc without tags/an "every doc" query genuinely must
     # include it; those expectations were updated accordingly.
-    (
+    Doc(
         5,
         "Miscellaneous Doc",
         "assorted filler content only",
@@ -93,7 +114,7 @@ def lower_fold(text: str) -> list[str]:
 
 
 @pytest.fixture(scope="session")
-def tindex():
+def tindex() -> TIndex:
     sb = tantivy.SchemaBuilder()
     sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
     sb.add_text_field("title", stored=True)  # 'default' tokenizer: simple+lowercase
@@ -104,7 +125,7 @@ def tindex():
     sb.add_date_field("created", stored=True, indexed=True, fast=True)
     sb.add_date_field("added", stored=True, indexed=True, fast=True)
     sb.add_json_field("notes", stored=True)
-    sb.add_json_field("attrs", stored=True, fast=True)
+    sb.add_json_field("attrs", stored=True, fast=True)  # type: ignore[call-arg]  # stub gap
     schema = sb.build()
     index = tantivy.Index(schema)
     w = index.writer()
@@ -129,7 +150,7 @@ def tindex():
 
 
 @pytest.fixture
-def ereg():
+def ereg() -> FieldRegistry:
     """Field registry mirroring tests/conftest.py's ``reg``, tuned for tantivy.
 
     Analyzer/pattern_normalizer match tantivy's 'default' tokenizer so
@@ -160,20 +181,20 @@ def ereg():
 
 
 @pytest.fixture
-def parse(ereg):
+def parse(ereg: FieldRegistry) -> Callable[[str], ast.Node]:
     """``parse()`` bound to the emitter registry, returning just the AST."""
 
-    def _p(query_string):
+    def _p(query_string: str) -> ast.Node:
         return _parse(query_string, registry=ereg, default_fields=["content"]).ast
 
     return _p
 
 
-def emit_ast(node, tindex, ereg):
+def emit_ast(node: ast.Node, tindex: TIndex, ereg: FieldRegistry) -> tantivy.Query:
     return emit_(node, index=tindex[0], registry=ereg)
 
 
-def search_ids(index, q, limit=10):
+def search_ids(index: tantivy.Index, q: tantivy.Query, limit: int = 10) -> list[int]:
     s = index.searcher()
     return sorted(
         hit_doc["id"][0]
@@ -183,7 +204,7 @@ def search_ids(index, q, limit=10):
 
 
 @pytest.fixture(scope="session")
-def windex():
+def windex() -> WhooshIndex:
     """In-RAM real-whoosh index (v2 paperless schema, ``oracle.oracle_schema``)
     holding the same ``DOCS`` fixture rows as ``tindex``: the oracle
     counterpart used by the e2e acceptance suite (``test_acceptance_e2e.py``)
@@ -226,7 +247,7 @@ def windex():
     return ix
 
 
-def whoosh_search_ids(windex, q_str, basedate, tz):
+def whoosh_search_ids(windex: WhooshIndex, q_str: str, basedate: datetime, tz: tzinfo) -> list[int]:
     """Parse ``q_str`` through the real whoosh v2 oracle parser
     (``oracle.oracle_parse``) and return the sorted ``id`` list it matches
     against ``windex``.

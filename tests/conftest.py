@@ -6,7 +6,7 @@ from whoosh_compat.fields import FieldSpec
 
 
 @pytest.fixture
-def reg():
+def reg() -> FieldRegistry:
     return FieldRegistry(
         [
             FieldSpec("content", FieldKind.TEXT),

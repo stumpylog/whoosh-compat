@@ -4,13 +4,14 @@ import pytest
 import whoosh_compat as wc
 from whoosh_compat import ast
 from whoosh_compat.fields import FieldRef
+from whoosh_compat.fields import FieldRegistry
 
 
-def parse(q, reg, **kw):
-    return wc.parse(q, registry=reg, default_fields=["content", "title"], **kw).ast
+def parse(q: str, reg: FieldRegistry) -> ast.Node:
+    return wc.parse(q, registry=reg, default_fields=["content", "title"]).ast
 
 
-def test_implicit_and(reg):
+def test_implicit_and(reg: FieldRegistry) -> None:
     assert parse("aaa bbb", reg) == ast.And(
         children=(
             ast.Or(
@@ -29,7 +30,7 @@ def test_implicit_and(reg):
     )
 
 
-def test_explicit_or(reg):
+def test_explicit_or(reg: FieldRegistry) -> None:
     t = parse("title:aaa OR title:bbb", reg)
     assert t == ast.Or(
         children=(
@@ -39,13 +40,13 @@ def test_explicit_or(reg):
     )
 
 
-def test_lowercase_and_is_text(reg):
+def test_lowercase_and_is_text(reg: FieldRegistry) -> None:
     t = parse("title:aaa and title:bbb", reg)
     assert isinstance(t, ast.And)
     assert len(t.children) == 3
 
 
-def test_not_group_parens(reg):
+def test_not_group_parens(reg: FieldRegistry) -> None:
     t = parse("title:a AND (NOT title:b AND NOT title:c)", reg)
     # parens flatten under normalize(), matching whoosh (see task-9 ruling)
     assert t == ast.And(
@@ -57,7 +58,7 @@ def test_not_group_parens(reg):
     )
 
 
-def test_comma_values(reg):
+def test_comma_values(reg: FieldRegistry) -> None:
     assert parse("tag:foo,bar", reg) == ast.And(
         children=(
             ast.Term(field=FieldRef("tag"), text="foo"),
@@ -66,43 +67,43 @@ def test_comma_values(reg):
     )
 
 
-def test_quoted_comma_not_expanded(reg):
+def test_quoted_comma_not_expanded(reg: FieldRegistry) -> None:
     assert parse("tag:'foo,bar'", reg) == ast.Term(field=FieldRef("tag"), text="foo,bar")
 
 
-def test_alias(reg):
+def test_alias(reg: FieldRegistry) -> None:
     assert parse("type:invoice", reg) == ast.Term(field=FieldRef("document_type"), text="invoice")
 
 
-def test_unknown_field_demotes(reg):
+def test_unknown_field_demotes(reg: FieldRegistry) -> None:
     t = parse("http://example.com", reg)
     # url stays one text term (analysis is emit-time) searched across default fields
     assert "http" not in [getattr(c, "field", None) for c in getattr(t, "children", (t,))]
 
 
-def test_phrase(reg):
+def test_phrase(reg: FieldRegistry) -> None:
     assert parse('title:"exact words"', reg) == ast.Phrase(
         field=FieldRef("title"), text="exact words", slop=1
     )
 
 
-def test_phrase_slop(reg):
+def test_phrase_slop(reg: FieldRegistry) -> None:
     assert parse('title:"exact words"~3', reg) == ast.Phrase(
         field=FieldRef("title"), text="exact words", slop=3
     )
 
 
-def test_wildcard(reg):
+def test_wildcard(reg: FieldRegistry) -> None:
     assert parse("title:produ*name", reg) == ast.Wildcard(
         field=FieldRef("title"), pattern="produ*name"
     )
 
 
-def test_trailing_star_prefix(reg):
+def test_trailing_star_prefix(reg: FieldRegistry) -> None:
     assert parse("title:produ*", reg) == ast.Prefix(field=FieldRef("title"), text="produ")
 
 
-def test_bracket_class_blocks_prefix_fold(reg):
+def test_bracket_class_blocks_prefix_fold(reg: FieldRegistry) -> None:
     # paperless-ngx#13568. Real whoosh folds this to Prefix('202[0-3]'): a
     # *literal* prefix: silently reinterpreting the character class as
     # ordinary text. whoosh-compat keeps it a Wildcard so the class survives.
@@ -120,30 +121,30 @@ def test_bracket_class_blocks_prefix_fold(reg):
         pytest.param("202[0-3]*", id="trailing-class-trailing-star"),
     ],
 )
-def test_bracket_class_wildcard_never_folds_to_term(reg, pattern):
+def test_bracket_class_wildcard_never_folds_to_term(reg: FieldRegistry, pattern: str) -> None:
     # Any wildcard-tagged text containing "[" stays a pattern node, never a
     # plain Term (and never a literal-text Prefix).
     assert parse(f"title:{pattern}", reg) == ast.Wildcard(field=FieldRef("title"), pattern=pattern)
 
 
-def test_bracket_only_text_is_a_term(reg):
+def test_bracket_only_text_is_a_term(reg: FieldRegistry) -> None:
     # WildcardPlugin only tags text containing "*"/"?", so a bare bracket
     # class is an ordinary term: same as whoosh. (Not folded *down* from a
     # Wildcard; never tagged as one to begin with.)
     assert parse("title:202[0-3]", reg) == ast.Term(field=FieldRef("title"), text="202[0-3]")
 
 
-def test_field_star_every(reg):
+def test_field_star_every(reg: FieldRegistry) -> None:
     assert parse("title:*", reg) == ast.Every(field=FieldRef("title"))
 
 
-def test_boost(reg):
+def test_boost(reg: FieldRegistry) -> None:
     assert parse("title:aaa^2.5", reg) == ast.Boosted(
         ast.Term(field=FieldRef("title"), text="aaa"), 2.5
     )
 
 
-def test_andnot_andmaybe_require(reg):
+def test_andnot_andmaybe_require(reg: FieldRegistry) -> None:
     assert parse("title:a ANDNOT title:b", reg) == ast.AndNot(
         ast.Term(field=FieldRef("title"), text="a"), ast.Term(field=FieldRef("title"), text="b")
     )
@@ -155,7 +156,7 @@ def test_andnot_andmaybe_require(reg):
     )
 
 
-def test_dangling_minus_tolerated(reg):
+def test_dangling_minus_tolerated(reg: FieldRegistry) -> None:
     t = parse("title:a - title:b", reg)  # '-' becomes a bare term, not an error
     assert isinstance(t, ast.And)
 
@@ -164,14 +165,14 @@ def test_dangling_minus_tolerated(reg):
 # -- tree, rather than becoming a live Nothing() that then propagates -------
 
 
-def test_empty_group_dropped_matches_bare_term(reg):
+def test_empty_group_dropped_matches_bare_term(reg: FieldRegistry) -> None:
     assert parse("foo ()", reg) == parse("foo", reg)
 
 
-def test_not_of_empty_group_matches_nothing(reg):
+def test_not_of_empty_group_matches_nothing(reg: FieldRegistry) -> None:
     assert parse("NOT ()", reg) == ast.Nothing()
 
 
-def test_nested_and_repeated_empty_groups_behave_consistently(reg):
+def test_nested_and_repeated_empty_groups_behave_consistently(reg: FieldRegistry) -> None:
     assert parse("foo (() ())", reg) == parse("foo", reg)
     assert parse("(())", reg) == ast.Nothing()

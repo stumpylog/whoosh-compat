@@ -36,6 +36,9 @@ from whoosh_compat import parse as wc_parse
 from whoosh_compat.ast import normalize
 from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.fields import FieldRegistry
+
+from .conftest import TIndex
 
 BERLIN = ZoneInfo("Europe/Berlin")
 BASE = datetime(2020, 4, 15, 10, 30, tzinfo=BERLIN)
@@ -59,21 +62,21 @@ _ZERO_TOKEN_LIKE = ("---", "...", "  ", "***", "___")
 
 
 @st.composite
-def _term_atom(draw):
+def _term_atom(draw: st.DrawFn) -> str:
     field = draw(st.one_of(st.none(), st.sampled_from(_TEXT_FIELDS + _KEYWORD_FIELDS)))
     text = draw(plain_word)
     return f"{field}:{text}" if field else text
 
 
 @st.composite
-def _zero_token_atom(draw):
+def _zero_token_atom(draw: st.DrawFn) -> str:
     field = draw(st.sampled_from(_TEXT_FIELDS))
     text = draw(st.sampled_from(_ZERO_TOKEN_LIKE))
     return f'{field}:"{text}"'
 
 
 @st.composite
-def _phrase_atom(draw):
+def _phrase_atom(draw: st.DrawFn) -> str:
     field = draw(st.sampled_from(_TEXT_FIELDS + _KEYWORD_FIELDS))
     n = draw(st.integers(min_value=1, max_value=4))
     parts = draw(st.lists(phrase_word, min_size=n, max_size=n))
@@ -83,7 +86,7 @@ def _phrase_atom(draw):
 
 
 @st.composite
-def _wildcard_atom(draw):
+def _wildcard_atom(draw: st.DrawFn) -> str:
     field = draw(st.sampled_from(_TEXT_FIELDS + _KEYWORD_FIELDS))
     base = draw(wildcard_base)
     shape = draw(st.sampled_from(["trailing", "leading", "infix", "bracket_trailing", "question"]))
@@ -103,7 +106,7 @@ def _wildcard_atom(draw):
 
 
 @st.composite
-def _numeric_range_atom(draw):
+def _numeric_range_atom(draw: st.DrawFn) -> str:
     field = draw(st.sampled_from(_NUM_FIELDS))
     lo = draw(st.integers(min_value=0, max_value=100_000))
     hi = draw(st.integers(min_value=lo, max_value=lo + 100_000))
@@ -117,7 +120,7 @@ def _numeric_range_atom(draw):
 
 
 @st.composite
-def _date_bare_atom(draw):
+def _date_bare_atom(draw: st.DrawFn) -> str:
     field = draw(st.sampled_from(_DATE_FIELDS))
     shape = draw(st.sampled_from(["year", "compact", "separated", "keyword", "relative"]))
     if shape == "year":
@@ -140,7 +143,7 @@ def _date_bare_atom(draw):
 
 
 @st.composite
-def _date_range_atom(draw):
+def _date_range_atom(draw: st.DrawFn) -> str:
     field = draw(st.sampled_from(_DATE_FIELDS))
     lo = draw(st.one_of(st.just(""), st.integers(min_value=1, max_value=9999).map(str)))
     hi = draw(st.one_of(st.just(""), st.integers(min_value=1, max_value=9999).map(str)))
@@ -152,7 +155,7 @@ def _date_range_atom(draw):
 
 
 @st.composite
-def _comma_atom(draw):
+def _comma_atom(draw: st.DrawFn) -> str:
     field = draw(st.sampled_from(_KEYWORD_FIELDS))
     n = draw(st.integers(min_value=2, max_value=4))
     parts = draw(st.lists(phrase_word, min_size=n, max_size=n))
@@ -163,14 +166,14 @@ def _comma_atom(draw):
 
 
 @st.composite
-def _json_atom(draw):
+def _json_atom(draw: st.DrawFn) -> str:
     path = draw(st.sampled_from(_JSON_SUBPATHS))
     value = draw(plain_word)
     return f"{path}:{value}"
 
 
 @st.composite
-def _bool_exists_atom(draw):
+def _bool_exists_atom(draw: st.DrawFn) -> str:
     field = draw(st.sampled_from(_BOOL_EXISTS_FIELDS))
     value = draw(st.sampled_from(["true", "false"]))
     return f"{field}:{value}"
@@ -196,7 +199,7 @@ _BOOSTS = ("0.5", "1.5", "2", "2.0", "10")
 _BINARY_OPS = ("AND", "OR", "ANDNOT", "ANDMAYBE", "REQUIRE")
 
 
-def _extend(children):
+def _extend(children: st.SearchStrategy[str]) -> st.SearchStrategy[str]:
     group = children.map(lambda c: f"({c})")
     negated = children.map(lambda c: f"NOT ({c})")
     boosted = st.tuples(children, st.sampled_from(_BOOSTS)).map(lambda t: f"({t[0]})^{t[1]}")
@@ -207,7 +210,7 @@ def _extend(children):
     return st.one_of(group, negated, boosted, binary, implicit_and)
 
 
-def _query_text(max_leaves=6):
+def _query_text(max_leaves: int = 6) -> st.SearchStrategy[str]:
     return st.recursive(_leaves, _extend, max_leaves=max_leaves)
 
 
@@ -222,7 +225,7 @@ def _query_text(max_leaves=6):
     # leakage between examples.
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
-def test_emit_never_raises_except_unsupported(q, tindex, ereg):
+def test_emit_never_raises_except_unsupported(q: str, tindex: TIndex, ereg: FieldRegistry) -> None:
     result = wc_parse(q, registry=ereg, default_fields=_DEFAULT_FIELDS, tz=BERLIN, basedate=BASE)
     if result.diagnostics:
         # A diagnostic means the AST contains an ErrorLeaf: emitting one is
@@ -244,7 +247,7 @@ def test_emit_never_raises_except_unsupported(q, tindex, ereg):
 @settings(
     max_examples=300, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
 )
-def test_normalize_idempotent_on_emitter_registry_grammar(q, ereg):
+def test_normalize_idempotent_on_emitter_registry_grammar(q: str, ereg: FieldRegistry) -> None:
     # A second, registry-independent angle on normalize()'s totality/
     # idempotence contract (the primary property lives in
     # tests/differential/test_hypothesis.py, against the oracle registry's

@@ -53,6 +53,15 @@ strict = false
 check_untyped_defs = true
 
 [[tool.mypy.overrides]]
+# Tests are also fully type-checked (parameters, fixtures, return types),
+# run separately as `uv run mypy tests` since the real whoosh test-only
+# dependency below has no stubs and some untyped-def leniency differs from
+# src's.
+module = "tests.*"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+
+[[tool.mypy.overrides]]
 # The real whoosh package (test-only oracle dependency for tests/differential,
 # see its pinned git ref above) ships no py.typed marker / type stubs.
 module = "whoosh.*"

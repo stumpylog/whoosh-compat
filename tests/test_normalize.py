@@ -5,6 +5,7 @@ from whoosh_compat.ast import AndMaybe
 from whoosh_compat.ast import AndNot
 from whoosh_compat.ast import Boosted
 from whoosh_compat.ast import Every
+from whoosh_compat.ast import Node
 from whoosh_compat.ast import Not
 from whoosh_compat.ast import Nothing
 from whoosh_compat.ast import Or
@@ -13,7 +14,7 @@ from whoosh_compat.ast import Term
 from whoosh_compat.ast import normalize
 
 
-def T(x):
+def T(x: str) -> Term:
     return Term(field=None, text=x)
 
 
@@ -37,27 +38,27 @@ class TestRule1NormalizeChildrenFirst:
             ),
         ],
     )
-    def test_children_normalized_first(self, tree, expected):
+    def test_children_normalized_first(self, tree: Node, expected: Node) -> None:
         assert normalize(tree) == expected
 
 
 # Rule 2: flatten nested same-type groups; Boosted is a barrier except
 # Boosted(Boosted(x, a), b) which merges (that's rule 8's territory too).
 class TestRule2Flatten:
-    def test_flatten_and(self):
+    def test_flatten_and(self) -> None:
         t = And(children=(And(children=(T("a"), T("b"))), T("c")))
         assert normalize(t) == And(children=(T("a"), T("b"), T("c")))
 
-    def test_flatten_or(self):
+    def test_flatten_or(self) -> None:
         t = Or(children=(Or(children=(T("a"), T("b"))), T("c")))
         assert normalize(t) == Or(children=(T("a"), T("b"), T("c")))
 
-    def test_boosted_and_does_not_flatten(self):
+    def test_boosted_and_does_not_flatten(self) -> None:
         inner = And(children=(T("a"), T("b")))
         t = And(children=(Boosted(child=inner, boost=2.0), T("c")))
         assert normalize(t) == And(children=(Boosted(child=inner, boost=2.0), T("c")))
 
-    def test_boosted_boosted_merges(self):
+    def test_boosted_boosted_merges(self) -> None:
         t = Boosted(child=Boosted(child=T("a"), boost=2.0), boost=3.0)
         assert normalize(t) == Boosted(child=T("a"), boost=6.0)
 
@@ -112,7 +113,7 @@ class TestRule3NothingPropagation:
             ),
         ],
     )
-    def test_nothing_propagation(self, tree, expected):
+    def test_nothing_propagation(self, tree: Node, expected: Node) -> None:
         assert normalize(tree) == expected
 
 
@@ -125,16 +126,16 @@ class TestRule4SingleChildUnwrap:
             pytest.param(Or(children=(T("a"),)), T("a"), id="or-single-child-unwraps"),
         ],
     )
-    def test_single_child_unwrap(self, tree, expected):
+    def test_single_child_unwrap(self, tree: Node, expected: Node) -> None:
         assert normalize(tree) == expected
 
 
 # Rule 5: duplicate sibling dedupe, preserving first-seen order.
 class TestRule5Dedupe:
-    def test_dedupe(self):
+    def test_dedupe(self) -> None:
         assert normalize(Or(children=(T("a"), T("a")))) == T("a")
 
-    def test_dedupe_preserves_first_seen_order(self):
+    def test_dedupe_preserves_first_seen_order(self) -> None:
         t = And(children=(T("b"), T("a"), T("b")))
         assert normalize(t) == And(children=(T("b"), T("a")))
 
@@ -153,7 +154,7 @@ class TestRule6EveryAbsorption:
             ),
         ],
     )
-    def test_every_absorption(self, tree, expected):
+    def test_every_absorption(self, tree: Node, expected: Node) -> None:
         assert normalize(tree) == expected
 
 
@@ -166,16 +167,16 @@ class TestRule7EmptyGroupToNothing:
             pytest.param(Or(children=()), id="empty-or"),
         ],
     )
-    def test_empty_group_collapses(self, tree):
+    def test_empty_group_collapses(self, tree: Node) -> None:
         assert normalize(tree) == Nothing()
 
 
 # Rule 8: Boosted(x, 1.0) strips to x.
 class TestRule8BoostOneStrips:
-    def test_boost_of_one_strips(self):
+    def test_boost_of_one_strips(self) -> None:
         assert normalize(Boosted(child=T("a"), boost=1.0)) == T("a")
 
-    def test_boost_merge_results_in_one_strips(self):
+    def test_boost_merge_results_in_one_strips(self) -> None:
         # Boosted(Boosted(x, 0.5), 2.0) -> merged boost 1.0 -> strips entirely
         t = Boosted(child=Boosted(child=T("a"), boost=0.5), boost=2.0)
         assert normalize(t) == T("a")

@@ -1,5 +1,6 @@
 """Date / numeric / term range emission."""
 
+from collections.abc import Callable
 from datetime import UTC
 from datetime import datetime
 
@@ -9,12 +10,14 @@ from whoosh_compat import ast
 from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.fields import FieldRef
+from whoosh_compat.fields import FieldRegistry
 
+from .conftest import TIndex
 from .conftest import emit_ast
 from .conftest import search_ids
 
 
-def utc(y, m, d):
+def utc(y: int, m: int, d: int) -> datetime:
     return datetime(y, m, d, tzinfo=UTC)
 
 
@@ -45,13 +48,23 @@ def utc(y, m, d):
         ),
     ],
 )
-def test_date_range(tindex, ereg, lo, hi, incl_lo, incl_hi, expected):
+def test_date_range(
+    tindex: TIndex,
+    ereg: FieldRegistry,
+    lo: datetime | None,
+    hi: datetime | None,
+    incl_lo: bool,
+    incl_hi: bool,
+    expected: list[int],
+) -> None:
     node = ast.DateRange(field=FieldRef("created"), lo=lo, hi=hi, incl_lo=incl_lo, incl_hi=incl_hi)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
 
-def test_date_range_parsed(tindex, ereg, parse):
+def test_date_range_parsed(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
     q = emit_ast(parse("created:[2020-01-01 TO 2020-12-31]"), tindex, ereg)
     assert search_ids(tindex[0], q) == [1, 4]
 
@@ -64,19 +77,27 @@ def test_date_range_parsed(tindex, ereg, parse):
         pytest.param(102, None, True, True, [3, 4], id="open-upper"),
     ],
 )
-def test_numeric_range(tindex, ereg, lo, hi, incl_lo, incl_hi, expected):
+def test_numeric_range(
+    tindex: TIndex,
+    ereg: FieldRegistry,
+    lo: int | None,
+    hi: int | None,
+    incl_lo: bool,
+    incl_hi: bool,
+    expected: list[int],
+) -> None:
     node = ast.NumericRange(field=FieldRef("asn"), lo=lo, hi=hi, incl_lo=incl_lo, incl_hi=incl_hi)
     q = emit_ast(node, tindex, ereg)
     assert search_ids(tindex[0], q) == expected
 
 
-def test_text_range_raises(tindex, ereg):
+def test_text_range_raises(tindex: TIndex, ereg: FieldRegistry) -> None:
     node = ast.TermRange(field=FieldRef("title"), lo="a", hi="z", incl_lo=True, incl_hi=True)
     with pytest.raises(UnsupportedQueryError, match="text ranges"):
         emit_ast(node, tindex, ereg)
 
 
-def test_date_range_naive_bounds_pass_through(tindex, ereg):
+def test_date_range_naive_bounds_pass_through(tindex: TIndex, ereg: FieldRegistry) -> None:
     # _to_naive_utc()'s passthrough branch: bounds that are already naive
     # (no tzinfo) are used as-is rather than converted.
     node = ast.DateRange(
@@ -90,7 +111,7 @@ def test_date_range_naive_bounds_pass_through(tindex, ereg):
     assert search_ids(tindex[0], q) == [1, 4]
 
 
-def test_range_open_on_both_sides_means_field_exists(tindex, ereg):
+def test_range_open_on_both_sides_means_field_exists(tindex: TIndex, ereg: FieldRegistry) -> None:
     # A range with no bounds at all ("asn:[TO]") used to raise QueryEmitError
     # (the ast.NumericRange/DateRange constructors don't forbid this shape,
     # and the grammar-aware property fuzzer found it parses cleanly, see
@@ -109,17 +130,29 @@ def test_range_open_on_both_sides_means_field_exists(tindex, ereg):
 # -- host constructing ast.NumericRange/ast.DateRange directly can.
 
 
-def test_numeric_range_non_numeric_bound_raises_query_emit_error(tindex, ereg):
+def test_numeric_range_non_numeric_bound_raises_query_emit_error(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     node = ast.NumericRange(
-        field=FieldRef("asn"), lo="notanumber", hi=None, incl_lo=True, incl_hi=True
+        field=FieldRef("asn"),
+        lo="notanumber",  # type: ignore[arg-type]
+        hi=None,
+        incl_lo=True,
+        incl_hi=True,
     )
     with pytest.raises(QueryEmitError, match="notanumber"):
         emit_ast(node, tindex, ereg)
 
 
-def test_date_range_non_datetime_bound_raises_query_emit_error(tindex, ereg):
+def test_date_range_non_datetime_bound_raises_query_emit_error(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
     node = ast.DateRange(
-        field=FieldRef("created"), lo="not-a-datetime", hi=None, incl_lo=True, incl_hi=True
+        field=FieldRef("created"),
+        lo="not-a-datetime",  # type: ignore[arg-type]
+        hi=None,
+        incl_lo=True,
+        incl_hi=True,
     )
     with pytest.raises(QueryEmitError, match="not-a-datetime"):
         emit_ast(node, tindex, ereg)

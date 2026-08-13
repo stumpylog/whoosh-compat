@@ -9,6 +9,7 @@ from whoosh_compat import ast
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.fields import FieldRef
+from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.parser import dateparse as dp
 from whoosh_compat.parser import syntax
 from whoosh_compat.parser.dateparse import DateErrorNode
@@ -23,7 +24,7 @@ BERLIN = ZoneInfo("Europe/Berlin")
 BASE = datetime(2026, 8, 4, 10, 30, tzinfo=BERLIN)
 
 
-def dparse(q, reg):
+def dparse(q: str, reg: FieldRegistry) -> wc.ParseResult:
     return wc.parse(q, registry=reg, default_fields=["content"], tz=BERLIN, basedate=BASE)
 
 
@@ -34,8 +35,9 @@ def dparse(q, reg):
         pytest.param("created:[2020 TO 2020]", id="explicit-same-year-range-is-equivalent"),
     ],
 )
-def test_year_precision(reg, query):
+def test_year_precision(reg: FieldRegistry, query: str) -> None:
     r = dparse(query, reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r == ast.DateRange(
         field=FieldRef("created"),
         lo=datetime(2020, 1, 1, tzinfo=UTC),
@@ -45,37 +47,42 @@ def test_year_precision(reg, query):
     )
 
 
-def test_open_upper(reg):
+def test_open_upper(reg: FieldRegistry) -> None:
     r = dparse("created:[2020 TO]", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo is not None
     assert r.hi is None
 
 
-def test_yesterday_keyword(reg):
+def test_yesterday_keyword(reg: FieldRegistry) -> None:
     r = dparse("added:yesterday", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 8, 3, 0, 0, tzinfo=BERLIN).astimezone(UTC)
     assert r.hi == datetime(2026, 8, 4, 0, 0, tzinfo=BERLIN).astimezone(UTC)
     assert not r.incl_hi
 
 
-def test_previous_month(reg):
+def test_previous_month(reg: FieldRegistry) -> None:
     r = dparse("added:'previous month'", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 7, 1, tzinfo=BERLIN).astimezone(UTC)
     assert r.hi == datetime(2026, 8, 1, tzinfo=BERLIN).astimezone(UTC)
     assert not r.incl_hi
 
 
-def test_now_compact(reg):
+def test_now_compact(reg: FieldRegistry) -> None:
     r = dparse("added:[now-7d TO now]", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo is not None
     assert (BASE.astimezone(UTC) - r.lo).days == 7
 
 
-def test_whoosh_plusminus(reg):
+def test_whoosh_plusminus(reg: FieldRegistry) -> None:
     r = dparse("added:'-1 week'", reg).ast
     assert isinstance(r, ast.DateRange)
 
 
-def test_bad_date_diagnostic(reg):
+def test_bad_date_diagnostic(reg: FieldRegistry) -> None:
     res = dparse("added:notadate", reg)
     assert res.diagnostics
     assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
@@ -86,7 +93,7 @@ def test_bad_date_diagnostic(reg):
     assert res.diagnostics[0].raw_value == "notadate"
 
 
-def test_datetime_boost_preserved(reg):
+def test_datetime_boost_preserved(reg: FieldRegistry) -> None:
     r = dparse("added:2020^2.0", reg).ast
     assert isinstance(r, ast.Boosted)
     assert r.boost == 2.0
@@ -106,8 +113,9 @@ def test_datetime_boost_preserved(reg):
         ),
     ],
 )
-def test_dayname_keywords(reg, query, expected_date):
+def test_dayname_keywords(reg: FieldRegistry, query: str, expected_date: datetime) -> None:
     r = dparse(query, reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(
         expected_date.year, expected_date.month, expected_date.day, tzinfo=BERLIN
     ).astimezone(UTC)
@@ -126,8 +134,12 @@ def test_dayname_keywords(reg, query, expected_date):
         pytest.param("added:'5:30:15pm'", 17, 30, 15, id="5-30-15pm-with-seconds"),
     ],
 )
-def test_time12_keywords(reg, query, hour, minute, second):
+def test_time12_keywords(
+    reg: FieldRegistry, query: str, hour: int, minute: int, second: int
+) -> None:
     r = dparse(query, reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo is not None
     lo_local = r.lo.astimezone(BERLIN)
     assert (lo_local.hour, lo_local.minute, lo_local.second) == (hour, minute, second)
 
@@ -135,47 +147,54 @@ def test_time12_keywords(reg, query, hour, minute, second):
 # --- Other relative-calendar keywords ---------------------------------------
 
 
-def test_previous_year(reg):
+def test_previous_year(reg: FieldRegistry) -> None:
     r = dparse("added:'previous year'", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2025, 1, 1, tzinfo=BERLIN).astimezone(UTC)
     assert r.hi == datetime(2026, 1, 1, tzinfo=BERLIN).astimezone(UTC)
     assert not r.incl_hi
 
 
-def test_previous_week(reg):
+def test_previous_week(reg: FieldRegistry) -> None:
     # BASE 2026-08-04 is a Tuesday; this week's Monday is 2026-08-03, so
     # "previous week" is 2026-07-27 through (excl) 2026-08-03.
     r = dparse("added:'previous week'", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 7, 27, tzinfo=BERLIN).astimezone(UTC)
     assert r.hi == datetime(2026, 8, 3, tzinfo=BERLIN).astimezone(UTC)
     assert not r.incl_hi
 
 
-def test_previous_quarter(reg):
+def test_previous_quarter(reg: FieldRegistry) -> None:
     # BASE month is August (Q3), so the previous quarter is Q2: Apr-Jun.
     r = dparse("added:'previous quarter'", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 4, 1, tzinfo=BERLIN).astimezone(UTC)
     assert r.hi == datetime(2026, 7, 1, tzinfo=BERLIN).astimezone(UTC)
     assert not r.incl_hi
 
 
-def test_this_year(reg):
+def test_this_year(reg: FieldRegistry) -> None:
     r = dparse("added:'this year'", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 1, 1, tzinfo=BERLIN).astimezone(UTC)
 
 
-def test_this_month(reg):
+def test_this_month(reg: FieldRegistry) -> None:
     r = dparse("added:'this month'", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 8, 1, tzinfo=BERLIN).astimezone(UTC)
 
 
-def test_today(reg):
+def test_today(reg: FieldRegistry) -> None:
     r = dparse("added:today", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 8, 4, tzinfo=BERLIN).astimezone(UTC)
 
 
-def test_now_keyword(reg):
+def test_now_keyword(reg: FieldRegistry) -> None:
     r = dparse("added:now", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == BASE.astimezone(UTC)
     assert r.incl_lo
     assert r.incl_hi
@@ -188,8 +207,10 @@ def test_now_keyword(reg):
         pytest.param("added:noon", 12, 0, 0, id="noon"),
     ],
 )
-def test_midnight_noon(reg, query, hour, minute, second):
+def test_midnight_noon(reg: FieldRegistry, query: str, hour: int, minute: int, second: int) -> None:
     r = dparse(query, reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo is not None
     lo_local = r.lo.astimezone(BERLIN)
     assert (lo_local.hour, lo_local.minute, lo_local.second) == (hour, minute, second)
     # midnight/noon disambiguate to a zero-width (start == end) timespan, an
@@ -200,8 +221,9 @@ def test_midnight_noon(reg, query, hour, minute, second):
     assert r.incl_hi
 
 
-def test_tomorrow(reg):
+def test_tomorrow(reg: FieldRegistry) -> None:
     r = dparse("added:tomorrow", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 8, 5, tzinfo=BERLIN).astimezone(UTC)
 
 
@@ -220,16 +242,17 @@ def test_tomorrow(reg):
         pytest.param("created:'august 2020'", id="month-year"),
     ],
 )
-def test_named_month_sequences(reg, query):
+def test_named_month_sequences(reg: FieldRegistry, query: str) -> None:
     r = dparse(query, reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo is not None
 
 
-def test_month_alone(reg):
+def test_month_alone(reg: FieldRegistry) -> None:
     # "august" alone with no day/year -> the whole month, in the basedate's
     # year (2026).
     r = dparse("created:august", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 8, 1, tzinfo=UTC)
     assert r.hi == datetime(2026, 9, 1, tzinfo=UTC)
     assert not r.incl_hi
@@ -238,22 +261,24 @@ def test_month_alone(reg):
 # --- Compact numeric "simple" sequence (DateParser.__init__'s self.simple) -
 
 
-def test_compact_numeric_datetime(reg):
+def test_compact_numeric_datetime(reg: FieldRegistry) -> None:
     r = dparse("added:'20200304'", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2020, 3, 4, tzinfo=BERLIN).astimezone(UTC)
 
 
-def test_compact_numeric_datetime_progressive_partial(reg):
+def test_compact_numeric_datetime_progressive_partial(reg: FieldRegistry) -> None:
     # progressive=True: a prefix of the simple sequence (year+month only)
     # still matches.
     r = dparse("added:'202003'", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2020, 3, 1, tzinfo=BERLIN).astimezone(UTC)
 
 
 # --- plusdate / nowcompact (Combo/PlusMinus grammar) -----------------------
 
 
-def test_plusdate_years_months_weeks_combo(reg):
+def test_plusdate_years_months_weeks_combo(reg: FieldRegistry) -> None:
     r = dparse("added:'-1y2mo3w'", reg).ast
     assert isinstance(r, ast.DateRange)
 
@@ -312,7 +337,9 @@ def test_plusdate_years_months_weeks_combo(reg):
         ),
     ],
 )
-def test_separated_iso_date_precision(reg, query, lo, hi):
+def test_separated_iso_date_precision(
+    reg: FieldRegistry, query: str, lo: datetime, hi: datetime
+) -> None:
     r = dparse(query, reg).ast
     assert isinstance(r, ast.DateRange), r
     assert r.lo == lo
@@ -323,13 +350,14 @@ def test_separated_iso_date_precision(reg, query, lo, hi):
 # --- Range queries combining two date expressions (range_to_node) ---------
 
 
-def test_range_both_bounds_named_dates(reg):
+def test_range_both_bounds_named_dates(reg: FieldRegistry) -> None:
     r = dparse("created:[2020-01-01 TO 2020-12-31]", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2020, 1, 1, tzinfo=UTC)
     assert r.hi == datetime(2021, 1, 1, tzinfo=UTC)
 
 
-def test_range_bounds_do_not_collapse_to_year(reg):
+def test_range_bounds_do_not_collapse_to_year(reg: FieldRegistry) -> None:
     # Companion to test_range_both_bounds_named_dates: that test's answer
     # coincidentally matches what the pre-fix "collapse to bare year" bug
     # (DIVERGENCES.md, range_to_node not enforcing full-text consumption on
@@ -337,17 +365,19 @@ def test_range_bounds_do_not_collapse_to_year(reg):
     # year happens to contain them). This case doesn't coincide: the buggy
     # behavior would silently produce the whole of 2020, not June 15-20.
     r = dparse("created:[2020-06-15 TO 2020-06-20]", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2020, 6, 15, tzinfo=UTC)
     assert r.hi == datetime(2020, 6, 21, tzinfo=UTC)
 
 
-def test_range_open_lower(reg):
+def test_range_open_lower(reg: FieldRegistry) -> None:
     r = dparse("created:[TO 2020]", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo is None
     assert r.hi is not None
 
 
-def test_range_both_sides_are_periods_cannot_combine(reg):
+def test_range_both_sides_are_periods_cannot_combine(reg: FieldRegistry) -> None:
     # Both sides resolve to an already-disambiguated timespan ("previous
     # week"/"previous month"), which can't be nested inside another
     # timespan(): exercises range_to_node's non-combine branch for both
@@ -375,7 +405,7 @@ def test_range_both_sides_are_periods_cannot_combine(reg):
         ),
     ],
 )
-def test_year_followed_by_time(reg, query, expected_lo):
+def test_year_followed_by_time(reg: FieldRegistry, query: str, expected_lo: datetime) -> None:
     r = dparse(query, reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == expected_lo.replace(tzinfo=UTC)
@@ -393,7 +423,7 @@ def test_year_followed_by_time(reg, query, expected_lo):
         pytest.param("created:[0000 TO 2020]", id="zero-year-range-start"),
     ],
 )
-def test_years_outside_the_representable_range_diagnose(reg, query):
+def test_years_outside_the_representable_range_diagnose(reg: FieldRegistry, query: str) -> None:
     # Year 0 has no datetime representation, and year 9999's exclusive
     # ceiling would land past datetime.max. Both blow up in the arithmetic
     # rather than the grammar, so they need catching: parsing reports bad
@@ -410,7 +440,9 @@ def test_years_outside_the_representable_range_diagnose(reg, query):
         pytest.param("created:[0000 TO 2020]", "0000", id="start-bound-underflow-named-correctly"),
     ],
 )
-def test_range_out_of_range_diagnostic_names_the_failing_bound(reg, query, bad_bound):
+def test_range_out_of_range_diagnostic_names_the_failing_bound(
+    reg: FieldRegistry, query: str, bad_bound: str
+) -> None:
     # Regression: range_to_node's exception handler used to always report
     # `node.start or node.end`, so a range failing on its END bound (e.g.
     # year 9999's exclusive ceiling overflowing datetime.max) incorrectly
@@ -423,7 +455,7 @@ def test_range_out_of_range_diagnostic_names_the_failing_bound(reg, query, bad_b
     assert res.diagnostics[0].raw_value == bad_bound
 
 
-def test_range_bad_start_diagnostic(reg):
+def test_range_bad_start_diagnostic(reg: FieldRegistry) -> None:
     res = dparse("added:[notadate TO 2020]", reg)
     assert res.diagnostics
     assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
@@ -431,7 +463,7 @@ def test_range_bad_start_diagnostic(reg):
     assert res.diagnostics[0].raw_value == "notadate"
 
 
-def test_range_bad_end_diagnostic(reg):
+def test_range_bad_end_diagnostic(reg: FieldRegistry) -> None:
     res = dparse("added:[2020 TO notadate]", reg)
     assert res.diagnostics
     assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
@@ -444,14 +476,15 @@ def test_range_bad_end_diagnostic(reg):
 # --- torange Combo grammar (free "X to Y" text inside one field value) -----
 
 
-def test_torange_combo_basic(reg):
+def test_torange_combo_basic(reg: FieldRegistry) -> None:
     r = dparse("added:'3pm to 5pm'", reg).ast
     assert isinstance(r, ast.DateRange)
+    assert r.lo is not None
     lo_local = r.lo.astimezone(BERLIN)
     assert lo_local.hour == 15
 
 
-def test_torange_combo_first_side_fails_whole_thing_fails(reg):
+def test_torange_combo_first_side_fails_whole_thing_fails(reg: FieldRegistry) -> None:
     # Combo.parse's `if at is None: return (None, None)`: the first bundle
     # doesn't match at all, so neither the "to" combo nor any dmy/bundle
     # alternative in the outer Choice matches either.
@@ -460,7 +493,7 @@ def test_torange_combo_first_side_fails_whole_thing_fails(reg):
     assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
 
 
-def test_sequence_fill_in_type_error_rejected(reg):
+def test_sequence_fill_in_type_error_rejected(reg: FieldRegistry) -> None:
     # Combining day=31 with month=february (2020, a leap year -> Feb has 29
     # days) inside the dmy Sequence raises TimeError from fill_in()'s
     # adatetime(**args) construction (parser/dateparse.py:233-236); Sequence
@@ -471,11 +504,13 @@ def test_sequence_fill_in_type_error_rejected(reg):
     assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
 
 
-def test_bag_time_and_date_both_match_in_one_value(reg):
+def test_bag_time_and_date_both_match_in_one_value(reg: FieldRegistry) -> None:
     # English.setup's `self.datetime = Bag((self.time, self.dmy))`: both
     # sub-elements matching in the same value hits the `onceper and
     # all(seen)` early-break (parser/dateparse.py:416-417).
     r = dparse("added:'3pm 4 august 2020'", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo is not None
     lo_local = r.lo.astimezone(BERLIN)
     assert (lo_local.year, lo_local.month, lo_local.day, lo_local.hour) == (2020, 8, 4, 15)
 
@@ -567,7 +602,7 @@ def test_daterangesyntaxnode_and_dateerrornode_r() -> None:
     assert err.r() == "DateError 'bad'"
 
 
-def test_bare_date_keyword_under_query_parser_default_date_field(reg) -> None:
+def test_bare_date_keyword_under_query_parser_default_date_field(reg: FieldRegistry) -> None:
     # do_dates() only date-parses a node with a fieldname. An unfielded
     # term's fieldname is None until QueryParser.fieldname's default-field
     # fallback fills it in; do_dates() used to skip that fallback, so a bare
@@ -595,7 +630,7 @@ def test_naive_basedate_rejected_by_plugin_construction() -> None:
         DateParserPlugin(naive, BERLIN)
 
 
-def test_naive_basedate_rejected_via_parse(reg) -> None:
+def test_naive_basedate_rejected_via_parse(reg: FieldRegistry) -> None:
     naive = datetime(2026, 8, 4, 10, 30)  # no tzinfo
     with pytest.raises(ValueError, match="aware"):
         wc.parse(
@@ -603,7 +638,7 @@ def test_naive_basedate_rejected_via_parse(reg) -> None:
         )
 
 
-def test_aware_basedate_with_same_wall_clock_still_works(reg) -> None:
+def test_aware_basedate_with_same_wall_clock_still_works(reg: FieldRegistry) -> None:
     # Pins the fixed behavior without manipulating the process timezone
     # (time.tzset() isn't available on Windows): an aware basedate resolves
     # against its own tzinfo regardless of the machine's local zone, since
@@ -613,12 +648,13 @@ def test_aware_basedate_with_same_wall_clock_still_works(reg) -> None:
     r = wc.parse(
         "added:yesterday", registry=reg, default_fields=["content"], tz=BERLIN, basedate=aware
     ).ast
+    assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 8, 3, 0, 0, tzinfo=BERLIN).astimezone(UTC)
     assert r.hi == datetime(2026, 8, 4, 0, 0, tzinfo=BERLIN).astimezone(UTC)
     assert not r.incl_hi
 
 
-def test_do_dates_leaves_non_range_non_text_date_field_node_untouched(reg) -> None:
+def test_do_dates_leaves_non_range_non_text_date_field_node_untouched(reg: FieldRegistry) -> None:
     # do_dates()'s trailing `else: continue` (has_fieldname but neither a
     # RangeNode nor has_text) has no real-world producer in the current
     # plugin set: FieldnameNode/RangeNode/TextNode are the only
@@ -627,7 +663,7 @@ def test_do_dates_leaves_non_range_non_text_date_field_node_untouched(reg) -> No
     class FieldOnlyNode(syntax.SyntaxNode):
         has_fieldname = True
 
-        def __init__(self, fieldname):
+        def __init__(self, fieldname: str) -> None:
             self.fieldname = fieldname
 
     plugin = DateParserPlugin(BASE, BERLIN)
@@ -640,11 +676,12 @@ def test_do_dates_leaves_non_range_non_text_date_field_node_untouched(reg) -> No
     assert result[0] is group[0]  # untouched, not replaced
 
 
-def test_range_exclusive_bounds_ignored_for_ambiguous_bounds(reg):
+def test_range_exclusive_bounds_ignored_for_ambiguous_bounds(reg: FieldRegistry) -> None:
     # "2020"/"2021" are ambiguous (year-only) bounds, not exact instants, so
     # range_to_node forces incl_lo=True regardless of the query's "{" exclusive
     # marker (parser/dateparse.py:999-1000): only incl_hi is
     # forced-exclusive (it already carries the "+1us" half-open adjustment).
     r = dparse("added:{2020 TO 2021}", reg).ast
+    assert isinstance(r, ast.DateRange)
     assert r.incl_lo is True
     assert r.incl_hi is False

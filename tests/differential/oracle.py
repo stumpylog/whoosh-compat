@@ -228,7 +228,7 @@ class LocalDateParser(English):
     def reverse_timezone_offset(self, d: datetime) -> datetime:
         return d.replace(tzinfo=self.tz).astimezone(UTC)
 
-    def date_from(self, *args: object, **kwargs: object):  # type: ignore[override]
+    def date_from(self, *args: object, **kwargs: object) -> datetime | timespan | None:  # type: ignore[override]
         d = super().date_from(*args, **kwargs)  # type: ignore[arg-type]
         if isinstance(d, timespan):
             d.start = self.reverse_timezone_offset(d.start)

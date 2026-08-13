@@ -54,7 +54,7 @@ query = st.builds(lambda parts: " ".join(parts), st.lists(clause, min_size=1, ma
 
 @given(query)
 @settings(max_examples=300, deadline=None)
-def test_fuzz_matches_oracle(q):
+def test_fuzz_matches_oracle(q: str) -> None:
     if allowed(q):
         return
     expected = to_ast(oracle_parse(q, BASE, BERLIN), ORACLE_REGISTRY)
@@ -160,7 +160,7 @@ del _q
 
 @given(query_text(max_leaves=6))
 @settings(max_examples=300, deadline=None)
-def test_normalize_is_total_and_idempotent(q):
+def test_normalize_is_total_and_idempotent(q: str) -> None:
     # compat_raw_parse (not the public wc.parse()) so this exercises
     # normalize() the way callers actually invoke it: on a freshly parsed,
     # not-yet-normalized tree, not one that has already been through it once.
@@ -172,7 +172,7 @@ def test_normalize_is_total_and_idempotent(q):
 
 @given(st.text(max_size=80))
 @settings(max_examples=300, deadline=None)
-def test_parse_never_raises(q):
+def test_parse_never_raises(q: str) -> None:
     wc.parse(
         q,
         registry=ORACLE_REGISTRY,
@@ -211,7 +211,7 @@ _wild = st.lists(st.one_of(st.text(max_size=12), _meta), min_size=0, max_size=40
 
 @given(_wild)
 @settings(max_examples=300, deadline=None)
-def test_parse_never_raises_wild(q):
+def test_parse_never_raises_wild(q: str) -> None:
     # The contract under test: bad input NEVER raises; it surfaces on the
     # ParseResult's diagnostics channel instead.
     result = wc.parse(

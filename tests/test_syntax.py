@@ -91,7 +91,7 @@ class StubParser:
         ),
     ],
 )
-def test_group_builds_ast(group_cls, expected) -> None:
+def test_group_builds_ast(group_cls: type[syntax.GroupNode], expected: ast.Node) -> None:
     g = group_cls([syntax.WordNode("a"), syntax.WordNode("b")])
     q = g.query(StubParser())
     assert q == expected
@@ -143,7 +143,7 @@ def test_attach_copies_span_onto_frozen_node() -> None:
     assert attached == ast.Term(field=None, text="a", startchar=3, endchar=4)
     assert dataclasses.is_dataclass(attached)
     with pytest.raises(dataclasses.FrozenInstanceError):
-        attached.startchar = 99  # type: ignore[misc]
+        attached.startchar = 99  # type: ignore[union-attr]
 
 
 def test_attach_none_passthrough() -> None:
@@ -433,15 +433,16 @@ def test_groupnode_empty_copy_preserves_fieldname_and_text() -> None:
         has_fieldname = True
         has_text = True
 
-        def __init__(self, nodes=None, **kwargs: Any) -> None:
+        def __init__(self, nodes: list[syntax.SyntaxNode] | None = None, **kwargs: Any) -> None:
             super().__init__(nodes, **kwargs)
-            self.fieldname = None
-            self.text = None
+            self.fieldname: str | None = None
+            self.text: str | None = None
 
     group = TaggedTextGroup([syntax.WordNode("a")])
     group.fieldname = "title"
     group.text = "raw"
     copy = group.empty_copy()
+    assert isinstance(copy, TaggedTextGroup)
     assert copy.fieldname == "title"
     assert copy.text == "raw"
     assert len(copy) == 0

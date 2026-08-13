@@ -16,17 +16,17 @@ from whoosh_compat.fields import resolve_exists_strategy
 # ============================================================================
 
 
-def test_field_ref_str_plain():
+def test_field_ref_str_plain() -> None:
     """str() of a plain FieldRef (no subpath) is just its name."""
     assert str(FieldRef("created")) == "created"
 
 
-def test_field_ref_str_json_subpath():
+def test_field_ref_str_json_subpath() -> None:
     """str() of a JSON-subpath FieldRef is the canonical dotted form."""
     assert str(FieldRef("notes", "user")) == "notes.user"
 
 
-def test_field_ref_equality():
+def test_field_ref_equality() -> None:
     """FieldRef is a plain, comparable data carrier."""
     assert FieldRef("notes", "user") == FieldRef("notes", "user")
     assert FieldRef("notes", "user") != FieldRef("notes", "admin")
@@ -38,14 +38,14 @@ def test_field_ref_equality():
 # ============================================================================
 
 
-def test_resolve_by_canonical_name():
+def test_resolve_by_canonical_name() -> None:
     """resolve() finds a spec by its canonical name."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
     registry = FieldRegistry([spec])
     assert registry.resolve(FieldRef("title")) is spec
 
 
-def test_resolve_by_alias():
+def test_resolve_by_alias() -> None:
     """resolve() finds a spec by its alias.
 
     A ``FieldRef`` naming an alias directly (rather than the alias having
@@ -59,35 +59,35 @@ def test_resolve_by_alias():
     assert registry.resolve(FieldRef("subject")) is spec
 
 
-def test_resolve_unknown_returns_none():
+def test_resolve_unknown_returns_none() -> None:
     """resolve() returns None for unknown names."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
     registry = FieldRegistry([spec])
     assert registry.resolve(FieldRef("unknown")) is None
 
 
-def test_resolve_json_subpath():
+def test_resolve_json_subpath() -> None:
     """resolve() returns the JSON field's spec for a valid subpath ref."""
     spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user", "admin"))
     registry = FieldRegistry([spec])
     assert registry.resolve(FieldRef("notes", "user")) is spec
 
 
-def test_resolve_json_invalid_subpath_returns_none():
+def test_resolve_json_invalid_subpath_returns_none() -> None:
     """resolve() returns None when the ref's subpath isn't registered."""
     spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user",))
     registry = FieldRegistry([spec])
     assert registry.resolve(FieldRef("notes", "body")) is None
 
 
-def test_resolve_subpath_on_non_json_spec_returns_none():
+def test_resolve_subpath_on_non_json_spec_returns_none() -> None:
     """resolve() returns None when a subpath ref targets a non-JSON field."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
     registry = FieldRegistry([spec])
     assert registry.resolve(FieldRef("title", "user")) is None
 
 
-def test_resolve_plain_ref_on_json_spec_returns_the_json_spec():
+def test_resolve_plain_ref_on_json_spec_returns_the_json_spec() -> None:
     """resolve() on a plain (no-subpath) ref to a JSON field still returns
     that field's spec; whether a *term* can be built against it without a
     subpath is an emitter-level question (see test_emit_terms.py), not a
@@ -103,28 +103,28 @@ def test_resolve_plain_ref_on_json_spec_returns_the_json_spec():
 # ============================================================================
 
 
-def test_make_ref_canonical_name():
+def test_make_ref_canonical_name() -> None:
     """make_ref() resolves a canonical name to a plain FieldRef."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
     registry = FieldRegistry([spec])
     assert registry.make_ref("title") == FieldRef("title")
 
 
-def test_make_ref_alias_canonicalizes():
+def test_make_ref_alias_canonicalizes() -> None:
     """make_ref() canonicalizes an alias to the spec's own name."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("heading",))
     registry = FieldRegistry([spec])
     assert registry.make_ref("heading") == FieldRef("title")
 
 
-def test_make_ref_json_subpath():
+def test_make_ref_json_subpath() -> None:
     """make_ref() splits on the first dot and validates the subpath."""
     spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user", "admin"))
     registry = FieldRegistry([spec])
     assert registry.make_ref("notes.user") == FieldRef("notes", "user")
 
 
-def test_make_ref_json_subpath_with_extra_dots():
+def test_make_ref_json_subpath_with_extra_dots() -> None:
     """make_ref() only splits on the first dot; the subpath itself may
     contain further dots, matched verbatim against spec.subpaths.
     """
@@ -133,7 +133,7 @@ def test_make_ref_json_subpath_with_extra_dots():
     assert registry.make_ref("notes.user.name") == FieldRef("notes", "user.name")
 
 
-def test_make_ref_json_invalid_subpath_returns_none():
+def test_make_ref_json_invalid_subpath_returns_none() -> None:
     """make_ref() returns None for a dotted name whose subpath isn't
     registered, so the existing FieldsPlugin demotion path (unknown field
     text merges back into the following word) is unchanged.
@@ -143,7 +143,7 @@ def test_make_ref_json_invalid_subpath_returns_none():
     assert registry.make_ref("notes.body") is None
 
 
-def test_make_ref_dotted_name_on_non_json_spec_returns_none():
+def test_make_ref_dotted_name_on_non_json_spec_returns_none() -> None:
     """make_ref() returns None for a dotted name whose base isn't a JSON
     field (it isn't reinterpreted as anything else).
     """
@@ -152,7 +152,7 @@ def test_make_ref_dotted_name_on_non_json_spec_returns_none():
     assert registry.make_ref("title.user") is None
 
 
-def test_make_ref_json_field_bare_name_is_unrecognized():
+def test_make_ref_json_field_bare_name_is_unrecognized() -> None:
     """make_ref() on a JSON field's bare name (no dot, no subpath) returns
     None rather than a plain ref (issue #11): a JSON field addressed
     without a subpath has no way to emit, so treating it as known here
@@ -163,7 +163,7 @@ def test_make_ref_json_field_bare_name_is_unrecognized():
     assert registry.make_ref("notes") is None
 
 
-def test_make_ref_unknown_returns_none():
+def test_make_ref_unknown_returns_none() -> None:
     """make_ref() returns None for a name that resolves neither as a plain
     field nor as a JSON subpath.
     """
@@ -172,7 +172,7 @@ def test_make_ref_unknown_returns_none():
     assert registry.make_ref("unknown") is None
 
 
-def test_make_ref_registered_dotted_plain_field_wins_over_json_interpretation():
+def test_make_ref_registered_dotted_plain_field_wins_over_json_interpretation() -> None:
     """A registered *plain* field whose own name contains a dot resolves
     directly, exactly, rather than being reinterpreted as ``base.subpath``
     against some other JSON field. This is the canary case a previous
@@ -191,21 +191,21 @@ def test_make_ref_registered_dotted_plain_field_wins_over_json_interpretation():
 # ============================================================================
 
 
-def test_contains_canonical_name():
+def test_contains_canonical_name() -> None:
     """in operator returns True for canonical name."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
     registry = FieldRegistry([spec])
     assert "title" in registry
 
 
-def test_contains_alias():
+def test_contains_alias() -> None:
     """in operator returns True for alias."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("heading",))
     registry = FieldRegistry([spec])
     assert "heading" in registry
 
 
-def test_contains_dotted_json_path():
+def test_contains_dotted_json_path() -> None:
     """in operator returns True for valid dotted JSON path."""
     spec = FieldSpec(
         name="notes",
@@ -216,7 +216,7 @@ def test_contains_dotted_json_path():
     assert "notes.user" in registry
 
 
-def test_contains_invalid_path():
+def test_contains_invalid_path() -> None:
     """in operator returns False for invalid path."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
     registry = FieldRegistry([spec])
@@ -228,7 +228,7 @@ def test_contains_invalid_path():
 # ============================================================================
 
 
-def test_iter_specs():
+def test_iter_specs() -> None:
     """Iteration yields FieldSpec objects in insertion order."""
     spec1 = FieldSpec(name="title", kind=FieldKind.TEXT)
     spec2 = FieldSpec(name="date", kind=FieldKind.DATE, date_only=True)
@@ -239,7 +239,7 @@ def test_iter_specs():
     assert specs == [spec1, spec2, spec3]
 
 
-def test_iter_deduplicates():
+def test_iter_deduplicates() -> None:
     """Iteration yields unique specs only."""
     spec1 = FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("heading",))
     spec2 = FieldSpec(name="date", kind=FieldKind.DATE, date_only=True)
@@ -256,7 +256,7 @@ def test_iter_deduplicates():
 # ============================================================================
 
 
-def test_validation_duplicate_canonical_names():
+def test_validation_duplicate_canonical_names() -> None:
     """ValueError if two specs have the same canonical name; message says
     "duplicate canonical name" here, since that's genuinely what collided
     (contrast test_validation_duplicate_canonical_name_message_names_alias_collision,
@@ -268,7 +268,7 @@ def test_validation_duplicate_canonical_names():
         FieldRegistry([spec1, spec2])
 
 
-def test_validation_alias_collides_with_canonical():
+def test_validation_alias_collides_with_canonical() -> None:
     """ValueError if an alias collides with another spec's canonical name."""
     spec1 = FieldSpec(name="title", kind=FieldKind.TEXT)
     spec2 = FieldSpec(name="body", kind=FieldKind.TEXT, aliases=("title",))
@@ -276,7 +276,7 @@ def test_validation_alias_collides_with_canonical():
         FieldRegistry([spec1, spec2])
 
 
-def test_validation_duplicate_aliases():
+def test_validation_duplicate_aliases() -> None:
     """ValueError if two specs have the same alias."""
     spec1 = FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("heading",))
     spec2 = FieldSpec(name="subject", kind=FieldKind.TEXT, aliases=("heading",))
@@ -284,7 +284,7 @@ def test_validation_duplicate_aliases():
         FieldRegistry([spec1, spec2])
 
 
-def test_validation_duplicate_canonical_name_message_names_alias_collision():
+def test_validation_duplicate_canonical_name_message_names_alias_collision() -> None:
     """issue #21: when a later spec's canonical name collides with an
     *earlier* spec's alias (not its canonical name), the message must say
     so, not claim "duplicate canonical name" (which is what actually
@@ -300,18 +300,18 @@ def test_validation_duplicate_canonical_name_message_names_alias_collision():
     assert "duplicate canonical name" not in message
 
 
-def test_validation_rejects_empty_canonical_name():
+def test_validation_rejects_empty_canonical_name() -> None:
     """issue #21: an empty field name can never be typed in a query."""
     with pytest.raises(ValueError, match="empty"):
         FieldRegistry([FieldSpec(name="", kind=FieldKind.TEXT)])
 
 
-def test_validation_rejects_empty_alias():
+def test_validation_rejects_empty_alias() -> None:
     with pytest.raises(ValueError, match="empty"):
         FieldRegistry([FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("",))])
 
 
-def test_validation_rejects_duplicate_aliases_within_one_spec():
+def test_validation_rejects_duplicate_aliases_within_one_spec() -> None:
     """issue #21: two identical aliases on the *same* spec (as opposed to
     test_validation_duplicate_aliases's cross-spec case) previously slipped
     past the collision check entirely, since that check only compares
@@ -323,7 +323,7 @@ def test_validation_rejects_duplicate_aliases_within_one_spec():
         )
 
 
-def test_validation_rejects_dotted_json_canonical_name():
+def test_validation_rejects_dotted_json_canonical_name() -> None:
     """issue #21 (narrowed by the follow-up status-update comment): a
     dotted canonical name is only actually unreachable for a JSON-kind
     field. make_ref's exact-match branch excludes JSON specifically (a
@@ -337,7 +337,7 @@ def test_validation_rejects_dotted_json_canonical_name():
         FieldRegistry([FieldSpec(name="meta.data", kind=FieldKind.JSON, subpaths=("x",))])
 
 
-def test_validation_rejects_dotted_json_alias():
+def test_validation_rejects_dotted_json_alias() -> None:
     # A clean alias before the dotted one exercises the loop actually
     # scanning past a non-offending entry, not just checking the first.
     with pytest.raises(ValueError, match=r"heading\.sub"):
@@ -353,7 +353,7 @@ def test_validation_rejects_dotted_json_alias():
         )
 
 
-def test_validation_dotted_plain_canonical_name_is_permitted():
+def test_validation_dotted_plain_canonical_name_is_permitted() -> None:
     """A dotted canonical name on a *non*-JSON field is a deliberately
     supported, tested shape (tests/emitter/test_emit_terms.py's
     dotted-plain-field tests): make_ref's exact-match lookup finds it
@@ -366,14 +366,14 @@ def test_validation_dotted_plain_canonical_name_is_permitted():
     assert registry.make_ref("field.with.dots") == FieldRef("field.with.dots")
 
 
-def test_validation_dotted_plain_alias_is_permitted():
+def test_validation_dotted_plain_alias_is_permitted() -> None:
     registry = FieldRegistry(
         [FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("heading.sub",))]
     )
     assert registry.make_ref("heading.sub") == FieldRef("title")
 
 
-def test_validation_boolean_exists_target_boolean_exists_kind_rejected():
+def test_validation_boolean_exists_target_boolean_exists_kind_rejected() -> None:
     """issue #21: a BOOLEAN_EXISTS exists_target can never work, since a
     BOOLEAN_EXISTS field has no physical index column of its own to check
     "exists" against, no matter its fast/kind-resolved strategy. Previously
@@ -389,7 +389,7 @@ def test_validation_boolean_exists_target_boolean_exists_kind_rejected():
         FieldRegistry([spec1, spec2, spec3])
 
 
-def test_validation_boolean_exists_target_kind_rejected_regardless_of_list_order():
+def test_validation_boolean_exists_target_kind_rejected_regardless_of_list_order() -> None:
     """The rejection is a third pass over all fully-registered specs, so it
     must not depend on exists_target being listed *after* the field that
     references it: has_has_tag names has_tag as exists_target here while
@@ -402,14 +402,14 @@ def test_validation_boolean_exists_target_kind_rejected_regardless_of_list_order
         FieldRegistry([spec3, spec1, spec2])
 
 
-def test_validation_boolean_exists_self_reference_rejected():
+def test_validation_boolean_exists_self_reference_rejected() -> None:
     with pytest.raises(ValueError, match="has_tag"):
         FieldRegistry(
             [FieldSpec(name="has_tag", kind=FieldKind.BOOLEAN_EXISTS, exists_target="has_tag")]
         )
 
 
-def test_validation_boolean_exists_fast_self_reference_rejected():
+def test_validation_boolean_exists_fast_self_reference_rejected() -> None:
     """The specific gap the follow-up status update flagged: fast=True on
     a self-targeting BOOLEAN_EXISTS spec resolved a FAST_FIELD strategy
     (fast=True always does, regardless of kind) and so previously
@@ -430,7 +430,7 @@ def test_validation_boolean_exists_fast_self_reference_rejected():
         )
 
 
-def test_analyzer_on_kind_that_ignores_it_is_permitted():
+def test_analyzer_on_kind_that_ignores_it_is_permitted() -> None:
     """issue #21, documented as permitted (not a validation gap): a host
     may reasonably share one FieldSpec factory across kinds, passing an
     analyzer that a non-TEXT/KEYWORD/JSON kind simply never calls.
@@ -443,14 +443,14 @@ def test_analyzer_on_kind_that_ignores_it_is_permitted():
 # ============================================================================
 
 
-def test_validation_boolean_exists_requires_target():
+def test_validation_boolean_exists_requires_target() -> None:
     """ValueError if BOOLEAN_EXISTS spec lacks exists_target."""
     spec = FieldSpec(name="has_attachment", kind=FieldKind.BOOLEAN_EXISTS)
     with pytest.raises(ValueError, match="has_attachment"):
         FieldRegistry([spec])
 
 
-def test_validation_boolean_exists_target_must_exist():
+def test_validation_boolean_exists_target_must_exist() -> None:
     """ValueError if exists_target does not reference a registered spec."""
     spec = FieldSpec(
         name="has_attachment",
@@ -461,7 +461,7 @@ def test_validation_boolean_exists_target_must_exist():
         FieldRegistry([spec])
 
 
-def test_validation_boolean_exists_target_unsupported_kind_rejected():
+def test_validation_boolean_exists_target_unsupported_kind_rejected() -> None:
     """ValueError if exists_target has no resolvable 'exists' strategy:
     non-fast and not TEXT/KEYWORD. The error names the target field and the
     two remedies (mark it fast, or change its kind).
@@ -480,7 +480,7 @@ def test_validation_boolean_exists_target_unsupported_kind_rejected():
     assert "TEXT or KEYWORD" in message
 
 
-def test_validation_boolean_exists_target_text_is_valid():
+def test_validation_boolean_exists_target_text_is_valid() -> None:
     """BOOLEAN_EXISTS can target a non-fast TEXT field."""
     spec1 = FieldSpec(name="attachment", kind=FieldKind.TEXT)
     spec2 = FieldSpec(
@@ -492,7 +492,7 @@ def test_validation_boolean_exists_target_text_is_valid():
     assert registry.resolve(FieldRef("has_attachment")) is spec2
 
 
-def test_validation_boolean_exists_target_keyword_is_valid():
+def test_validation_boolean_exists_target_keyword_is_valid() -> None:
     """BOOLEAN_EXISTS can target a non-fast KEYWORD field.
 
     Previously only fast=True or kind=TEXT was accepted at registry
@@ -510,7 +510,7 @@ def test_validation_boolean_exists_target_keyword_is_valid():
     assert registry.resolve(FieldRef("has_tag")) is spec2
 
 
-def test_validation_boolean_exists_target_fast_is_valid():
+def test_validation_boolean_exists_target_fast_is_valid() -> None:
     """BOOLEAN_EXISTS can target a fast=True field."""
     spec1 = FieldSpec(name="flag", kind=FieldKind.KEYWORD, fast=True)
     spec2 = FieldSpec(
@@ -541,7 +541,9 @@ def test_validation_boolean_exists_target_fast_is_valid():
         pytest.param(FieldKind.DATETIME, False, None, id="non-fast-datetime-unsupported"),
     ],
 )
-def test_resolve_exists_strategy_function(kind, fast, expected):
+def test_resolve_exists_strategy_function(
+    kind: FieldKind, fast: bool, expected: ExistsStrategy | None
+) -> None:
     """The pure kind/fast -> strategy resolution function used by both
     registry validation and (via ``FieldRegistry.exists_strategy``)
     emission.
@@ -549,7 +551,7 @@ def test_resolve_exists_strategy_function(kind, fast, expected):
     assert resolve_exists_strategy(kind, fast) is expected
 
 
-def test_registry_exists_strategy_accessor():
+def test_registry_exists_strategy_accessor() -> None:
     """FieldRegistry.exists_strategy() returns the strategy resolved at
     construction time for a registered spec, without re-inspecting kind or
     fastness at call time.
@@ -564,7 +566,7 @@ def test_registry_exists_strategy_accessor():
     assert registry.exists_strategy(unsupported_spec) is None
 
 
-def test_every_and_boolean_exists_share_resolved_strategy():
+def test_every_and_boolean_exists_share_resolved_strategy() -> None:
     """A field's exists strategy, as resolved for a bare ``field:*``
     (``Every``), and as resolved for a BOOLEAN_EXISTS field targeting it,
     are the exact same registry-computed value, by construction.
@@ -573,10 +575,13 @@ def test_every_and_boolean_exists_share_resolved_strategy():
     has_tag = FieldSpec(name="has_tag", kind=FieldKind.BOOLEAN_EXISTS, exists_target="tag")
     registry = FieldRegistry([target, has_tag])
 
-    every_field_strategy = registry.exists_strategy(registry.resolve(FieldRef("tag")))
-    boolean_exists_target_strategy = registry.exists_strategy(
-        registry.resolve(FieldRef(has_tag.exists_target))
-    )
+    tag_spec = registry.resolve(FieldRef("tag"))
+    assert tag_spec is not None
+    every_field_strategy = registry.exists_strategy(tag_spec)
+    assert has_tag.exists_target is not None
+    target_spec = registry.resolve(FieldRef(has_tag.exists_target))
+    assert target_spec is not None
+    boolean_exists_target_strategy = registry.exists_strategy(target_spec)
     assert every_field_strategy is boolean_exists_target_strategy is ExistsStrategy.TERM_SCAN
 
 
@@ -585,14 +590,14 @@ def test_every_and_boolean_exists_share_resolved_strategy():
 # ============================================================================
 
 
-def test_validation_json_requires_subpaths():
+def test_validation_json_requires_subpaths() -> None:
     """ValueError if JSON spec has empty subpaths."""
     spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=())
     with pytest.raises(ValueError, match="notes"):
         FieldRegistry([spec])
 
 
-def test_validation_json_with_subpaths_is_valid():
+def test_validation_json_with_subpaths_is_valid() -> None:
     """JSON spec with non-empty subpaths is valid."""
     spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user",))
     registry = FieldRegistry([spec])
@@ -604,35 +609,35 @@ def test_validation_json_with_subpaths_is_valid():
 # ============================================================================
 
 
-def test_validation_comma_values_on_keyword():
+def test_validation_comma_values_on_keyword() -> None:
     """comma_values=True is valid on KEYWORD."""
     spec = FieldSpec(name="tags", kind=FieldKind.KEYWORD, comma_values=True)
     registry = FieldRegistry([spec])
     assert registry.resolve(FieldRef("tags")) is spec
 
 
-def test_validation_comma_values_on_u64():
+def test_validation_comma_values_on_u64() -> None:
     """comma_values=True is valid on U64."""
     spec = FieldSpec(name="ids", kind=FieldKind.U64, comma_values=True)
     registry = FieldRegistry([spec])
     assert registry.resolve(FieldRef("ids")) is spec
 
 
-def test_validation_comma_values_on_text():
+def test_validation_comma_values_on_text() -> None:
     """comma_values=True is valid on TEXT."""
     spec = FieldSpec(name="keywords", kind=FieldKind.TEXT, comma_values=True)
     registry = FieldRegistry([spec])
     assert registry.resolve(FieldRef("keywords")) is spec
 
 
-def test_validation_comma_values_on_date_invalid():
+def test_validation_comma_values_on_date_invalid() -> None:
     """ValueError if comma_values=True on DATE."""
     spec = FieldSpec(name="dates", kind=FieldKind.DATE, comma_values=True)
     with pytest.raises(ValueError, match="dates"):
         FieldRegistry([spec])
 
 
-def test_validation_comma_values_on_json_invalid():
+def test_validation_comma_values_on_json_invalid() -> None:
     """ValueError if comma_values=True on JSON."""
     spec = FieldSpec(
         name="data",
@@ -649,23 +654,25 @@ def test_validation_comma_values_on_json_invalid():
 # ============================================================================
 
 
-def test_validation_date_only_on_date_true():
+def test_validation_date_only_on_date_true() -> None:
     """date_only=True on DATE is valid."""
     spec = FieldSpec(name="created", kind=FieldKind.DATE, date_only=True)
     registry = FieldRegistry([spec])
     resolved = registry.resolve(FieldRef("created"))
+    assert resolved is not None
     assert resolved.date_only is True
 
 
-def test_validation_date_only_on_date_false_normalized():
+def test_validation_date_only_on_date_false_normalized() -> None:
     """DATE spec with date_only=False is normalized to date_only=True."""
     spec = FieldSpec(name="created", kind=FieldKind.DATE, date_only=False)
     registry = FieldRegistry([spec])
     resolved = registry.resolve(FieldRef("created"))
+    assert resolved is not None
     assert resolved.date_only is True
 
 
-def test_validation_date_only_on_non_date_invalid():
+def test_validation_date_only_on_non_date_invalid() -> None:
     """ValueError if date_only=True on non-DATE kind."""
     spec = FieldSpec(name="tags", kind=FieldKind.KEYWORD, date_only=True)
     with pytest.raises(ValueError, match="tags"):
@@ -677,7 +684,7 @@ def test_validation_date_only_on_non_date_invalid():
 # ============================================================================
 
 
-def test_registry_with_multiple_specs():
+def test_registry_with_multiple_specs() -> None:
     """Registry handles multiple valid specs."""
     specs = [
         FieldSpec(name="title", kind=FieldKind.TEXT),
@@ -708,7 +715,7 @@ def test_registry_with_multiple_specs():
 # ============================================================================
 
 
-def test_empty_registry():
+def test_empty_registry() -> None:
     """Empty registry works."""
     registry = FieldRegistry([])
     assert list(registry) == []
@@ -716,8 +723,8 @@ def test_empty_registry():
     assert "anything" not in registry
 
 
-def test_field_spec_frozen():
+def test_field_spec_frozen() -> None:
     """FieldSpec is frozen (immutable)."""
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
     with pytest.raises(dataclasses.FrozenInstanceError):
-        spec.name = "new_title"
+        spec.name = "new_title"  # type: ignore[misc]
