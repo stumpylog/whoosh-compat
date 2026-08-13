@@ -493,13 +493,14 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         strategy, since ``FieldRegistry`` rejects one whose target has none.
 
         Takes the full ``ResolvedField`` (not a bare spec) per this module's
-        general contract, but ``resolved.json_path`` is not yet consulted
-        here: subpath-aware existence checking for a JSON field is a
-        separate, not-yet-implemented fix. That is an explicit decision
-        this method makes, visible at every call site that passes a
-        subpath-carrying ``ResolvedField`` through unused, rather than a
-        silent drop inside a resolver that never had the subpath to begin
-        with.
+        general contract, and honors ``resolved.json_path`` for the
+        ``FAST_JSON_FIELD`` strategy: a subpath-carrying resolution checks
+        only that subpath's fast column (``resolved.dotted_name``), not
+        "does any subpath of this field have a value" (issue #29). The
+        ``TERM_SCAN`` strategy and the final "no strategy" error both name
+        ``resolved.dotted_name`` too, so a non-fast JSON subpath's error
+        message names the dotted form the user actually typed rather than
+        the bare field name.
         """
         spec = resolved.spec
         strategy = self.registry.exists_strategy(spec)
@@ -507,6 +508,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # exists_query is a cheap fast-field presence check.
             return tantivy.Query.exists_query(spec.name)
         if strategy is ExistsStrategy.FAST_JSON_FIELD:
+            if resolved.is_subpath:
+                # Checking a specific subpath's own fast column: no
+                # json_subpaths flag needed, the dotted name already
+                # addresses exactly that column (verified against a live
+                # tantivy index, including multi-level subpaths).
+                return tantivy.Query.exists_query(resolved.dotted_name)
+            # Whole-field existence: any subpath having a value counts.
             # A JSON fast field's subpath columns are only checked with
             # json_subpaths=True; without it, exists_query never finds a
             # value (issue #7).
@@ -516,16 +524,18 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # regex that matches every term in the field's dictionary.
             return tantivy.Query.regex_query(self.schema, spec.name, ".*")
         # No resolved strategy (a non-fast field of any other kind, e.g.
-        # U64, DATE, DATETIME, BOOLEAN_EXISTS, ...): regex_query only
-        # matches against a tantivy text/string field, so a fallback here
-        # would build a query that dies at tantivy search time rather than
-        # emit time. Report it clearly instead. Only reachable via
-        # ``_range_query``'s open-both-sides delegation (a spec that hasn't
-        # gone through BOOLEAN_EXISTS's registry check).
+        # U64, DATE, DATETIME, BOOLEAN_EXISTS, a non-fast JSON subpath, ...):
+        # regex_query only matches against a tantivy text/string field, so a
+        # fallback here would build a query that dies at tantivy search time
+        # rather than emit time. Report it clearly instead, naming the
+        # dotted form (spec.name for a plain field, "spec.name.json_path"
+        # for a subpath) so the message matches what the user actually
+        # typed rather than a bare field name that was never reachable
+        # syntax to begin with (issue #29's second symptom).
         raise UnsupportedQueryError(
-            f"field {spec.name!r} ({spec.kind.name}) has no way to match"
-            f" 'exists' while non-fast: mark it fast=True to support"
-            f" '{spec.name}:*'"
+            f"field {resolved.dotted_name!r} ({spec.kind.name}) has no way to"
+            f" match 'exists' while non-fast: mark it fast=True to support"
+            f" '{resolved.dotted_name}:*'"
         )
 
     def visit_every(self, node: ast.Every) -> tantivy.Query:

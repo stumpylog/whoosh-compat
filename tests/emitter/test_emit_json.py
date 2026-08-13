@@ -12,10 +12,12 @@ actually supports) plus, explicitly, the escaping-fallback code path.
 from collections.abc import Callable
 
 import pytest
+import tantivy
 
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import TantivyEmitter
 from whoosh_compat.errors import QueryEmitError
+from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -170,6 +172,86 @@ def test_json_paths_supported_is_cached_across_calls(tindex: TIndex, ereg: Field
     first = emitter._json_paths_supported()
     second = emitter._json_paths_supported()
     assert first == second
+
+
+@pytest.mark.parametrize(
+    ("qs", "expected"),
+    [
+        pytest.param("attrs.user:*", [1, 4, 5], id="user-subpath-star"),
+        pytest.param("attrs.note:*", [1, 4], id="note-subpath-star-excludes-user-only-doc"),
+    ],
+)
+def test_json_subpath_exists_fast_field_scoped_to_subpath(
+    tindex: TIndex,
+    ereg: FieldRegistry,
+    parse: Callable[[str], ast.Node],
+    qs: str,
+    expected: list[int],
+) -> None:
+    # issue #29: a fast JSON field's `field.subpath:*` must check only that
+    # subpath's own fast column, not "does any subpath of this field have a
+    # value". Doc 5 has attrs.user but no attrs.note, so the two subpaths
+    # must emit genuinely different (not byte-identical) queries and
+    # therefore different match sets.
+    q = emit_ast(parse(qs), tindex, ereg)
+    assert search_ids(tindex[0], q) == expected
+
+
+def test_json_subpath_exists_whole_field_control_unchanged(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
+    # Control: the non-subpath, whole-field existence strategy (any subpath
+    # has a value) is unchanged by the subpath-aware fix above. A bare JSON
+    # field name is not reachable query syntax on its own (make_ref demotes
+    # it, see fields.py), so this is exercised the way it actually is
+    # reachable: directly via Every(FieldRef("attrs")), same as
+    # has_attrs's BOOLEAN_EXISTS redirect (ereg's "has_attrs" field) would
+    # resolve to. Docs 1, 4, and 5 all have some "attrs" value; docs 2 and 3
+    # have none.
+    node = ast.Every(field=FieldRef("attrs"))
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == [1, 4, 5]
+
+
+def test_json_subpath_exists_nonfast_raises_naming_dotted_form(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
+    # issue #29's second symptom: a non-fast JSON field has no way to answer
+    # "exists" for a subpath, but the error message must name the
+    # subpath-qualified form the user actually typed ("notes.user:*"), not
+    # the bare field name ("notes:*"), which is not reachable syntax at all.
+    node = parse("notes.user:*")
+    with pytest.raises(UnsupportedQueryError, match=r"notes\.user"):
+        emit_ast(node, tindex, ereg)
+
+
+def test_json_subpath_exists_multilevel_fast_field(tindex: TIndex) -> None:
+    # issue #29 explicitly calls out verifying multi-level subpaths
+    # (a.b.c), not just single-level, against a real tantivy index.
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_json_field("data", stored=True, fast=True)  # type: ignore[call-arg]
+    schema = sb.build()
+    index = tantivy.Index(schema)
+    w = index.writer()
+    for doc_id, payload in [
+        (1, {"a": {"b": {"c": "value"}}}),
+        (2, {"a": {"b": {"other": "value"}}}),
+        (3, {}),
+    ]:
+        doc = tantivy.Document()
+        doc.add_unsigned("id", doc_id)
+        doc.add_json("data", payload)
+        w.add_document(doc)
+    w.commit()
+    index.reload()
+
+    reg = FieldRegistry(
+        [FieldSpec("data", FieldKind.JSON, subpaths=("a.b.c", "a.b.other"), fast=True)]
+    )
+    node = ast.Every(field=FieldRef("data", "a.b.c"))
+    q = emit_ast(node, (index, schema), reg)
+    assert search_ids(index, q) == [1]
 
 
 def test_json_subpath_unknown_subpath_falls_back_to_plain_field(

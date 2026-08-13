@@ -371,6 +371,13 @@ parse-then-emit pipeline).
     answer "exists" at all) is rejected at registry construction, not left
     to fail at search time.
 
+    A fast JSON field's existence check is subpath-scoped when the query
+    addresses one: `attrs.user:*` checks only `attrs.user`'s own fast column
+    (`resolved.dotted_name`), distinct from the whole-field `attrs:*`, which
+    checks whether any subpath has a value at all (`json_subpaths=True`); a
+    non-fast JSON subpath still has no strategy and raises
+    `UnsupportedQueryError` naming the dotted form the query used.
+
     Test references: `tests/emitter/test_emit_boolean.py`'s
     `test_boolean_exists_non_fast_text_target` (docs 3/4, punctuation-only
     and whitespace-only `body` values),

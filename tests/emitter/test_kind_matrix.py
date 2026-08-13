@@ -483,12 +483,6 @@ CELLS: list[ParameterSet] = [
         "bare-star",
         "notes.user:*",
         Raises(UnsupportedQueryError, r"notes\.user:\*"),
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="issue #29: non-fast JSON subpath existence raises "
-            "UnsupportedQueryError, but the message still names the bare field "
-            "('notes:*') instead of the dotted subpath form the user typed",
-        ),
     ),
     _param(
         "json-nonfast",
@@ -530,12 +524,6 @@ CELLS: list[ParameterSet] = [
         "bare-star",
         "attrs.note:*",
         Search([1, 4]),
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="issue #29: visit_every ignores FieldRef.json_path for a fast JSON "
-            "field, so every subpath of the same field emits a byte-identical "
-            "field-wide exists_query and wrongly matches doc 5 too",
-        ),
     ),
     _param(
         "json-fast",
