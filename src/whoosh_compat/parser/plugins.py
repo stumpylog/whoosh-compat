@@ -51,6 +51,7 @@ from re import Match
 from typing import Any
 
 from whoosh_compat import ast
+from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.parser import priorities
 from whoosh_compat.parser import syntax
 from whoosh_compat.parser.common import attach
@@ -62,6 +63,22 @@ from whoosh_compat.parser.text import rcompile
 TaggerEntry = tuple[Tagger, int]
 FilterFn = Any
 FilterEntry = tuple[FilterFn, int]
+
+# Maximum parenthesization depth GroupPlugin.do_groups will materialize into
+# real tree hierarchy. Not a whoosh concept: whoosh (and this parser's own
+# tag/filter pipeline, and ast.normalize() before it became iterative) all
+# eventually RecursionError on pathologically deep nesting, just at
+# interpreter-recursion-limit-dependent depths nobody chose on purpose
+# (confirmed directly against both the pinned real-whoosh oracle and this
+# parser without this cap: both start RecursionError-ing between depth 950
+# and 1000 at the default recursion limit of 1000). 200 leaves close to a
+# 5x margin under that floor for every other recursive filter this nested
+# structure still passes through (do_wildcards, do_boost, do_fieldnames,
+# do_operators, do_multifield, do_aliases, do_comma_values, and finally
+# GroupNode.query()), while comfortably exceeding any nesting a real query
+# would ever use. See DIVERGENCES.md entry 31 and ARCHITECTURE.md's
+# "parsing never raises" invariant.
+_MAX_GROUP_NESTING_DEPTH = 200
 
 
 class Plugin:
@@ -337,24 +354,61 @@ class GroupPlugin(Plugin):
     def do_groups(self, parser: Any, group: syntax.GroupNode) -> syntax.GroupNode:
         """This filter finds open and close bracket markers in a flat group
         and uses them to organize the nodes into a hierarchy.
+
+        This is the one place in the whole tag/filter/query pipeline that
+        establishes parenthesization depth (every other filter, plus
+        ``GroupNode.query()`` afterwards, just recurses into whatever
+        hierarchy already exists), so it's also the cheapest and earliest
+        place to cap it: once ``stack`` would grow past
+        ``_MAX_GROUP_NESTING_DEPTH``, further ``(``/``)`` pairs are treated
+        as an opaque, uncounted overflow region (tracked by
+        ``overflow_depth`` instead of pushing/popping ``stack``) and
+        collapsed into a single diagnostic leaf instead of being
+        materialized into real hierarchy that every later stage would have
+        to recurse through (issue #31).
         """
 
         ob, cb = self.OpenBracket, self.CloseBracket
         # Group hierarchy stack
         stack = [parser.group()]
+        # Depth of unclosed "(" seen once at/past the cap, and the bracket
+        # that first tipped it over (kept only for diagnostic positioning).
+        overflow_depth = 0
+        overflow_start: syntax.SyntaxNode | None = None
         for node in group:
             if isinstance(node, ob):
+                if overflow_depth or len(stack) >= _MAX_GROUP_NESTING_DEPTH:
+                    if overflow_depth == 0:
+                        overflow_start = node
+                    overflow_depth += 1
+                    continue
                 # Open bracket: push a new level of hierarchy on the stack
                 stack.append(parser.group())
             elif isinstance(node, cb):
+                if overflow_depth:
+                    overflow_depth -= 1
+                    if overflow_depth == 0:
+                        stack[-1].append(self._overflow_node(overflow_start))
+                        overflow_start = None
+                    continue
                 # Close bracket: pop the current level of hierarchy and append
                 # it to the previous level
                 if len(stack) > 1:
                     last = stack.pop()
                     stack[-1].append(last)
+            elif overflow_depth:
+                # Inside an overflow region: discard content, it will never
+                # be part of the materialized tree.
+                continue
             else:
                 # Anything else: add it to the current level of hierarchy
                 stack[-1].append(node)
+
+        if overflow_depth:
+            # Unbalanced parens inside the overflow region (more opens than
+            # closes): still surface the diagnostic rather than silently
+            # dropping the whole thing.
+            stack[-1].append(self._overflow_node(overflow_start))
 
         top = stack[0]
         # If the parens were unbalanced (more opens than closes), just take
@@ -370,6 +424,14 @@ class GroupPlugin(Plugin):
             top.boost = boost
 
         return top
+
+    @staticmethod
+    def _overflow_node(overflow_start: syntax.SyntaxNode | None) -> syntax.ErrorNode:
+        message = (
+            "query nesting exceeds the maximum supported depth "
+            f"({_MAX_GROUP_NESTING_DEPTH})"
+        )
+        return syntax.ErrorNode(message, node=overflow_start, kind=DiagnosticKind.TOO_DEEP)
 
 
 class EveryPlugin(TaggingPlugin):

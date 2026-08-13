@@ -180,3 +180,41 @@ class TestRule8BoostOneStrips:
         # Boosted(Boosted(x, 0.5), 2.0) -> merged boost 1.0 -> strips entirely
         t = Boosted(child=Boosted(child=T("a"), boost=0.5), boost=2.0)
         assert normalize(t) == T("a")
+
+
+# normalize() must be iterative, not recursive: a hand-built tree can be far
+# deeper than anything the parser's own nesting cap would ever allow through
+# (that cap only bounds *parenthesization* depth reached via parse(), see
+# tests/test_parser_basics.py), so this exercises the traversal mechanism
+# itself, independent of the parse-time cap (issue #31).
+class TestIterativeNormalizeDeepTree:
+    def test_deep_not_chain_does_not_raise_recursion_error(self) -> None:
+        depth = 5000
+        tree: Node = T("a")
+        for _ in range(depth):
+            tree = Not(child=tree)
+        result = normalize(tree)
+        # depth is even, so the Not chain cancels down to a bare Every()...
+        # actually: Not(Nothing()) -> Every() is the only self-annihilating
+        # rule; a chain of plain Not(Term) wrappers doesn't collapse at all,
+        # it just nests. Confirm the traversal completes and the result is
+        # still a Not chain of the same depth, unmangled.
+        count = 0
+        node = result
+        while isinstance(node, Not):
+            count += 1
+            node = node.child
+        assert count == depth
+        assert node == T("a")
+
+    def test_deep_and_chain_does_not_raise_recursion_error(self) -> None:
+        depth = 5000
+        tree: Node = T("z")
+        for i in range(depth):
+            tree = And(children=(T(str(i)), tree))
+        result = normalize(tree)
+        # A right-nested chain of And(x, And(y, And(...))) flattens fully
+        # under rule 2, so this also exercises the flatten/dedupe logic at
+        # depth, not just raw traversal.
+        assert isinstance(result, And)
+        assert len(result.children) == depth + 1

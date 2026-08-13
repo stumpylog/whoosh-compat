@@ -777,3 +777,32 @@ parse-then-emit pipeline).
     `test_pattern_on_plain_json_field_no_subpath_still_works`;
     `tests/emitter/test_kind_matrix.py`'s `json-nonfast`/`json-fast`
     `prefix-star`/`wildcard`/`bracket-class` cells.
+
+31. **A query nested past 200 parenthesization levels is diagnosed at parse
+    time instead of crashing with an uncontrolled `RecursionError` (issue
+    #31).** Real whoosh has no nesting cap at all: it recurses through its
+    own query-building traversal the same way this parser's fork did, and
+    both were confirmed directly to start `RecursionError`-ing on bare
+    paren-nesting somewhere between depth 950 and 1000 (Python's default
+    recursion limit of 1000). That crash is a whoosh defect, not intended
+    semantics (nothing about whoosh's design calls for a query to fail with
+    a bare interpreter error instead of a parser diagnostic), so it is not
+    reproduced here: whoosh-compat caps nesting at
+    `_MAX_GROUP_NESTING_DEPTH` (200, `parser/plugins.py`), well under either
+    interpreter's crash floor, and reports `Diagnostic(kind=TOO_DEEP)` plus
+    an `ErrorLeaf` for the excess nesting instead, keeping `parse()`'s
+    "never raises for query input" invariant intact regardless of the
+    interpreter's recursion limit.
+
+    Not carried through the differential-triage allowlist/corpus triple:
+    the corpus generators (`tests/differential/strategies.py`) have no
+    mechanism that produces 200+ levels of paren nesting, so there is no
+    oracle-comparison test this could ever apply to; the divergence is
+    exercised directly instead (see the test references below).
+
+    Test references: `tests/test_parser_basics.py`'s
+    `test_paren_nesting_below_cap_has_no_diagnostic` and
+    `test_paren_nesting_beyond_cap_reports_diagnostic_instead_of_raising`;
+    `tests/test_normalize.py`'s `TestIterativeNormalizeDeepTree` (covers
+    `ast.normalize()`'s traversal directly, via a hand-built tree that
+    bypasses the parser's cap entirely).

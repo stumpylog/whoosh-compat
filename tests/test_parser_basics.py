@@ -3,6 +3,7 @@ import pytest
 
 import whoosh_compat as wc
 from whoosh_compat import ast
+from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 
@@ -176,3 +177,57 @@ def test_not_of_empty_group_matches_nothing(reg: FieldRegistry) -> None:
 def test_nested_and_repeated_empty_groups_behave_consistently(reg: FieldRegistry) -> None:
     assert parse("foo (() ())", reg) == parse("foo", reg)
     assert parse("(())", reg) == ast.Nothing()
+
+
+# -- pathological parenthesis nesting (issue #31): parsing never raises for
+# -- query input, even input that would blow the interpreter's recursion
+# -- limit if the parser and normalize() traversed it recursively. A query
+# -- past the nesting cap gets a diagnostic instead of a RecursionError.
+
+
+@pytest.mark.parametrize(
+    "depth",
+    [
+        pytest.param(50, id="healthy-depth-below-cap"),
+    ],
+)
+def test_paren_nesting_below_cap_has_no_diagnostic(reg: FieldRegistry, depth: int) -> None:
+    query = "(" * depth + "content:a" + ")" * depth
+    result = wc.parse(query, registry=reg, default_fields=["content", "title"])
+    assert result.diagnostics == ()
+
+
+@pytest.mark.parametrize(
+    "depth",
+    [
+        pytest.param(500, id="depth-that-crashed-normalize-pre-fix"),
+        pytest.param(5000, id="depth-well-beyond-cap"),
+    ],
+)
+def test_paren_nesting_beyond_cap_reports_diagnostic_instead_of_raising(
+    reg: FieldRegistry, depth: int
+) -> None:
+    query = "(" * depth + "content:a" + ")" * depth
+    result = wc.parse(query, registry=reg, default_fields=["content", "title"])
+    assert result.diagnostics != ()
+    assert any(d.kind is DiagnosticKind.TOO_DEEP for d in result.diagnostics)
+    assert any(isinstance(n, ast.ErrorLeaf) for n in _flatten(result.ast))
+
+
+def _flatten(node: ast.Node) -> list[ast.Node]:
+    """Collects a node and every descendant reachable through the AST's
+    various child-holding attributes, for assertions that just need to know
+    whether an ErrorLeaf is present *somewhere* in the tree.
+    """
+
+    out = [node]
+    for attr in ("children",):
+        val = getattr(node, attr, None)
+        if val is not None:
+            for child in val:
+                out.extend(_flatten(child))
+    for attr in ("child", "positive", "negative", "required", "optional", "scored", "filter_only"):
+        val = getattr(node, attr, None)
+        if isinstance(val, ast.Node):
+            out.extend(_flatten(val))
+    return out

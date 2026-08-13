@@ -456,9 +456,15 @@ class Wrapper(GroupNode):
 
 
 class ErrorNode(SyntaxNode):
-    def __init__(self, message: str, node: SyntaxNode | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        node: SyntaxNode | None = None,
+        kind: DiagnosticKind = DiagnosticKind.UNKNOWN,
+    ) -> None:
         self.message = message
         self.node = node
+        self.kind = kind
 
     def r(self) -> str:
         return f"ERR {self.node!r} {self.message!r}"
@@ -474,7 +480,7 @@ class ErrorNode(SyntaxNode):
     def query(self, parser: Any) -> ast.Node:
         diagnostic = Diagnostic(
             message=self.message,
-            kind=DiagnosticKind.UNKNOWN,
+            kind=self.kind,
             startchar=self.startchar,
             endchar=self.endchar,
         )

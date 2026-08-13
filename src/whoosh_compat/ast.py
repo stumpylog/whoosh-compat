@@ -178,21 +178,37 @@ def _dedupe(nodes: tuple[Node, ...]) -> tuple[Node, ...]:
     return tuple(result)
 
 
-def normalize(node: Node) -> Node:
-    """Normalize an AST node into canonical form (pure, bottom-up).
-
-    Applies flattening of nested same-type groups, Nothing/Every
-    propagation, duplicate-sibling dedupe, empty-group collapse, single-child
-    unwrap, and boost merging/stripping.
-
-    Args:
-        node: The AST node to normalize.
-
-    Returns:
-        The normalized node.
+def _child_nodes(node: Node) -> tuple[Node, ...]:
+    """Returns the immediate child nodes ``normalize`` needs normalized
+    before it can apply ``node``'s own rule, in the same order the
+    recursive implementation used to visit them. Leaf types (and And/Or
+    with no children) return ``()``.
     """
+
+    if isinstance(node, (And, Or)):
+        return node.children
+    if isinstance(node, Not):
+        return (node.child,)
+    if isinstance(node, AndNot):
+        return (node.positive, node.negative)
+    if isinstance(node, AndMaybe):
+        return (node.required, node.optional)
+    if isinstance(node, Require):
+        return (node.scored, node.filter_only)
+    if isinstance(node, Boosted):
+        return (node.child,)
+    return ()
+
+
+def _normalize_one(node: Node, children: tuple[Node, ...]) -> Node:
+    """Applies ``node``'s own normalization rule given its *already
+    normalized* children (``children``, in the same order ``_child_nodes``
+    returned them). Pure combination step, no traversal: this is the part
+    ``normalize``'s recursive predecessor did after its recursive calls
+    returned.
+    """
+
     if isinstance(node, And):
-        children = tuple(normalize(c) for c in node.children)
         if not children:
             return Nothing()  # rule 7: empty group -> Nothing
         if any(isinstance(c, Nothing) for c in children):
@@ -213,7 +229,6 @@ def normalize(node: Node) -> Node:
         return And(children=tuple(flat))
 
     if isinstance(node, Or):
-        children = tuple(normalize(c) for c in node.children)
         if not children:
             return Nothing()  # rule 7: empty group -> Nothing
         flat = []
@@ -233,14 +248,13 @@ def normalize(node: Node) -> Node:
         return Or(children=tuple(flat))
 
     if isinstance(node, Not):
-        child = normalize(node.child)
+        (child,) = children
         if isinstance(child, Nothing):
             return Every()
         return Not(child=child)
 
     if isinstance(node, AndNot):
-        positive = normalize(node.positive)
-        negative = normalize(node.negative)
+        positive, negative = children
         if isinstance(positive, Nothing):
             return Nothing()
         if isinstance(negative, Nothing):
@@ -248,8 +262,7 @@ def normalize(node: Node) -> Node:
         return AndNot(positive=positive, negative=negative)
 
     if isinstance(node, AndMaybe):
-        required = normalize(node.required)
-        optional = normalize(node.optional)
+        required, optional = children
         if isinstance(required, Nothing):
             return Nothing()
         if isinstance(optional, Nothing):
@@ -257,14 +270,13 @@ def normalize(node: Node) -> Node:
         return AndMaybe(required=required, optional=optional)
 
     if isinstance(node, Require):
-        scored = normalize(node.scored)
-        filter_only = normalize(node.filter_only)
+        scored, filter_only = children
         if isinstance(scored, Nothing) or isinstance(filter_only, Nothing):
             return Nothing()
         return Require(scored=scored, filter_only=filter_only)
 
     if isinstance(node, Boosted):
-        child = normalize(node.child)
+        (child,) = children
         boost = node.boost
         if isinstance(child, Nothing):
             return Nothing()
@@ -276,6 +288,54 @@ def normalize(node: Node) -> Node:
         return Boosted(child=child, boost=boost)
 
     return node
+
+
+def normalize(node: Node) -> Node:
+    """Normalize an AST node into canonical form (pure, bottom-up).
+
+    Applies flattening of nested same-type groups, Nothing/Every
+    propagation, duplicate-sibling dedupe, empty-group collapse, single-child
+    unwrap, and boost merging/stripping.
+
+    Traverses iteratively (an explicit work stack, keyed by node identity)
+    rather than recursively, so a pathologically deep or wide tree costs
+    heap, not Python call-stack frames: a naive recursive postorder walk
+    here used to roughly halve the query nesting depth ``parse()`` could
+    tolerate before ``RecursionError``, since every parenthesized level
+    already cost frames in the parser itself before ever reaching this
+    function (issue #31). The actual per-node rules live in
+    :func:`_normalize_one`; this function only handles the postorder
+    scheduling.
+
+    Args:
+        node: The AST node to normalize.
+
+    Returns:
+        The normalized node.
+    """
+
+    # memo maps id(original node) -> its normalized replacement, once known.
+    # Keyed by identity rather than structural equality: two structurally
+    # equal but distinct node objects are recomputed independently (cheap,
+    # and correct either way), avoiding any assumption that equal nodes are
+    # interchangeable during the walk itself.
+    memo: dict[int, Node] = {}
+    # Each stack entry is (node, children_are_memoized). A node is pushed
+    # once as (node, False); if it has children, they're pushed (each as
+    # (child, False)) followed by re-pushing (node, True) so the node is
+    # revisited only after all its children have been normalized.
+    stack: list[tuple[Node, bool]] = [(node, False)]
+    while stack:
+        current, children_ready = stack.pop()
+        kids = _child_nodes(current)
+        if children_ready or not kids:
+            normalized_kids = tuple(memo[id(k)] for k in kids)
+            memo[id(current)] = _normalize_one(current, normalized_kids)
+        else:
+            stack.append((current, True))
+            for k in kids:
+                stack.append((k, False))
+    return memo[id(node)]
 
 
 class Visitor(Generic[T]):

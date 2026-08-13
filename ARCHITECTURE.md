@@ -185,7 +185,7 @@ programmatically" (the JSON-subpath carve-out, §5).
 
 **Errors/diagnostics flow (`errors.py`)**: `Diagnostic(message, kind,
 startchar, endchar, field, raw_value)` is a plain data record; `DiagnosticKind`
-currently has `BAD_DATE`/`BAD_NUMBER`/`UNKNOWN`. `field` and `raw_value`
+currently has `BAD_DATE`/`BAD_NUMBER`/`TOO_DEEP`/`UNKNOWN`. `field` and `raw_value`
 default to `None` and are populated wherever a `Diagnostic` is constructed
 against a known field (`DateParserPlugin._error()` in `dateparse.py`, and
 both `BAD_NUMBER` sites in `default.py`'s `QueryParser`): `field` is a
@@ -330,6 +330,38 @@ field-kind-specific parse failures become `Diagnostic`s plus `ErrorLeaf`
 AST nodes. Only `emit()` on a tree containing an `ErrorLeaf` raises
 (`QueryEmitError`), by which point the diagnostics list already told the
 caller not to do that.
+
+**Query nesting is capped, so pathological input can't turn "never raises"
+into a `RecursionError`.** A well-formed but absurdly deep query (thousands
+of nested parens around a single term) is legitimate input by this
+invariant's own rule, yet every stage that walks the resulting tree
+recursively (the tag/filter pipeline's own filters, `GroupNode.query()`, and
+`ast.normalize()` before it became iterative) costs Python call-stack frames
+proportional to depth. Left unbounded, `parse()` would eventually
+`RecursionError` instead of returning a `ParseResult`, which is exactly the
+invariant this section opens with breaking. `GroupPlugin.do_groups`
+(`parser/plugins.py`) is the one place that turns flat `(`/`)` markers into
+real tree hierarchy, so it's also the cheapest and earliest place to bound
+it: past `_MAX_GROUP_NESTING_DEPTH` (200) unclosed levels, further nesting is
+tracked as an opaque, uncounted overflow region instead of being
+materialized into hierarchy, and collapsed to a single `Diagnostic(kind=
+TOO_DEEP)` plus `ErrorLeaf` once its matching close paren is seen (or at the
+end of input, for unbalanced parens). 200 was chosen with a wide safety
+margin: confirmed directly against both the pinned real-whoosh oracle and
+this parser's own tag/filter pipeline with the cap removed, both start
+`RecursionError`-ing on bare `(`-nesting somewhere between depth 950 and
+1000 (Python's default recursion limit), so 200 leaves roughly 5x headroom
+for the several other recursive filters (`do_wildcards`, `do_boost`,
+`do_fieldnames`, `do_operators`, `do_multifield`, `do_aliases`,
+`do_comma_values`) a still-legal, still-under-the-cap tree passes through
+afterward, while comfortably exceeding any nesting a real query would use.
+`ast.normalize()`'s traversal was also converted from recursive to
+iterative (an explicit work stack) independently of the cap, since a
+hand-built AST that bypasses the parser entirely (constructed directly
+against `whoosh_compat.ast`, never going through `GroupPlugin`) has no
+parse-time cap to rely on, and previously cost two stack frames per nesting
+level on top of whatever the parser itself had already used, roughly
+halving the tolerated depth versus the raw parse.
 
 ## 5. Extension points
 

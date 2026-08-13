@@ -12,6 +12,7 @@ class DiagnosticKind(Enum):
 
     BAD_DATE = auto()
     BAD_NUMBER = auto()
+    TOO_DEEP = auto()
     UNKNOWN = auto()
 
 
