@@ -383,8 +383,8 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
     if isinstance(q, wq.Term):
         fieldname = q.fieldname
         ref = _field_ref(fieldname)
-        spec = reg.resolve(ref) if ref is not None else None
-        if spec is not None and spec.kind in (FieldKind.DATE, FieldKind.DATETIME):
+        resolved = reg.resolve(ref) if ref is not None else None
+        if resolved is not None and resolved.spec.kind in (FieldKind.DATE, FieldKind.DATETIME):
             # A single exact instant: whoosh's DateTimeNode.query() encodes
             # it as a Term of the field's to_bytes() representation instead
             # of a DateRange (see whoosh.qparser.dateparse.DateTimeNode).
@@ -392,7 +392,7 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
             return ast.DateRange(
                 field=FieldRef(fieldname), lo=dt, hi=dt, incl_lo=True, incl_hi=True
             )
-        if spec is not None and spec.kind is FieldKind.U64:
+        if resolved is not None and resolved.spec.kind is FieldKind.U64:
             # NUMERIC fields self-encode term text into sortable byte keys
             # too (whoosh.fields.NUMERIC.to_bytes); decode back to int.
             n = _SCHEMA[fieldname].from_bytes(q.text)
@@ -541,11 +541,12 @@ def unmapped_reason(q: wq.Query) -> str:
 
 
 def _analyzed_term(field: FieldRef | None, text: object, reg: FieldRegistry) -> ast.Node | None:
-    spec = reg.resolve(field) if field else None
-    if spec is None or spec.kind not in (FieldKind.TEXT, FieldKind.KEYWORD):
+    resolved = reg.resolve(field) if field else None
+    if resolved is None or resolved.spec.kind not in (FieldKind.TEXT, FieldKind.KEYWORD):
         return ast.Term(field=field, text=cast("str | int | bool", text))
     if not isinstance(text, str):
         return ast.Term(field=field, text=cast("str | int | bool", text))
+    spec = resolved.spec
     tokens = spec.analyzer(text) if spec.analyzer else [text]
     if not tokens:
         return None
@@ -555,8 +556,8 @@ def _analyzed_term(field: FieldRef | None, text: object, reg: FieldRegistry) -> 
 
 
 def _analyzed_phrase(node: ast.Phrase, reg: FieldRegistry) -> ast.Node | None:
-    spec = reg.resolve(node.field) if node.field else None
-    analyzer = spec.analyzer if spec is not None else None
+    resolved = reg.resolve(node.field) if node.field else None
+    analyzer = resolved.spec.analyzer if resolved is not None else None
     tokens = analyzer(node.text) if analyzer else node.text.split()
     if not tokens:
         return None

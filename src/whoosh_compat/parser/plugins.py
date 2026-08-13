@@ -781,8 +781,8 @@ class CommaValuesPlugin(Plugin):
                     and not getattr(node, "is_quoted", False)
                     and "," in node.text):
                 ref = registry.make_ref(node.fieldname)
-                spec = registry.resolve(ref) if ref is not None else None
-                if spec is not None and spec.comma_values:
+                resolved = registry.resolve(ref) if ref is not None else None
+                if resolved is not None and resolved.spec.comma_values:
                     parts = [p for p in node.text.split(",") if p]
                     if parts:
                         words = []

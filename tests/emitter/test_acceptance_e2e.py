@@ -135,8 +135,9 @@ _SCENARIO_WORDS = [
 
 def test_00_analyzer_parity_precondition(ereg: FieldRegistry) -> None:
     whoosh_analyzer = StandardAnalyzer()
-    spec = ereg.resolve(FieldRef("content"))
-    assert spec is not None
+    resolved = ereg.resolve(FieldRef("content"))
+    assert resolved is not None
+    spec = resolved.spec
     assert spec.analyzer is not None
     our_analyzer = spec.analyzer
     for word in _SCENARIO_WORDS:

@@ -938,9 +938,10 @@ class DateParserPlugin(Plugin):
                 continue
 
             ref = registry.make_ref(fname)
-            spec = registry.resolve(ref) if ref is not None else None
-            if spec is None or spec.kind not in (FieldKind.DATE, FieldKind.DATETIME):
+            resolved = registry.resolve(ref) if ref is not None else None
+            if resolved is None or resolved.spec.kind not in (FieldKind.DATE, FieldKind.DATETIME):
                 continue
+            spec = resolved.spec
 
             new_node: syntax.SyntaxNode
             if isinstance(node, syntax.RangeNode):

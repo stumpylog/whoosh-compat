@@ -149,13 +149,34 @@ interpreted: it resolves an alias to its canonical name and decides, once,
 whether the name addresses a plain field or a registered JSON field's
 subpath, returning `None` for a name that resolves as neither (the case
 `FieldsPlugin` already demotes back to text before it can reach an AST
-leaf). Once a `FieldRef` exists, `FieldRegistry.resolve(ref)` is the single
-resolver for it, plain or JSON subpath alike: nothing downstream of
-`make_ref`, including the emitter, inspects a field name for a literal `.`
-again. A registered *plain* field whose own name happens to contain a dot
-(e.g. `"field.with.dots"`) still resolves directly and exactly, since
-`make_ref` tries an exact-name match before ever attempting a dotted-subpath
-split; see DIVERGENCES.md entry 14.
+leaf). Once a `FieldRef` exists, `FieldRegistry.resolve(ref) -> ResolvedField
+| None` is the single resolver for it, plain or JSON subpath alike: nothing
+downstream of `make_ref`, including the emitter, inspects a field name for a
+literal `.` again. A registered *plain* field whose own name happens to
+contain a dot (e.g. `"field.with.dots"`) still resolves directly and
+exactly, since `make_ref` tries an exact-name match before ever attempting a
+dotted-subpath split; see DIVERGENCES.md entry 14.
+
+`ResolvedField` (`spec: FieldSpec`, `json_path: str | None`, plus the
+`is_subpath` and `dotted_name` convenience properties) is `resolve()`'s
+return type and the single resolution result: it exists so a call site can
+never get from a subpath-carrying `FieldRef` to query-building or
+message-building code while losing the subpath along the way. Before this
+type existed, `resolve()` returned a bare `FieldSpec` and every consumer had
+to separately remember to also read `ref.json_path`; forgetting compiled,
+ran, and returned plausible-looking results (this was the shared root cause
+behind a family of JSON-subpath bugs: existence checks and pattern/regex
+builders that silently queried the whole field, and error messages that
+named the field the user typed without its subpath). Emitter helpers that
+build queries or messages from a resolved field (`_exists_query`,
+`_text_term_query`, `_emit_json_term`, the range/prefix/wildcard builders)
+now take a `ResolvedField`, not a bare `FieldSpec`: a helper that cannot yet
+honor a subpath has to say so by reading only `.spec`, a visible decision at
+the call site instead of a silent drop inside a resolver that never had the
+subpath in the first place. Nothing outside `fields.py` reads
+`ref.json_path` off an already-resolved field; the only legitimate reads of
+`FieldRef.json_path` elsewhere are pre-resolution (deciding whether a ref
+addresses a subpath at all, before calling `resolve()`).
 
 **`emitters/`**: `base.py` defines a minimal `Emitter` protocol; the actual
 work is `tantivy_.py`'s `TantivyEmitter(ast.Visitor[tantivy.Query])`, whose

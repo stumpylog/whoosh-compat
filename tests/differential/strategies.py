@@ -428,8 +428,8 @@ def zero_token_leaf_count(node: ast.Node, reg: FieldRegistry) -> int:
     count = 0
 
     def analyzer_for(field: FieldRef | None) -> Callable[[str], list[str]] | None:
-        spec = reg.resolve(field) if field else None
-        return spec.analyzer if spec is not None else None
+        resolved = reg.resolve(field) if field else None
+        return resolved.spec.analyzer if resolved is not None else None
 
     def walk(n: ast.Node) -> None:
         nonlocal count

@@ -34,7 +34,9 @@ from whoosh_compat.fields import ExistsStrategy
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
 from whoosh_compat.fields import Multitoken
+from whoosh_compat.fields import ResolvedField
 
 _FALSY_TEXT = ("f", "false", "no", "0")
 
@@ -280,31 +282,30 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
     # -- helpers -----------------------------------------------------
 
-    def _resolve(self, field: FieldRef | None):
+    def _resolve(self, field: FieldRef | None) -> ResolvedField:
         if field is None:
             raise QueryEmitError("cannot emit an unfielded term")
-        spec = self.registry.resolve(field)
-        if spec is None:
+        resolved = self.registry.resolve(field)
+        if resolved is None:
             raise QueryEmitError(f"unknown field {str(field)!r}")
-        return spec
+        return resolved
 
-    def _tokens(self, spec, text) -> list[str]:
+    def _tokens(self, spec: FieldSpec, text: object) -> list[str]:
         text = str(text)
         if spec.analyzer is None:
             return [text] if text else []
         return list(spec.analyzer(text))
 
-    def _text_term_query(
-        self, spec, tokens: list[str], *, field_name: str | None = None
-    ) -> tantivy.Query:
+    def _text_term_query(self, resolved: ResolvedField, tokens: list[str]) -> tantivy.Query:
         """Build the query for one already-tokenized TEXT/KEYWORD term.
 
-        Caller guarantees ``tokens`` is non-empty. ``field_name`` defaults to
-        ``spec.name``; JSON subpath terms pass the dotted path (e.g.
-        ``"notes.user"``) instead, reusing this method's multitoken handling
-        without duplicating it.
+        Caller guarantees ``tokens`` is non-empty. The tantivy field name
+        queried is ``resolved.dotted_name``, so a JSON subpath resolution
+        (``"notes.user"``) is handled identically to a plain field
+        (``"body"``) without a separate code path.
         """
-        field_name = spec.name if field_name is None else field_name
+        spec = resolved.spec
+        field_name = resolved.dotted_name
 
         if len(tokens) == 1:
             return tantivy.Query.term_query(self.schema, field_name, tokens[0])
@@ -360,8 +361,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                     self._json_paths_ok = False
         return self._json_paths_ok
 
-    def _emit_json_term(self, spec, subpath: str, text: object) -> tantivy.Query:
-        """Emit a term query for a JSON subpath (``spec.name + "." + subpath``).
+    def _emit_json_term(self, resolved: ResolvedField, text: object) -> tantivy.Query:
+        """Emit a term query for a JSON subpath (``resolved.dotted_name``).
 
         Runs ``spec.analyzer`` over the value first, exactly like TEXT/KEYWORD
         terms, so multi-token JSON values follow the same multitoken policy
@@ -385,13 +386,14 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         https://github.com/quickwit-oss/tantivy-py/pull/716 ships and
         ``_json_paths_supported()`` starts returning True.
         """
-        full = f"{spec.name}.{subpath}"
+        spec = resolved.spec
+        full = resolved.dotted_name
         tokens = self._tokens(spec, text)
         if not tokens:
             return tantivy.Query.empty_query()
 
         if self._json_paths_supported():
-            return self._text_term_query(spec, tokens, field_name=full)
+            return self._text_term_query(resolved, tokens)
 
         mode = spec.multitoken
         if mode is Multitoken.DEFAULT:
@@ -412,16 +414,16 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         preview of what emission will do, not a second implementation of it.
         """
         if node.field is not None and node.field.json_path is not None:
-            spec = self.registry.resolve(node.field)
-            if spec is not None:
-                return self._tokens(spec, node.text)
+            resolved = self.registry.resolve(node.field)
+            if resolved is not None:
+                return self._tokens(resolved.spec, node.text)
             # Not a resolvable JSON subpath (an invalid one, constructed
             # directly rather than by the parser): fall through to
             # ``_resolve`` below, which raises a clear "unknown field"
             # error for it instead of silently treating it as droppable.
-        spec = self._resolve(node.field)
-        if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
-            return self._tokens(spec, node.text)
+        resolved = self._resolve(node.field)
+        if resolved.spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
+            return self._tokens(resolved.spec, node.text)
         return None
 
     def _node_drops(self, node: ast.Node) -> bool:
@@ -447,8 +449,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             tokens = self._term_drop_tokens(node)
             return tokens is not None and not tokens
         if isinstance(node, ast.Phrase):
-            spec = self._resolve(node.field)
-            return not self._tokens(spec, node.text)
+            resolved = self._resolve(node.field)
+            return not self._tokens(resolved.spec, node.text)
         if isinstance(node, (ast.And, ast.Or)):
             return all(self._node_drops(c) for c in node.children)
         return False
@@ -476,20 +478,30 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     def visit_nothing(self, node: ast.Nothing) -> tantivy.Query:
         return tantivy.Query.empty_query()
 
-    def _exists_query(self, spec) -> tantivy.Query:
-        """Build an "exists" query for ``spec``: does this field have a value
-        at all on a given document?
+    def _exists_query(self, resolved: ResolvedField) -> tantivy.Query:
+        """Build an "exists" query for ``resolved.spec``: does this field
+        have a value at all on a given document?
 
         Shared by ``visit_every`` (a bare ``field:*``) and BOOLEAN_EXISTS
         term emission (``visit_term``, for a field whose ``exists_target``
-        is ``spec``), so the two stay consistent about what "exists" means
-        for a given field kind rather than drifting into two answers for
-        the same question. Dispatches purely on the strategy resolved by
-        ``FieldRegistry`` at construction time; this method contains no
-        field-kind or fastness logic of its own. A registry that accepted a
-        BOOLEAN_EXISTS spec guarantees its target resolves to a strategy,
-        since ``FieldRegistry`` rejects one whose target has none.
+        is ``resolved.spec``), so the two stay consistent about what
+        "exists" means for a given field kind rather than drifting into two
+        answers for the same question. Dispatches purely on the strategy
+        resolved by ``FieldRegistry`` at construction time; this method
+        contains no field-kind or fastness logic of its own. A registry that
+        accepted a BOOLEAN_EXISTS spec guarantees its target resolves to a
+        strategy, since ``FieldRegistry`` rejects one whose target has none.
+
+        Takes the full ``ResolvedField`` (not a bare spec) per this module's
+        general contract, but ``resolved.json_path`` is not yet consulted
+        here: subpath-aware existence checking for a JSON field is a
+        separate, not-yet-implemented fix. That is an explicit decision
+        this method makes, visible at every call site that passes a
+        subpath-carrying ``ResolvedField`` through unused, rather than a
+        silent drop inside a resolver that never had the subpath to begin
+        with.
         """
+        spec = resolved.spec
         strategy = self.registry.exists_strategy(spec)
         if strategy is ExistsStrategy.FAST_FIELD:
             # exists_query is a cheap fast-field presence check.
@@ -519,15 +531,14 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     def visit_every(self, node: ast.Every) -> tantivy.Query:
         if node.field is None:
             return tantivy.Query.all_query()
-        spec = self._resolve(node.field)
-        if spec.kind is FieldKind.BOOLEAN_EXISTS:
+        resolved = self._resolve(node.field)
+        if resolved.spec.kind is FieldKind.BOOLEAN_EXISTS:
             # A BOOLEAN_EXISTS field has no physical column of its own to
             # check "exists" against; "existence" only ever means its
             # exists_target's, same redirect as visit_term/visit_phrase's
             # BOOLEAN_EXISTS branches (issue #16).
-            target = self._resolve(FieldRef(spec.exists_target))  # type: ignore[arg-type]
-            spec = target
-        return self._exists_query(spec)
+            resolved = self._resolve(FieldRef(resolved.spec.exists_target))  # type: ignore[arg-type]
+        return self._exists_query(resolved)
 
     def visit_errorleaf(self, node: ast.ErrorLeaf) -> tantivy.Query:
         raise QueryEmitError(
@@ -536,14 +547,15 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
     def visit_term(self, node: ast.Term) -> tantivy.Query:
         if node.field is not None and node.field.json_path is not None:
-            spec = self.registry.resolve(node.field)
-            if spec is not None:
-                return self._emit_json_term(spec, node.field.json_path, node.text)
+            resolved = self.registry.resolve(node.field)
+            if resolved is not None:
+                return self._emit_json_term(resolved, node.text)
             # Falls through to _resolve below, which raises "unknown field"
             # for an invalid subpath reference instead of silently treating
             # it as a plain field.
 
-        spec = self._resolve(node.field)
+        resolved = self._resolve(node.field)
+        spec = resolved.spec
 
         if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
             tokens = self._tokens(spec, node.text)
@@ -564,7 +576,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 # confirmed, deliberate divergence from whoosh, not a
                 # parity-preserving fallback. See DIVERGENCES.md entry 23.
                 return tantivy.Query.empty_query()
-            return self._text_term_query(spec, tokens)
+            return self._text_term_query(resolved, tokens)
 
         if spec.kind is FieldKind.U64:
             try:
@@ -596,8 +608,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
     def visit_phrase(self, node: ast.Phrase) -> tantivy.Query:
         if node.field is not None and node.field.json_path is not None:
-            spec = self.registry.resolve(node.field)
-            if spec is not None:
+            json_resolved = self.registry.resolve(node.field)
+            if json_resolved is not None:
                 # _emit_json_term already treats its `text` argument
                 # generically (tokenizes it, honors Multitoken): a Phrase's
                 # text needs no different handling here than a Term's would
@@ -606,12 +618,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 # notes.user:"alice" fell through to the plain-field branch
                 # below and queried the wrong tantivy field name, "notes"
                 # instead of "notes.user").
-                return self._emit_json_term(spec, node.field.json_path, node.text)
+                return self._emit_json_term(json_resolved, node.text)
             # Falls through to _resolve below, which raises "unknown field"
             # for an invalid subpath reference instead of silently treating
             # it as a plain field.
 
-        spec = self._resolve(node.field)
+        resolved = self._resolve(node.field)
+        spec = resolved.spec
 
         if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
             tokens = self._tokens(spec, node.text)
@@ -631,7 +644,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             if node.text == "*":
                 # Matches whoosh's NUMERIC.parse_query "*" -> existence
                 # special case, same as a quoted term (issue #16).
-                return self._exists_query(spec)
+                return self._exists_query(resolved)
             try:
                 value = int(node.text)
             except (TypeError, ValueError) as exc:
@@ -660,14 +673,21 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         )
 
     def visit_prefix(self, node: ast.Prefix) -> tantivy.Query:
-        spec = self._resolve(node.field)
+        resolved = self._resolve(node.field)
+        spec = resolved.spec
+        # Deliberately queries spec.name, not resolved.dotted_name: a JSON
+        # subpath's regex targeting is a separate, not-yet-implemented fix,
+        # so this reads only .spec, an explicit (not silent) decision to
+        # leave resolved.json_path unused for now.
         text = str(node.text)
         if spec.pattern_normalizer is not None:
             text = spec.pattern_normalizer(text)
         return tantivy.Query.regex_query(self.schema, spec.name, re.escape(text) + ".*")
 
     def visit_wildcard(self, node: ast.Wildcard) -> tantivy.Query:
-        spec = self._resolve(node.field)
+        resolved = self._resolve(node.field)
+        spec = resolved.spec
+        # Same explicit spec-only decision as visit_prefix above.
         regex = glob_to_regex(str(node.pattern), spec.pattern_normalizer)
         if "(?!)" in regex:
             return tantivy.Query.empty_query()
@@ -677,7 +697,12 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         raise UnsupportedQueryError("text ranges are not supported (DIVERGENCES.md entry 5)")
 
     def _range_query(
-        self, spec, field_type, lo, hi, node: ast.NumericRange | ast.DateRange
+        self,
+        resolved: ResolvedField,
+        field_type: tantivy.FieldType,
+        lo: int | datetime | None,
+        hi: int | datetime | None,
+        node: ast.NumericRange | ast.DateRange,
     ) -> tantivy.Query:
         """Shared range_query construction for numeric and date ranges.
 
@@ -693,8 +718,9 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         (``visit_every``) and a BOOLEAN_EXISTS term, so delegate to it
         instead of erroring on a query that parsed without complaint.
         """
+        spec = resolved.spec
         if lo is None and hi is None:
-            return self._exists_query(spec)
+            return self._exists_query(resolved)
         return tantivy.Query.range_query(
             self.schema,
             spec.name,
@@ -706,7 +732,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         )
 
     def visit_numericrange(self, node: ast.NumericRange) -> tantivy.Query:
-        spec = self._resolve(node.field)
+        resolved = self._resolve(node.field)
+        spec = resolved.spec
         try:
             lo = None if node.lo is None else int(node.lo)
             hi = None if node.hi is None else int(node.hi)
@@ -715,10 +742,11 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 f"numeric range bound is not a valid number for {spec.name!r}: {exc}"
             ) from exc
         # Currently numeric fields are U64 only.
-        return self._range_query(spec, tantivy.FieldType.Unsigned, lo, hi, node)
+        return self._range_query(resolved, tantivy.FieldType.Unsigned, lo, hi, node)
 
     def visit_daterange(self, node: ast.DateRange) -> tantivy.Query:
-        spec = self._resolve(node.field)
+        resolved = self._resolve(node.field)
+        spec = resolved.spec
         try:
             lo = None if node.lo is None else _to_naive_utc(node.lo)
             hi = None if node.hi is None else _to_naive_utc(node.hi)
@@ -727,7 +755,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             raise QueryEmitError(
                 f"date range bound {bad!r} is not a valid datetime for {spec.name!r}"
             ) from exc
-        return self._range_query(spec, tantivy.FieldType.Date, lo, hi, node)
+        return self._range_query(resolved, tantivy.FieldType.Date, lo, hi, node)
 
     # -- boolean combinators --------------------------------------------
 

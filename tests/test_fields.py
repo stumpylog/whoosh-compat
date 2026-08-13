@@ -39,10 +39,17 @@ def test_field_ref_equality() -> None:
 
 
 def test_resolve_by_canonical_name() -> None:
-    """resolve() finds a spec by its canonical name."""
+    """resolve() finds a spec by its canonical name, wrapped in a
+    ResolvedField with json_path=None for a plain field.
+    """
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
     registry = FieldRegistry([spec])
-    assert registry.resolve(FieldRef("title")) is spec
+    resolved = registry.resolve(FieldRef("title"))
+    assert resolved is not None
+    assert resolved.spec is spec
+    assert resolved.json_path is None
+    assert resolved.is_subpath is False
+    assert resolved.dotted_name == "title"
 
 
 def test_resolve_by_alias() -> None:
@@ -55,8 +62,12 @@ def test_resolve_by_alias() -> None:
     """
     spec = FieldSpec(name="title", kind=FieldKind.TEXT, aliases=("heading", "subject"))
     registry = FieldRegistry([spec])
-    assert registry.resolve(FieldRef("heading")) is spec
-    assert registry.resolve(FieldRef("subject")) is spec
+    heading = registry.resolve(FieldRef("heading"))
+    subject = registry.resolve(FieldRef("subject"))
+    assert heading is not None
+    assert subject is not None
+    assert heading.spec is spec
+    assert subject.spec is spec
 
 
 def test_resolve_unknown_returns_none() -> None:
@@ -67,10 +78,17 @@ def test_resolve_unknown_returns_none() -> None:
 
 
 def test_resolve_json_subpath() -> None:
-    """resolve() returns the JSON field's spec for a valid subpath ref."""
+    """resolve() returns the JSON field's spec for a valid subpath ref,
+    with the subpath carried on the returned ResolvedField.
+    """
     spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user", "admin"))
     registry = FieldRegistry([spec])
-    assert registry.resolve(FieldRef("notes", "user")) is spec
+    resolved = registry.resolve(FieldRef("notes", "user"))
+    assert resolved is not None
+    assert resolved.spec is spec
+    assert resolved.json_path == "user"
+    assert resolved.is_subpath is True
+    assert resolved.dotted_name == "notes.user"
 
 
 def test_resolve_json_invalid_subpath_returns_none() -> None:
@@ -95,7 +113,10 @@ def test_resolve_plain_ref_on_json_spec_returns_the_json_spec() -> None:
     """
     spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user",))
     registry = FieldRegistry([spec])
-    assert registry.resolve(FieldRef("notes")) is spec
+    resolved = registry.resolve(FieldRef("notes"))
+    assert resolved is not None
+    assert resolved.spec is spec
+    assert resolved.json_path is None
 
 
 # ============================================================================
@@ -489,7 +510,9 @@ def test_validation_boolean_exists_target_text_is_valid() -> None:
         exists_target="attachment",
     )
     registry = FieldRegistry([spec1, spec2])
-    assert registry.resolve(FieldRef("has_attachment")) is spec2
+    resolved = registry.resolve(FieldRef("has_attachment"))
+    assert resolved is not None
+    assert resolved.spec is spec2
 
 
 def test_validation_boolean_exists_target_keyword_is_valid() -> None:
@@ -507,7 +530,9 @@ def test_validation_boolean_exists_target_keyword_is_valid() -> None:
         exists_target="tag",
     )
     registry = FieldRegistry([spec1, spec2])
-    assert registry.resolve(FieldRef("has_tag")) is spec2
+    resolved = registry.resolve(FieldRef("has_tag"))
+    assert resolved is not None
+    assert resolved.spec is spec2
 
 
 def test_validation_boolean_exists_target_fast_is_valid() -> None:
@@ -519,7 +544,9 @@ def test_validation_boolean_exists_target_fast_is_valid() -> None:
         exists_target="flag",
     )
     registry = FieldRegistry([spec1, spec2])
-    assert registry.resolve(FieldRef("has_flag")) is spec2
+    resolved = registry.resolve(FieldRef("has_flag"))
+    assert resolved is not None
+    assert resolved.spec is spec2
 
 
 # ============================================================================
@@ -575,13 +602,13 @@ def test_every_and_boolean_exists_share_resolved_strategy() -> None:
     has_tag = FieldSpec(name="has_tag", kind=FieldKind.BOOLEAN_EXISTS, exists_target="tag")
     registry = FieldRegistry([target, has_tag])
 
-    tag_spec = registry.resolve(FieldRef("tag"))
-    assert tag_spec is not None
-    every_field_strategy = registry.exists_strategy(tag_spec)
+    tag_resolved = registry.resolve(FieldRef("tag"))
+    assert tag_resolved is not None
+    every_field_strategy = registry.exists_strategy(tag_resolved.spec)
     assert has_tag.exists_target is not None
-    target_spec = registry.resolve(FieldRef(has_tag.exists_target))
-    assert target_spec is not None
-    boolean_exists_target_strategy = registry.exists_strategy(target_spec)
+    target_resolved = registry.resolve(FieldRef(has_tag.exists_target))
+    assert target_resolved is not None
+    boolean_exists_target_strategy = registry.exists_strategy(target_resolved.spec)
     assert every_field_strategy is boolean_exists_target_strategy is ExistsStrategy.TERM_SCAN
 
 
@@ -601,7 +628,9 @@ def test_validation_json_with_subpaths_is_valid() -> None:
     """JSON spec with non-empty subpaths is valid."""
     spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user",))
     registry = FieldRegistry([spec])
-    assert registry.resolve(FieldRef("notes")) is spec
+    resolved = registry.resolve(FieldRef("notes"))
+    assert resolved is not None
+    assert resolved.spec is spec
 
 
 # ============================================================================
@@ -613,21 +642,27 @@ def test_validation_comma_values_on_keyword() -> None:
     """comma_values=True is valid on KEYWORD."""
     spec = FieldSpec(name="tags", kind=FieldKind.KEYWORD, comma_values=True)
     registry = FieldRegistry([spec])
-    assert registry.resolve(FieldRef("tags")) is spec
+    resolved = registry.resolve(FieldRef("tags"))
+    assert resolved is not None
+    assert resolved.spec is spec
 
 
 def test_validation_comma_values_on_u64() -> None:
     """comma_values=True is valid on U64."""
     spec = FieldSpec(name="ids", kind=FieldKind.U64, comma_values=True)
     registry = FieldRegistry([spec])
-    assert registry.resolve(FieldRef("ids")) is spec
+    resolved = registry.resolve(FieldRef("ids"))
+    assert resolved is not None
+    assert resolved.spec is spec
 
 
 def test_validation_comma_values_on_text() -> None:
     """comma_values=True is valid on TEXT."""
     spec = FieldSpec(name="keywords", kind=FieldKind.TEXT, comma_values=True)
     registry = FieldRegistry([spec])
-    assert registry.resolve(FieldRef("keywords")) is spec
+    resolved = registry.resolve(FieldRef("keywords"))
+    assert resolved is not None
+    assert resolved.spec is spec
 
 
 def test_validation_comma_values_on_date_invalid() -> None:
@@ -660,7 +695,7 @@ def test_validation_date_only_on_date_true() -> None:
     registry = FieldRegistry([spec])
     resolved = registry.resolve(FieldRef("created"))
     assert resolved is not None
-    assert resolved.date_only is True
+    assert resolved.spec.date_only is True
 
 
 def test_validation_date_only_on_date_false_normalized() -> None:
@@ -669,7 +704,7 @@ def test_validation_date_only_on_date_false_normalized() -> None:
     registry = FieldRegistry([spec])
     resolved = registry.resolve(FieldRef("created"))
     assert resolved is not None
-    assert resolved.date_only is True
+    assert resolved.spec.date_only is True
 
 
 def test_validation_date_only_on_non_date_invalid() -> None:
@@ -703,11 +738,19 @@ def test_registry_with_multiple_specs() -> None:
     ]
     registry = FieldRegistry(specs)
 
-    assert registry.resolve(FieldRef("title")) is specs[0]
-    assert registry.resolve(FieldRef("categories")) is specs[1]
-    assert registry.resolve(FieldRef("created")) is specs[2]
+    title = registry.resolve(FieldRef("title"))
+    categories = registry.resolve(FieldRef("categories"))
+    created = registry.resolve(FieldRef("created"))
+    has_attachment = registry.resolve(FieldRef("has_attachment"))
+    assert title is not None
+    assert categories is not None
+    assert created is not None
+    assert has_attachment is not None
+    assert title.spec is specs[0]
+    assert categories.spec is specs[1]
+    assert created.spec is specs[2]
     assert "metadata.author" in registry
-    assert registry.resolve(FieldRef("has_attachment")) is specs[4]
+    assert has_attachment.spec is specs[4]
 
 
 # ============================================================================

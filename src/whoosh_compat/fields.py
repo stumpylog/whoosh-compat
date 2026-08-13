@@ -140,6 +140,42 @@ class FieldSpec:
     fast: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedField:
+    """The result of resolving a :class:`FieldRef` against a
+    :class:`FieldRegistry`: the field's :class:`FieldSpec` together with the
+    JSON subpath (if any) the ref addressed.
+
+    ``FieldRegistry.resolve`` is the single place a :class:`FieldRef` turns
+    into something query-building or message-building code can act on. This
+    type exists so the subpath travels with that result instead of being
+    read separately off the original ref (easy to forget, and the shared
+    root cause behind several JSON-subpath bugs): a helper that receives a
+    ``ResolvedField`` has the subpath in hand whether or not it goes on to
+    use it, and a helper that genuinely can't honor a subpath has to say so
+    by reading only ``.spec``, a visible decision at the call site rather
+    than a silent drop inside a resolver that never had the subpath to
+    begin with.
+    """
+
+    spec: FieldSpec
+    json_path: str | None = None
+
+    @property
+    def is_subpath(self) -> bool:
+        """Whether this resolution addresses a JSON subpath."""
+        return self.json_path is not None
+
+    @property
+    def dotted_name(self) -> str:
+        """The tantivy-facing field name: ``"attrs.user"`` for a JSON
+        subpath, or just ``spec.name`` for a plain field.
+        """
+        if self.json_path is not None:
+            return f"{self.spec.name}.{self.json_path}"
+        return self.spec.name
+
+
 class FieldRegistry:
     """Registry of field specifications with validation."""
 
@@ -312,22 +348,25 @@ class FieldRegistry:
                         f"kind to TEXT or KEYWORD"
                     )
 
-    def resolve(self, ref: FieldRef) -> FieldSpec | None:
-        """Resolve a :class:`FieldRef` to its :class:`FieldSpec`.
+    def resolve(self, ref: FieldRef) -> ResolvedField | None:
+        """Resolve a :class:`FieldRef` to a :class:`ResolvedField`.
 
         The single resolver for both plain fields and JSON subpaths (see
         the module-level design note above ``FieldRef``): a plain ref
         (``json_path is None``) resolves by canonical name, and a JSON
         subpath ref additionally requires ``spec.kind`` be ``JSON`` and
-        ``ref.json_path`` be one of ``spec.subpaths``.
+        ``ref.json_path`` be one of ``spec.subpaths``. The returned
+        ``ResolvedField`` carries ``ref.json_path`` forward alongside the
+        spec, so nothing downstream of this call needs to go back to the
+        original ``FieldRef`` to recover it.
 
         Args:
             ref: The field reference to resolve, normally produced by
                 :meth:`make_ref`.
 
         Returns:
-            The FieldSpec, or None if ``ref`` does not name a registered
-            field, or names a subpath that field does not have.
+            The resolved field, or None if ``ref`` does not name a
+            registered field, or names a subpath that field does not have.
         """
         spec = self._by_name.get(ref.name)
         if spec is None:
@@ -336,7 +375,7 @@ class FieldRegistry:
             spec.kind is not FieldKind.JSON or ref.json_path not in spec.subpaths
         ):
             return None
-        return spec
+        return ResolvedField(spec, ref.json_path)
 
     def make_ref(self, raw: str) -> FieldRef | None:
         """Resolve a raw field-name string from the parser into a

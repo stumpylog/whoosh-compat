@@ -374,9 +374,10 @@ class QueryParser:
         """
 
         ref = self.field_ref(fieldname)
-        spec = self.registry.resolve(ref) if ref is not None else None
+        resolved = self.registry.resolve(ref) if ref is not None else None
 
-        if spec is not None:
+        if resolved is not None:
+            spec = resolved.spec
             if text == "*" and spec.kind in (FieldKind.U64, FieldKind.BOOLEAN_EXISTS):
                 # Whoosh's NUMERIC.parse_query/BOOLEAN.parse_query special-case
                 # a bare "*" into a match-everything (existence) query; a
@@ -474,8 +475,8 @@ class QueryParser:
         """Returns the AST node for a range query."""
 
         ref = self.field_ref(fieldname)
-        spec = self.registry.resolve(ref) if ref is not None else None
-        if spec is not None and spec.kind is FieldKind.U64:
+        resolved = self.registry.resolve(ref) if ref is not None else None
+        if resolved is not None and resolved.spec.kind is FieldKind.U64:
             assert ref is not None  # spec only resolves from a non-None ref
             lo, lo_err = self._coerce_range_bound(start, ref, node)
             if lo_err is not None:
@@ -528,8 +529,8 @@ class QueryParser:
         so it only ever sees a genuine wildcard *pattern*.
         """
 
-        spec = self.registry.resolve(ref) if ref is not None else None
-        if spec is None or spec.kind is not FieldKind.U64:
+        resolved = self.registry.resolve(ref) if ref is not None else None
+        if resolved is None or resolved.spec.kind is not FieldKind.U64:
             return None
         d = Diagnostic(
             message=f"wildcard patterns are not supported on numeric field {ref}",
