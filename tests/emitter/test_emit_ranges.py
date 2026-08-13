@@ -70,7 +70,7 @@ def test_date_range_parsed(
     assert search_ids(tindex[0], q) == [1, 4]
 
 
-# -- issue #33: date_only exclusive-upper-bound ceiling, result-level -------
+# -- date_only exclusive-upper-bound ceiling, result-level ------------------
 #
 # "created" (tests/emitter/conftest.py's DOCS) is date_only=True, with a
 # document created on each of 2018-03-23 (id 3), 2019-03-01 (id 5),

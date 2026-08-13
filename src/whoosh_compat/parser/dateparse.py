@@ -907,8 +907,8 @@ class DateParserPlugin(Plugin):
         only ever changes anything when ``date_only`` and ``dt_naive`` has a
         nonzero time-of-day: it is how an exclusive upper bound
         (``incl_hi=False``) stays a same-day-or-later ceiling instead of
-        truncating backwards past its own lo bound (issue #33). A value
-        already exactly at its own midnight is left untouched, since it is
+        truncating backwards past its own lo bound. A value already exactly
+        at its own midnight is left untouched, since it is
         already day-aligned and rounding it up would over-widen the range by
         an extra day it was never asked to cover. Callers pass ``ceil`` for
         the hi side of an exclusive bound only; the lo side, and any

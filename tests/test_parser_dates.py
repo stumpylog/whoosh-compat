@@ -370,7 +370,7 @@ def test_range_bounds_do_not_collapse_to_year(reg: FieldRegistry) -> None:
     assert r.hi == datetime(2020, 6, 21, tzinfo=UTC)
 
 
-# --- date_only exclusive-upper-bound ceiling (issue #33) ------------------
+# --- date_only exclusive-upper-bound ceiling ------------------------------
 
 
 def test_date_only_time_bearing_single_value_ceils_hi_to_next_day(reg: FieldRegistry) -> None:

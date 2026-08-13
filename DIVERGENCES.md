@@ -845,7 +845,7 @@ parse-then-emit pipeline).
     bypasses the parser's cap entirely).
 
 32. **A `date_only` field's exclusive upper bound rounds up, not down, when
-    truncation would otherwise move it backwards (issue #33).** `_to_utc()`
+    truncation would otherwise move it backwards.** `_to_utc()`
     (`parser/dateparse.py`) collapses a `date_only` field's bounds to
     UTC-midnight calendar days, since only the calendar date matters for
     such a field. Naively truncating an exclusive upper bound (`incl_hi
