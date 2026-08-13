@@ -440,6 +440,27 @@ parse-then-emit pipeline).
     Test references: `tests/emitter/test_emit_json.py`'s
     `test_json_subpath_parse_query_fallback_honors_multitoken_first`.
 
+    This limitation is about `Term` values only. A quoted `Phrase` node on
+    a JSON subpath (`TantivyEmitter._emit_json_phrase`) never consults
+    `Multitoken` at all, on either branch (a phrase's words are the phrase,
+    not independent tokens to combine), and additionally cannot carry an
+    explicit whoosh slop through the `index.parse_query` fallback branch:
+    that single quoted-leaf call has no query-string syntax tantivy-py 0.26
+    honors for slop (verified directly against a live index: appending
+    `~N` to the quoted phrase text does not change the resulting query's
+    slop away from `0`), so a widened slop silently has no effect there,
+    unlike the `_json_paths_supported()` branch, which maps slop exactly
+    like a plain-field phrase (`max(node.slop - 1, 0)`). Once
+    tantivy-py#716 ships, the fallback branch stops being taken and this
+    slop limitation goes away along with the rest of this entry.
+
+    Test references: `tests/emitter/test_emit_json.py`'s
+    `test_json_subpath_phrase_fallback_slop_is_silently_ignored`,
+    `test_json_subpath_phrase_fallback_ignores_multitoken`, and
+    `test_json_subpath_phrase_supported_branch_maps_slop`;
+    `tests/emitter/test_kind_matrix.py`'s
+    `test_json_subpath_phrase_slop_and_multitoken`.
+
 23. **`NOT` of a term whose analyzer drops every token matches every
     document here, but matches none in real whoosh (confirmed divergence,
     not fixed).** `visit_term`'s zero-token TEXT/KEYWORD branch

@@ -320,7 +320,12 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # tantivy-py's phrase_query() takes list[str | tuple[int, str]];
             # lists are invariant so a plain list[str] doesn't satisfy that
             # even though every element here is a bare str (no explicit
-            # positions).
+            # positions). No slop argument here: this builds a phrase query
+            # out of a multi-token *Term* value under Multitoken.PHRASE
+            # policy, and whoosh has no slop concept to carry for that (a
+            # bare Term never carries one). Distinct from the actual
+            # Phrase-node path (visit_phrase / _emit_json_phrase), which
+            # maps node.slop via max(node.slop - 1, 0).
             words: list[str | tuple[int, str]] = list(tokens)
             return tantivy.Query.phrase_query(self.schema, field_name, words)
 
@@ -364,6 +369,10 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     def _emit_json_term(self, resolved: ResolvedField, text: object) -> tantivy.Query:
         """Emit a term query for a JSON subpath (``resolved.dotted_name``).
 
+        For a ``Term`` node's value only; a ``Phrase`` node uses the separate
+        ``_emit_json_phrase`` below, which never consults ``spec.multitoken``
+        and carries an explicit slop (DIVERGENCES.md entry 22, issue #34).
+
         Runs ``spec.analyzer`` over the value first, exactly like TEXT/KEYWORD
         terms, so multi-token JSON values follow the same multitoken policy
         (``_text_term_query`` is reused, not duplicated). When the installed
@@ -400,6 +409,49 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             mode = self._group_stack[-1]
         query_text = tokens[0] if mode is Multitoken.FIRST else " ".join(tokens)
 
+        escaped = query_text.replace("\\", "\\\\").replace('"', '\\"')
+        return self.index.parse_query(f'{full}:"{escaped}"', default_field_names=[spec.name])
+
+    def _emit_json_phrase(self, resolved: ResolvedField, text: object, slop: int) -> tantivy.Query:
+        """Emit a phrase query for a JSON subpath (``resolved.dotted_name``).
+
+        A separate helper from ``_emit_json_term`` rather than a shared one
+        with an extra parameter: a Phrase node's semantics genuinely diverge
+        from a Term's here, not just in the value passed through. It mirrors
+        the plain-field phrase path (``visit_phrase``'s TEXT/KEYWORD branch)
+        exactly: analyzer tokens, the same ``max(slop - 1, 0)`` whoosh-to-
+        tantivy slop mapping, and it never consults ``spec.multitoken``,
+        because that policy governs a multi-token bare *Term* value, not a
+        quoted phrase's words (a phrase is never "the first word" or "all
+        words present in any order").
+
+        Falls back to ``index.parse_query`` on the same terms as
+        ``_emit_json_term`` when the installed tantivy-py can't address a
+        JSON subpath directly (see ``_json_paths_supported``). That single
+        quoted-leaf carve-out has no query-string syntax tantivy-py 0.26
+        honors for slop (verified directly: appending ``~N`` to the quoted
+        phrase does not change the resulting query's slop away from 0), so
+        an explicit whoosh slop is silently unsupported/ignored there
+        (DIVERGENCES.md entry 22); the tokens are always joined in full
+        (never truncated to the first token), since Multitoken never applies
+        to a Phrase node on this branch either.
+        """
+        spec = resolved.spec
+        full = resolved.dotted_name
+        tokens = self._tokens(spec, text)
+        if not tokens:
+            return tantivy.Query.empty_query()
+
+        if self._json_paths_supported():
+            if len(tokens) == 1:
+                # tantivy rejects a single-word phrase query; a term query is
+                # the exact equivalent anyway (mirrors the plain-field path).
+                return tantivy.Query.term_query(self.schema, full, tokens[0])
+            mapped_slop = max(slop - 1, 0)
+            words: list[str | tuple[int, str]] = list(tokens)
+            return tantivy.Query.phrase_query(self.schema, full, words, slop=mapped_slop)
+
+        query_text = " ".join(tokens)
         escaped = query_text.replace("\\", "\\\\").replace('"', '\\"')
         return self.index.parse_query(f'{full}:"{escaped}"', default_field_names=[spec.name])
 
@@ -620,15 +672,17 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         if node.field is not None and node.field.json_path is not None:
             json_resolved = self.registry.resolve(node.field)
             if json_resolved is not None:
-                # _emit_json_term already treats its `text` argument
-                # generically (tokenizes it, honors Multitoken): a Phrase's
-                # text needs no different handling here than a Term's would
-                # (issue #8: this JSON-subpath dispatch was previously
-                # missing from visit_phrase entirely, so a quoted
-                # notes.user:"alice" fell through to the plain-field branch
-                # below and queried the wrong tantivy field name, "notes"
-                # instead of "notes.user").
-                return self._emit_json_term(json_resolved, node.text)
+                # _emit_json_phrase (not _emit_json_term: a Phrase carries
+                # slop and must never consult Multitoken, both unlike a Term,
+                # see its docstring) is the JSON-subpath counterpart of this
+                # method's own plain-field TEXT/KEYWORD branch below (issue
+                # #8: this JSON-subpath dispatch was previously missing from
+                # visit_phrase entirely, so a quoted notes.user:"alice"
+                # fell through to the plain-field branch and queried the
+                # wrong tantivy field name, "notes" instead of "notes.user";
+                # issue #34: it then reused _emit_json_term, which dropped
+                # slop and wrongly applied Multitoken to phrase text).
+                return self._emit_json_phrase(json_resolved, node.text, node.slop)
             # Falls through to _resolve below, which raises "unknown field"
             # for an invalid subpath reference instead of silently treating
             # it as a plain field.

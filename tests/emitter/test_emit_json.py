@@ -265,3 +265,214 @@ def test_json_subpath_unknown_subpath_falls_back_to_plain_field(
     # is merged back onto the word as plain text and searched as an
     # unfielded term against the parse fixture's default field ("content").
     assert node == ast.Term(field=FieldRef("content"), text="notes.bogus:alice")
+
+
+# -- issue #34: a quoted phrase on a JSON subpath must map whoosh slop and
+# -- ignore Multitoken exactly like a plain-field Phrase does, on both the
+# -- parse_query fallback branch and the (not-yet-shipped) term_query/
+# -- phrase_query "supported" branch. -----------------------------------
+
+
+def _transposed_json_fixture() -> tuple[tantivy.Index, tantivy.Schema, FieldRegistry]:
+    """A standalone JSON-field index whose ``notes.user`` is "bob alice"
+    (transposed relative to a query phrase "alice bob"), for pinning the
+    whoosh-slop-to-tantivy-slop mapping the same way
+    ``test_emit_phrase.py``'s plain-field slop tests do.
+    """
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_json_field("notes", stored=True)
+    schema = sb.build()
+    ix = tantivy.Index(schema)
+    w = ix.writer()
+    doc = tantivy.Document()
+    doc.add_unsigned("id", 1)
+    doc.add_json("notes", {"user": "bob alice"})
+    w.add_document(doc)
+    w.commit()
+    ix.reload()
+
+    reg = FieldRegistry(
+        [
+            FieldSpec(
+                "notes",
+                FieldKind.JSON,
+                subpaths=("user",),
+                analyzer=lambda t: [w for w in t.lower().split() if w],
+            ),
+        ]
+    )
+    return ix, schema, reg
+
+
+def test_json_subpath_phrase_fallback_slop_is_silently_ignored(tindex: TIndex) -> None:
+    # DIVERGENCES.md entry 22: index.parse_query's single quoted-leaf carve-
+    # out has no way to express slop (verified directly: appending a "~N"
+    # suffix to the query string does not change the resulting PhraseQuery's
+    # slop from 0). A transposed pair therefore never matches through the
+    # fallback branch, however wide the requested whoosh slop is; this pins
+    # that limitation rather than silently regressing it back to "match".
+    index, _schema, reg = _transposed_json_fixture()
+    emitter = TantivyEmitter(index=index, registry=reg)
+    assert emitter._json_paths_supported() is False, (
+        "this test pins the parse_query fallback; it requires the installed "
+        "tantivy-py to not support JSON-subpath term_query/phrase_query"
+    )
+    node = ast.Phrase(field=FieldRef("notes", "user"), text="alice bob", slop=99)
+    q = emitter.emit(node)
+    assert search_ids(index, q) == [], (
+        "the fallback path cannot express slop at all: even a very wide "
+        "whoosh slop must not recover a transposed-word match"
+    )
+
+
+@pytest.mark.parametrize(
+    "multitoken",
+    [
+        pytest.param(Multitoken.FIRST, id="first"),
+        pytest.param(Multitoken.AND, id="and"),
+        pytest.param(Multitoken.OR, id="or"),
+        pytest.param(Multitoken.PHRASE, id="phrase-mode"),
+    ],
+)
+def test_json_subpath_phrase_fallback_ignores_multitoken(multitoken: Multitoken) -> None:
+    # A quoted Phrase node's words are the phrase, not independent tokens
+    # subject to the field's Multitoken policy (that policy is a Term-only
+    # concern): no Multitoken mode, including FIRST, should collapse this to
+    # a single-term match. The doc's notes.user has "alice" as its second
+    # word but never "bogus": a Multitoken.FIRST collapse to a bare "alice"
+    # term query would wrongly match, so this discriminates real phrase
+    # semantics from a term-query collapse.
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_json_field("notes", stored=True)
+    schema = sb.build()
+    ix = tantivy.Index(schema)
+    w = ix.writer()
+    doc = tantivy.Document()
+    doc.add_unsigned("id", 1)
+    doc.add_json("notes", {"user": "bob alice"})
+    w.add_document(doc)
+    w.commit()
+    ix.reload()
+
+    reg = FieldRegistry(
+        [
+            FieldSpec(
+                "notes",
+                FieldKind.JSON,
+                subpaths=("user",),
+                analyzer=lambda t: [w for w in t.lower().split() if w],
+                multitoken=multitoken,
+            ),
+        ]
+    )
+    emitter = TantivyEmitter(index=ix, registry=reg)
+    assert emitter._json_paths_supported() is False
+    node = ast.Phrase(field=FieldRef("notes", "user"), text="alice bogus", slop=1)
+    q = emitter.emit(node)
+    assert search_ids(ix, q) == [], (
+        "a non-empty match means the phrase collapsed to a term-level "
+        "Multitoken combination instead of staying a real phrase query"
+    )
+
+
+def _force_json_paths_supported(emitter: TantivyEmitter) -> None:
+    """Force the emitter's cached ``_json_paths_supported()`` probe to
+    ``True``, for exercising the "supported" branch of JSON-subpath emission
+    on a pinned tantivy-py (0.26) that never actually probes ``True`` for a
+    genuine JSON field (tantivy-py#716 hasn't shipped).
+
+    The "supported" branch's own code (``TantivyEmitter._emit_json_phrase``)
+    does nothing JSON-specific once it takes this branch: it just calls
+    ``tantivy.Query.phrase_query``/``term_query`` with ``resolved.dotted_name``
+    as a plain field name string. A schema field literally named
+    ``"notes.user"`` (a dot is a legal character in a tantivy field name,
+    verified directly) exercises the exact same call with a real index and a
+    real search, without depending on genuine JSON-path support that this
+    installed tantivy-py doesn't have yet.
+    """
+    emitter._json_paths_ok = True
+
+
+def test_json_subpath_phrase_supported_branch_maps_slop(tindex: TIndex) -> None:
+    # Result-level pin for the term_query/phrase_query "supported" branch
+    # (see _force_json_paths_supported): once tantivy-py#716 ships and
+    # _json_paths_supported() starts returning True for real, a quoted
+    # phrase on a JSON subpath must match a transposed document exactly as
+    # the same phrase would on a plain TEXT field, via the same
+    # max(slop - 1, 0) mapping.
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_text_field("notes.user", stored=True)
+    schema = sb.build()
+    ix = tantivy.Index(schema)
+    w = ix.writer()
+    doc = tantivy.Document()
+    doc.add_unsigned("id", 1)
+    doc.add_text("notes.user", "bob alice")
+    w.add_document(doc)
+    w.commit()
+    ix.reload()
+
+    reg = FieldRegistry(
+        [
+            FieldSpec(
+                "notes",
+                FieldKind.JSON,
+                subpaths=("user",),
+                analyzer=lambda t: [w for w in t.lower().split() if w],
+            ),
+        ]
+    )
+    emitter = TantivyEmitter(index=ix, registry=reg)
+    _force_json_paths_supported(emitter)
+
+    too_narrow = emitter.emit(ast.Phrase(field=FieldRef("notes", "user"), text="alice bob", slop=1))
+    assert search_ids(ix, too_narrow) == [], (
+        "whoosh slop=1 (adjacent) must not match a transposed pair"
+    )
+
+    wide_enough = emitter.emit(
+        ast.Phrase(field=FieldRef("notes", "user"), text="alice bob", slop=99)
+    )
+    assert search_ids(ix, wide_enough) == [1], (
+        "whoosh slop=99 must map to a wide enough tantivy slop to match the "
+        "transposed pair, same as it would on a plain TEXT field"
+    )
+
+
+def test_json_subpath_phrase_supported_branch_ignores_multitoken_first(tindex: TIndex) -> None:
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_text_field("notes.user", stored=True)
+    schema = sb.build()
+    ix = tantivy.Index(schema)
+    w = ix.writer()
+    doc = tantivy.Document()
+    doc.add_unsigned("id", 1)
+    doc.add_text("notes.user", "bob alice")
+    w.add_document(doc)
+    w.commit()
+    ix.reload()
+
+    reg = FieldRegistry(
+        [
+            FieldSpec(
+                "notes",
+                FieldKind.JSON,
+                subpaths=("user",),
+                analyzer=lambda t: [w for w in t.lower().split() if w],
+                multitoken=Multitoken.FIRST,
+            ),
+        ]
+    )
+    emitter = TantivyEmitter(index=ix, registry=reg)
+    _force_json_paths_supported(emitter)
+
+    node = ast.Phrase(field=FieldRef("notes", "user"), text="alice bogus", slop=1)
+    q = emitter.emit(node)
+    assert search_ids(ix, q) == [], (
+        "Multitoken.FIRST must not collapse the phrase to a bare 'alice' "
+        "term query even on the supported branch"
+    )

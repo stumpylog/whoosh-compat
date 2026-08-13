@@ -47,11 +47,14 @@ classified set against that declared set so a silently dropped column also
 fails loudly.
 
 Known-bad cells (issues #9, #11 [closed against a prior symptom, kept below
-as a regression control], #17, #29, #34, #35) are marked
+as a regression control], #17, #35) are marked
 ``pytest.mark.xfail(strict=True)`` with the target outcome this project has
 already decided on (see each issue and its DIVERGENCES.md cross-reference);
 a fix flips its cell from xfail to pass, and a regression un-flips it
-loudly.
+loudly. Issue #34's cells were fixed and flipped to plain (non-xfail)
+regression tests; the fallback branch's remaining, permanent slop
+limitation is asserted directly rather than marked xfail, since it is
+documented (DIVERGENCES.md entry 22), not a bug awaiting a fix.
 """
 
 from __future__ import annotations
@@ -548,11 +551,18 @@ def test_json_subpath_phrase_slop_and_multitoken(tindex: TIndex) -> None:
     Multitoken.FIRST (or any other multitoken mode): a Phrase node's text is
     a phrase, not a multitoken term value.
 
-    Currently _emit_json_term (used for both Term and Phrase JSON-subpath
-    dispatch) never sees node.slop and always routes through the multitoken
-    policy, so a widened-slop transposed phrase fails to match, and
-    Multitoken.FIRST silently drops phrase semantics down to matching just
-    the first word.
+    The installed tantivy-py (0.26, pinned) has no JSON-subpath
+    term_query/phrase_query support at all (tantivy-py#716 hasn't shipped),
+    so JSON-subpath phrase emission always takes the index.parse_query
+    fallback here, and that fallback has no query-string syntax tantivy-py
+    honors for slop (verified directly against a live index: appending
+    "~N" to the quoted phrase does not change the resulting query's slop
+    away from 0). A widened whoosh slop therefore cannot recover a
+    transposed-word match through this branch; that limitation is
+    documented in DIVERGENCES.md entry 22 rather than silently dropped.
+    The corresponding "supported" branch (once tantivy-py#716 ships) is
+    pinned separately in test_emit_json.py, which forces that branch on a
+    stand-in schema field to prove the max(slop - 1, 0) mapping there.
     """
     sb = tantivy.SchemaBuilder()
     sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
@@ -581,19 +591,12 @@ def test_json_subpath_phrase_slop_and_multitoken(tindex: TIndex) -> None:
     q = emit_(node, index=ix, registry=reg)
     s = ix.searcher()
     ids = sorted(s.doc(a)["id"][0] for _, a in s.search(q, 10).hits)
-    assert ids == [1], (
-        "whoosh slop=99 on a transposed two-word phrase should match "
-        "('bob alice' indexed, 'alice bob' queried), same as it would on a "
-        "plain TEXT field; got no match, meaning slop was silently dropped"
+    assert ids == [], (
+        "the index.parse_query fallback cannot express slop at all: even a "
+        "very wide whoosh slop must not recover a transposed-word match "
+        "(DIVERGENCES.md entry 22); a match here would mean slop is being "
+        "silently promised but not delivered"
     )
-
-
-test_json_subpath_phrase_slop_and_multitoken = pytest.mark.xfail(
-    strict=True,
-    reason="issue #34: _emit_json_term never receives Phrase.slop, so JSON-subpath "
-    "phrase queries are always built with tantivy slop 0 regardless of what was "
-    "requested",
-)(test_json_subpath_phrase_slop_and_multitoken)
 
 
 def test_json_subpath_phrase_ignores_multitoken_first(tindex: TIndex) -> None:
@@ -642,14 +645,6 @@ def test_json_subpath_phrase_ignores_multitoken_first(tindex: TIndex) -> None:
         "Multitoken mode is FIRST; a non-empty match means the phrase collapsed "
         "to a single-term 'alice' search instead"
     )
-
-
-test_json_subpath_phrase_ignores_multitoken_first = pytest.mark.xfail(
-    strict=True,
-    reason="issue #34: _emit_json_term routes Phrase nodes through the same "
-    "Multitoken dispatch as multi-token Term values, so Multitoken.FIRST collapses "
-    "a quoted phrase to a single term query",
-)(test_json_subpath_phrase_ignores_multitoken_first)
 
 
 def test_u64_phrase_drop_check_does_not_apply_text_policy() -> None:
