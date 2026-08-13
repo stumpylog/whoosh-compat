@@ -742,3 +742,33 @@ def test_boolean_exists_phrase_in_group_is_not_dropped() -> None:
     s = ix.searcher()
     ids = sorted(s.doc(a)["id"][0] for _, a in s.search(q, 10).hits)
     assert ids == [1]
+
+
+@pytest.mark.parametrize(
+    ("qs", "outcome"),
+    [
+        pytest.param("attrs:*", Search([1, 4, 5]), id="json-bare-fast-bare-star-is-exists"),
+        pytest.param("attrs:foo", Search([]), id="json-bare-fast-real-term-still-demotes"),
+        pytest.param(
+            "notes:*",
+            Raises(UnsupportedQueryError, r"'notes' \(JSON\) has no way to match 'exists'"),
+            id="json-bare-nonfast-bare-star-still-raises",
+        ),
+        pytest.param(
+            "attrs.user:*", Search([1, 4, 5]), id="json-subpath-bare-star-unaffected-boundary"
+        ),
+    ],
+)
+def test_json_bare_field_bare_star_existence(
+    qs: str, outcome: object, ereg: FieldRegistry, tindex: TIndex
+) -> None:
+    """issue #11, reopened: demoting a bare JSON field name addressed with a
+    real term (attrs:foo) must not also demote the bare-star existence
+    special case (attrs:*), which the emitter still fully supports and
+    which worked end to end before the original demotion fix. "notes" (the
+    non-fast JSON field) still raises the documented UnsupportedQueryError
+    for the same shape (issue #29's message), and "attrs.user:*" (an actual
+    subpath existence check) is unaffected, pinning the boundary this fix's
+    dispatch logic sits next to.
+    """
+    _run(qs, ereg, tindex, outcome)

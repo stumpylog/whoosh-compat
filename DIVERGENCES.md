@@ -391,6 +391,19 @@ parse-then-emit pipeline).
     `test_validation_boolean_exists_target_unsupported_kind_rejected` and
     `test_validation_boolean_exists_target_keyword_is_valid`.
 
+    A bare JSON field name (no subpath) is addressed via the same
+    `field:*` -> `Every(field)` path when the query is exactly the
+    existence check, even though the same bare name demotes to a text
+    search for any other term/pattern (issue #11): the parser's
+    `FieldsPlugin.do_fieldnames` carves the "*"-alone shape out of that
+    demotion before it applies, using the same `text == "*"` detection
+    `QueryParser.wildcard_query` already uses for the general case here.
+    Test references: `tests/test_parser_fields.py`'s
+    `test_json_bare_field_name_bare_star_is_existence_not_demoted` and
+    `test_json_subpath_bare_star_unaffected_by_bare_name_carve_out`;
+    `tests/emitter/test_kind_matrix.py`'s
+    `test_json_bare_field_bare_star_existence`.
+
 21. **A year followed by a colon-separated time reads as a calendar date
     (design).** Value text like `added:'2020 12:30'` is ambiguous: the
     trailing digits can be read as a time of day, or as the month and day

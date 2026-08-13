@@ -485,6 +485,38 @@ class FieldsPlugin(Plugin):
     def filters(self, parser: Any) -> list[FilterEntry]:
         return [(self.do_fieldnames, priorities.FILTER_FIELDNAMES)]
 
+    @staticmethod
+    def _fieldname_is_recognized(
+        registry: Any, node: syntax.FieldnameNode, group: syntax.GroupNode, i: int
+    ) -> bool:
+        """Whether ``node`` (at index ``i`` in ``group``) should count as a
+        recognized field prefix rather than being demoted to text.
+
+        A plain registry hit (``node.fieldname in registry``) always
+        counts. Otherwise, a bare JSON field name (issue #11's demotion
+        target) gets one narrow carve-out: a lone, unquoted ``*``
+        immediately after it is not a term/pattern to demote, it's the
+        existence-check special case (issue #16) that
+        ``QueryParser.wildcard_query`` already turns into
+        :class:`~whoosh_compat.ast.Every` for a *recognized* field
+        (``text == "*"``, the same check ``WildcardPlugin`` and
+        ``QueryParser.term_query`` use elsewhere for U64/BOOLEAN_EXISTS).
+        Reusing that exact node/text shape here, rather than inventing a
+        separate detector, is what keeps this carve-out limited to the
+        genuine bare-star case and nothing a demoted text search would
+        otherwise swallow (e.g. a quoted ``"*"``, or ``*`` followed by more
+        text, stay demoted).
+        """
+
+        if node.fieldname in registry:
+            return True
+        if not registry.is_bare_json_field(node.fieldname):
+            return False
+        if i + 1 >= len(group):
+            return False
+        nextnode = group[i + 1]
+        return isinstance(nextnode, WildcardPlugin.WildcardNode) and nextnode.text == "*"
+
     def do_fieldnames(self, parser: Any, group: syntax.GroupNode) -> syntax.GroupNode:
         """This filter finds FieldnameNodes in the tree and applies their
         fieldname to the next node.
@@ -495,13 +527,15 @@ class FieldsPlugin(Plugin):
 
         if self.removeunknown and registry is not None:
             # Look for field nodes that aren't in the registry (as a plain
-            # name, alias, or valid dotted JSON path) and convert them to
-            # text
+            # name, alias, or valid dotted JSON path, or the bare-JSON
+            # existence carve-out above) and convert them to text
             newgroup = group.empty_copy()
             prev_field_node = None
 
-            for node in group:
-                if isinstance(node, fnclass) and node.fieldname not in registry:
+            for i, node in enumerate(group):
+                if isinstance(node, fnclass) and not self._fieldname_is_recognized(
+                    registry, node, group, i
+                ):
                     prev_field_node = node
                     continue
                 elif prev_field_node:

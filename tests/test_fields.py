@@ -184,6 +184,26 @@ def test_make_ref_json_field_bare_name_is_unrecognized() -> None:
     assert registry.make_ref("notes") is None
 
 
+def test_is_bare_json_field_true_for_json_bare_name_or_alias() -> None:
+    """is_bare_json_field() is the narrow query FieldsPlugin.do_fieldnames
+    uses (issue #11, reopened) to detect the one shape a bare JSON field
+    name is still allowed to reach as a recognized field prefix: a lone
+    "*" existence check. It must say True for the canonical name and any
+    alias, independent of make_ref()'s own (deliberately stricter) answer.
+    """
+    spec = FieldSpec(name="notes", kind=FieldKind.JSON, subpaths=("user",), aliases=("n",))
+    registry = FieldRegistry([spec])
+    assert registry.is_bare_json_field("notes") is True
+    assert registry.is_bare_json_field("n") is True
+
+
+def test_is_bare_json_field_false_for_non_json_or_unknown() -> None:
+    spec = FieldSpec(name="title", kind=FieldKind.TEXT)
+    registry = FieldRegistry([spec])
+    assert registry.is_bare_json_field("title") is False
+    assert registry.is_bare_json_field("nonexistent") is False
+
+
 def test_make_ref_unknown_returns_none() -> None:
     """make_ref() returns None for a name that resolves neither as a plain
     field nor as a JSON subpath.

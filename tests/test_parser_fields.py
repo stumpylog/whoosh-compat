@@ -276,6 +276,28 @@ def test_json_bare_field_name_demotes(reg: FieldRegistry) -> None:
     assert not isinstance(t, ast.Term) or t.field != FieldRef("notes")
 
 
+def test_json_bare_field_name_bare_star_is_existence_not_demoted(reg: FieldRegistry) -> None:
+    # issue #11 (reopened): the demotion above must not swallow the one bare
+    # JSON shape that already worked before it, the bare-star existence
+    # check. "notes:*" is not a literal term/pattern to demote, it's the
+    # same existence special case issue #16 carved out for U64/BOOLEAN_EXISTS
+    # (DIVERGENCES.md entries 20 and 29), so it must still reach
+    # Every(FieldRef('notes')) with no diagnostics.
+    r = wc.parse("notes:*", registry=reg, default_fields=["content", "title"])
+    assert not r.diagnostics
+    assert r.ast == ast.Every(field=FieldRef("notes"))
+
+
+def test_json_subpath_bare_star_unaffected_by_bare_name_carve_out(reg: FieldRegistry) -> None:
+    # A subpath existence check ("notes.user:*", issue #29) was never
+    # demoted in the first place: make_ref's dotted-name branch already
+    # recognizes it. This pins that the bare-name carve-out above doesn't
+    # change that path.
+    r = wc.parse("notes.user:*", registry=reg, default_fields=["content", "title"])
+    assert not r.diagnostics
+    assert r.ast == ast.Every(field=FieldRef("notes", "user"))
+
+
 def test_numeric_range(reg: FieldRegistry) -> None:
     assert parse("asn:[10 TO 20]", reg) == ast.NumericRange(
         field=FieldRef("asn"), lo=10, hi=20, incl_lo=True, incl_hi=True

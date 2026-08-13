@@ -147,9 +147,13 @@ raw field-name string. `FieldRegistry.make_ref(raw: str) -> FieldRef | None`
 is the single place a dotted parser-level fieldname (`"notes.user"`) is
 interpreted: it resolves an alias to its canonical name and decides, once,
 whether the name addresses a plain field or a registered JSON field's
-subpath, returning `None` for a name that resolves as neither (the case
-`FieldsPlugin` already demotes back to text before it can reach an AST
-leaf). Once a `FieldRef` exists, `FieldRegistry.resolve(ref) -> ResolvedField
+subpath, returning `None` for a name that resolves as neither, and also for
+a bare JSON field name addressed without a subpath (`FieldsPlugin` demotes
+either case back to text before it can reach an AST leaf, except for one
+carve-out: a bare JSON field name followed by a lone `*` is the
+existence-check special case, not a term to demote, and still reaches
+`Every(FieldRef(name))` via `FieldRegistry.is_bare_json_field`; see
+DIVERGENCES.md entry 20). Once a `FieldRef` exists, `FieldRegistry.resolve(ref) -> ResolvedField
 | None` is the single resolver for it, plain or JSON subpath alike: nothing
 downstream of `make_ref`, including the emitter, inspects a field name for a
 literal `.` again. A registered *plain* field whose own name happens to

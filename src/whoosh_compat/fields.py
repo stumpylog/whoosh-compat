@@ -424,6 +424,36 @@ class FieldRegistry:
 
         return None
 
+    def is_bare_json_field(self, raw: str) -> bool:
+        """Whether ``raw`` resolves directly (as a canonical name or alias)
+        to a JSON-kind spec, addressed without a subpath.
+
+        A narrower, separate query from :meth:`make_ref`: ``make_ref``
+        deliberately returns ``None`` for this exact shape (issue #11), so a
+        bare JSON field name demotes to a text search when addressed with a
+        real term or pattern. But one bare-JSON shape is not a term or
+        pattern at all: a lone ``*`` is the existence-check special case
+        (issue #16, mirrored for U64/BOOLEAN_EXISTS in
+        ``QueryParser.term_query``, DIVERGENCES.md entries 20 and 29), and
+        the emitter still fully supports it for a bare JSON field
+        (``visit_every`` needs no subpath). ``FieldsPlugin.do_fieldnames``
+        uses this method to detect that one case before demotion applies,
+        so ``field:*`` on a bare JSON field can still reach
+        :class:`~whoosh_compat.ast.Every` instead of being swallowed by the
+        general demotion.
+
+        Args:
+            raw: The raw field-name text, as captured by the parser's
+                fieldname tagger (already alias-as-typed, not yet
+                canonicalized).
+
+        Returns:
+            True if ``raw`` names a registered JSON field directly (not via
+            a dotted subpath lookup).
+        """
+        spec = self._by_name.get(raw)
+        return spec is not None and spec.kind is FieldKind.JSON
+
     def exists_strategy(self, spec: FieldSpec) -> ExistsStrategy | None:
         """Return ``spec``'s resolved "exists" execution strategy.
 
