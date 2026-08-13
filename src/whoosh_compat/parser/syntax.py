@@ -460,7 +460,7 @@ class ErrorNode(SyntaxNode):
         self,
         message: str,
         node: SyntaxNode | None = None,
-        kind: DiagnosticKind = DiagnosticKind.UNKNOWN,
+        kind: DiagnosticKind = DiagnosticKind.UNSUPPORTED_PATTERN,
     ) -> None:
         self.message = message
         self.node = node

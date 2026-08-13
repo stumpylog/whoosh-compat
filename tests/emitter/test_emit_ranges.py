@@ -159,6 +159,18 @@ def test_text_range_raises(tindex: TIndex, ereg: FieldRegistry) -> None:
         emit_ast(node, tindex, ereg)
 
 
+def test_text_range_pins_the_two_part_host_contract(tindex: TIndex, ereg: FieldRegistry) -> None:
+    # DIVERGENCES.md entry 5 / README's "host contract" section: an empty
+    # diagnostics list is not, on its own, proof that emit() will succeed.
+    # "title:[a TO b]" is a text-field range: it parses clean (no
+    # diagnostics, no ErrorLeaf) and only fails once emit() is called, with
+    # a typed UnsupportedQueryError rather than a bare exception.
+    result = _parse("title:[a TO b]", registry=ereg, default_fields=["content"])
+    assert result.diagnostics == ()
+    with pytest.raises(UnsupportedQueryError, match="text ranges"):
+        emit_ast(result.ast, tindex, ereg)
+
+
 def test_date_range_naive_bounds_pass_through(tindex: TIndex, ereg: FieldRegistry) -> None:
     # _to_naive_utc()'s passthrough branch: bounds that are already naive
     # (no tzinfo) are used as-is rather than converted.

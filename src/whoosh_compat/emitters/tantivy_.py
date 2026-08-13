@@ -995,6 +995,27 @@ def emit(
 ) -> tantivy.Query:
     """Emit a ``tantivy.Query`` for ``node`` against ``registry``.
 
+    The host contract for safely calling this function has two parts, and
+    both must hold, not just the first:
+
+    1. The :class:`~whoosh_compat.errors.Diagnostic` list on the
+       :class:`~whoosh_compat.ParseResult` that produced ``node`` must be
+       empty. A non-empty list means the tree contains at least one
+       ``ErrorLeaf``, and calling ``emit()`` on that raises
+       ``QueryEmitError``.
+    2. Even with an empty diagnostics list, ``emit()`` can still raise
+       ``UnsupportedQueryError`` for a query shape that parses cleanly but
+       has no way to execute against tantivy today. The canonical example is
+       a text-field range (``title:[a TO b]``): whoosh supported this, but
+       tantivy-py has no programmatic text-range API (DIVERGENCES.md entry
+       5), so it parses with ``diagnostics == ()`` and only fails once
+       ``emit()`` is called.
+
+    A host like paperless-ngx should map *both* of these to an HTTP 400:
+    checking ``ParseResult.diagnostics`` alone is not sufficient, since it
+    says nothing about the second failure mode. Do not read "diagnostics is
+    empty" as "emitting is guaranteed to succeed."
+
     ``emit()`` always normalizes its input first (``ast.normalize()``); the
     result reflects the normal form, not necessarily the literal tree passed
     in. This makes ``emit(t)`` and ``emit(normalize(t))`` agree by

@@ -298,7 +298,7 @@ def test_errornode_reports_diagnostic_and_returns_errorleaf() -> None:
     assert len(parser.reports) == 1
     diagnostic = parser.reports[0]
     assert diagnostic.message == "bad thing"
-    assert diagnostic.kind == DiagnosticKind.UNKNOWN
+    assert diagnostic.kind == DiagnosticKind.UNSUPPORTED_PATTERN
     assert isinstance(q, ast.ErrorLeaf)
     assert q.diagnostic == diagnostic
 

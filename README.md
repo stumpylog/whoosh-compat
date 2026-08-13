@@ -93,6 +93,34 @@ The `parser.*` exemption forecloses nothing: it can always be promoted to stable
 
 The `emitters.tantivy_` module uses a trailing underscore to signal that this is a backend-specific module. This naming is deliberate and permanent at the 0.1.0 release. While a future version could add a lazy re-export (e.g., `emitters.tantivy` without the underscore) to provide an alternative import path, the canonical import is and will remain `from whoosh_compat.emitters.tantivy_ import emit`. The underscore also reinforces that tantivy is an optional dependency: the emitter won't be imported unless you ask for it.
 
+### The host contract
+
+A host embedding this library (mapping failures to an HTTP 400, for
+example) needs to check for **two** independent failure modes, not one:
+
+1. **`ParseResult.diagnostics` is non-empty.** `parse()` never raises for
+   bad *query* input; a malformed date, an out-of-domain number, or other
+   field-kind-specific problem becomes a `Diagnostic` plus an `ErrorLeaf` in
+   the tree instead. Calling `emit()` on a tree containing an `ErrorLeaf`
+   raises `QueryEmitError`.
+2. **`emit()` raises `UnsupportedQueryError`.** This can happen even when
+   `diagnostics` is empty: some query shapes parse cleanly but have no way
+   to execute against tantivy today. The canonical example is a text-field
+   range, `title:[a TO b]`: whoosh supported this, but tantivy-py has no
+   programmatic text-range API (`DIVERGENCES.md` entry 5), so the query
+   parses with `diagnostics == ()` and only fails once `emit()` is called.
+
+**An empty `diagnostics` tuple does not, by itself, mean emitting is safe.**
+Both checks matter; a host that only looks at `diagnostics` will still see
+an uncaught `UnsupportedQueryError` bubble up for shapes like the one above.
+
+A `Diagnostic`'s severity is fatal-only, and always will be: there is no
+`severity` field, and none is planned. Any diagnostics present means the
+query cannot be emitted, full stop; there is no "warning" tier to weigh
+differently. A future informational-only signal (for example, reporting
+that a zero-token term was silently dropped during analysis) would use a
+separate channel, never `ParseResult.diagnostics`.
+
 ## Supported query syntax
 
 Parity target is **Whoosh's intended grammar**, not every Whoosh plugin.

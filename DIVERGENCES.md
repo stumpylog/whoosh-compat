@@ -716,7 +716,7 @@ parse-then-emit pipeline).
     an actual wildcard search. A user typing `asn:1*` almost certainly
     means "starts with 1", and getting silently narrowed to "is exactly 1"
     with no error is a defect, not intended semantics, so it is not
-    reproduced. whoosh-compat instead reports a `DiagnosticKind.UNKNOWN`
+    reproduced. whoosh-compat instead reports a `DiagnosticKind.UNSUPPORTED_PATTERN`
     diagnostic and an `ErrorLeaf`, the same shape `BAD_NUMBER`/`BAD_DATE`
     already use for other invalid-input-on-parse cases, so a host can
     surface it as a 400 instead of a wildcard that quietly means something
@@ -780,7 +780,7 @@ parse-then-emit pipeline).
     both confirmed directly against the pinned tantivy-py rather than
     assumed.
 
-    whoosh-compat reports the same `DiagnosticKind.UNKNOWN` diagnostic and
+    whoosh-compat reports the same `DiagnosticKind.UNSUPPORTED_PATTERN` diagnostic and
     `ErrorLeaf` shape as entry 29, from the same `_wildcard_kind_diagnostic`
     check in `parser/default.py`, extended to also fire when a `Prefix`/
     `Wildcard` ref resolves to a JSON subpath (independent of the U64

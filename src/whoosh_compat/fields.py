@@ -495,14 +495,23 @@ class FieldRegistry:
         deliberately *not* recognized here: a JSON field addressed without a
         subpath has no way to emit (``visit_term``/``visit_phrase`` require
         one), so treating it as known here would let ``notes:foo`` parse
-        cleanly and then raise at emit time, breaking the "parsing clean
-        means emitting is safe" contract. Since ``make_ref`` is also what
+        cleanly and then raise at emit time. Note that "clean parse" is
+        *not*, on its own, a guarantee that emitting will succeed: a
+        text-field range (``title:[a TO b]``) also parses with no
+        diagnostics and then raises ``UnsupportedQueryError`` at emit time
+        (DIVERGENCES.md entry 5). The real host contract has two parts, both
+        documented on :func:`whoosh_compat.emitters.tantivy_.emit` and in the
+        README: check ``ParseResult.diagnostics`` before emitting, *and*
+        expect emit() to still raise ``UnsupportedQueryError`` for a handful
+        of parseable-but-inexecutable shapes. Returning ``None`` here for a
+        bare JSON field name closes off one such shape at parse time instead
+        of leaving it to that second check; it doesn't mean every other
+        shape is closed off the same way. Since ``make_ref`` is also what
         ``FieldsPlugin.do_fieldnames`` calls (via ``__contains__``) to decide
         whether a field prefix is recognized at all, returning ``None`` here
-        demotes it the same way an entirely unknown field name already is
-        (issue #11): consistent, not stricter, since a known field addressed
-        incorrectly demoting more strictly than an unknown one would be
-        backwards.
+        demotes it the same way an entirely unknown field name already is:
+        consistent, not stricter, since a known field addressed incorrectly
+        demoting more strictly than an unknown one would be backwards.
 
         Args:
             raw: The raw field-name text, as captured by the parser's

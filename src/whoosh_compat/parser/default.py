@@ -567,7 +567,7 @@ class QueryParser:
             return None
         d = Diagnostic(
             message=message,
-            kind=DiagnosticKind.UNKNOWN,
+            kind=DiagnosticKind.UNSUPPORTED_PATTERN,
             startchar=startchar,
             endchar=endchar,
             field=ref,

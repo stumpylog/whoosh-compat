@@ -182,7 +182,7 @@ def test_wildcard_on_u64_field_is_diagnosed(reg: FieldRegistry, query: str) -> N
     r = wc.parse(query, registry=reg, default_fields=["content"])
     assert isinstance(r.ast, ast.ErrorLeaf)
     assert r.diagnostics
-    assert r.diagnostics[0].kind is DiagnosticKind.UNKNOWN
+    assert r.diagnostics[0].kind is DiagnosticKind.UNSUPPORTED_PATTERN
     assert r.diagnostics[0].field == FieldRef("asn")
     # "1*" arrives here as "1": do_wildcards folds a trailing-star-only
     # wildcard into a literal Prefix *before* query()/prefix_query ever run
@@ -219,7 +219,7 @@ def test_wildcard_on_json_subpath_is_diagnosed(reg: FieldRegistry, query: str) -
     r = wc.parse(query, registry=reg, default_fields=["content"])
     assert isinstance(r.ast, ast.ErrorLeaf)
     assert r.diagnostics
-    assert r.diagnostics[0].kind is DiagnosticKind.UNKNOWN
+    assert r.diagnostics[0].kind is DiagnosticKind.UNSUPPORTED_PATTERN
     assert r.diagnostics[0].field == FieldRef("notes", "user")
 
 
@@ -256,7 +256,7 @@ def test_wildcard_on_boolean_exists_field_is_diagnosed(reg: FieldRegistry, query
     r = wc.parse(query, registry=reg, default_fields=["content"])
     assert isinstance(r.ast, ast.ErrorLeaf)
     assert r.diagnostics
-    assert r.diagnostics[0].kind is DiagnosticKind.UNKNOWN
+    assert r.diagnostics[0].kind is DiagnosticKind.UNSUPPORTED_PATTERN
     assert r.diagnostics[0].field == FieldRef("has_tag")
 
 
