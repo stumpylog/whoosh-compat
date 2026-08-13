@@ -132,6 +132,45 @@ def test_bare_star_on_u64_field_is_still_an_existence_match(reg: FieldRegistry) 
     assert parse("asn:*", reg) == ast.Every(field=FieldRef("asn"))
 
 
+# -- issue #30: a wildcard/prefix pattern on a JSON subpath is diagnosed at
+# -- parse time rather than silently regexing the whole JSON field's
+# -- path-prefixed encoded bytes. tantivy-py has no API that can scope a
+# -- pattern query to one subpath (verified against 0.26.0: regex_query
+# -- rejects a dotted field name outright), so unlike the U64 case above
+# -- (a whoosh defect not reproduced) this is a genuine tantivy-py gap, and
+# -- the fix is to refuse loudly, same diagnostic shape as entry 29's U64
+# -- refusal (DIVERGENCES.md entry 30).
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("notes.user:ali*", id="trailing-star-prefix-fold"),
+        pytest.param("notes.user:a?ice", id="question-mark-wildcard"),
+        pytest.param("notes.user:al[iy]ce*", id="bracket-class-wildcard"),
+    ],
+)
+def test_wildcard_on_json_subpath_is_diagnosed(reg: FieldRegistry, query: str) -> None:
+    r = wc.parse(query, registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics
+    assert r.diagnostics[0].kind is DiagnosticKind.UNKNOWN
+    assert r.diagnostics[0].field == FieldRef("notes", "user")
+
+
+def test_bare_star_on_json_subpath_is_still_an_existence_match(reg: FieldRegistry) -> None:
+    # The "*"-alone case (issue #16/#29, existence) is unaffected: this
+    # entry is about a genuine wildcard *pattern* on a subpath, not the
+    # bare-star simplification (DIVERGENCES.md entries 20 and 29).
+    assert parse("notes.user:*", reg) == ast.Every(field=FieldRef("notes", "user"))
+
+
+def test_wildcard_on_json_plain_field_no_subpath_is_unaffected(reg: FieldRegistry) -> None:
+    # Control: a plain (non-JSON) field's pattern path is untouched by the
+    # subpath diagnostic.
+    assert parse("content:invoi*", reg) == ast.Prefix(field=FieldRef("content"), text="invoi")
+
+
 def test_bool_words(reg: FieldRegistry) -> None:
     for word in ("t", "TRUE", "yes", "1"):
         assert parse(f"has_tag:{word}", reg) == ast.Term(field=FieldRef("has_tag"), text=True)

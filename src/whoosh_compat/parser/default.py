@@ -512,28 +512,49 @@ class QueryParser:
     def _wildcard_kind_diagnostic(
         self, ref: FieldRef | None, text: str, startchar: int | None, endchar: int | None
     ) -> ast.ErrorLeaf | None:
-        """Diagnoses a wildcard/prefix pattern on a field kind that can't
-        support one, or ``None`` if the field is fine with it.
+        """Diagnoses a wildcard/prefix pattern on a field kind (or
+        subpath) that can't support one, or ``None`` if the field is fine
+        with it.
 
-        Real whoosh silently drops the wildcard character and searches the
-        (mangled) literal prefix instead on a NUMERIC field (verified
-        against the oracle: ``type_id:1*`` parses to ``Term('type_id',
-        <bytes for int 1>)``, not a rejected query or a wildcard search):
-        a whoosh defect, not intended semantics, so it is not reproduced
-        here (issue #17). Diagnosing at parse time instead of letting it
-        fail at tantivy search time matches the rest of this parser's
-        invalid-input contract (BAD_NUMBER, BAD_DATE).
+        Two independent reasons a pattern can't be honored, both diagnosed
+        here rather than left to fail (or silently misbehave) downstream:
 
-        Scoped to U64 only: this is called after the ``text == "*"``
-        existence-match special case (issue #16) has already been handled,
-        so it only ever sees a genuine wildcard *pattern*.
+        * NUMERIC field (U64). Real whoosh silently drops the wildcard
+          character and searches the (mangled) literal prefix instead
+          (verified against the oracle: ``type_id:1*`` parses to
+          ``Term('type_id', <bytes for int 1>)``, not a rejected query or
+          a wildcard search): a whoosh defect, not intended semantics, so
+          it is not reproduced here (issue #17, DIVERGENCES.md entry 29).
+        * A ref resolving to a JSON subpath. tantivy stores JSON terms as
+          path-prefixed encoded bytes, and there is no tantivy-py API on
+          the pinned version that can build a pattern query scoped to one
+          subpath; emitting one against the whole field would silently
+          match (or miss) the wrong documents (issue #30, DIVERGENCES.md
+          entry 30). This case is independent of field kind: a JSON
+          field's own kind is always JSON, so it never also hits the U64
+          branch above.
+
+        Diagnosing at parse time instead of letting it fail (or silently
+        misbehave) at tantivy search time matches the rest of this
+        parser's invalid-input contract (BAD_NUMBER, BAD_DATE).
+
+        Called after the ``text == "*"`` existence-match special case
+        (issue #16) has already been handled, so it only ever sees a
+        genuine wildcard *pattern*, never a bare-star existence check
+        (DIVERGENCES.md entries 20 and 29 both call out that boundary).
         """
 
         resolved = self.registry.resolve(ref) if ref is not None else None
-        if resolved is None or resolved.spec.kind is not FieldKind.U64:
+        if resolved is None:
+            return None
+        if resolved.spec.kind is FieldKind.U64:
+            message = f"wildcard patterns are not supported on numeric field {ref}"
+        elif resolved.is_subpath:
+            message = f"wildcard patterns are not supported on a JSON subpath ({ref})"
+        else:
             return None
         d = Diagnostic(
-            message=f"wildcard patterns are not supported on numeric field {ref}",
+            message=message,
             kind=DiagnosticKind.UNKNOWN,
             startchar=startchar,
             endchar=endchar,

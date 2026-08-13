@@ -701,3 +701,58 @@ parse-then-emit pipeline).
     `tests/differential/corpus_docs.txt`'s issue #17 section (skips via the
     existing entry 6 diagnostics-present check, same as any other
     parse-time diagnostic).
+
+30. **A wildcard/prefix pattern on a JSON subpath is diagnosed at parse
+    time rather than silently querying the whole field's encoded bytes
+    (tantivy-py gap, not a whoosh divergence; issue #30).** Unlike entry
+    29's U64 case, this is not a whoosh defect being declined: whoosh has
+    no JSON field concept at all, so there is no whoosh behavior to
+    compare against. tantivy stores JSON terms as path-prefixed encoded
+    bytes (`path\x00<type-byte>value`), and there is no tantivy-py API on
+    the pinned version (0.26.0) that can build a pattern query scoped to
+    one subpath: `Query.regex_query(schema, 'notes.user', ...)` raises
+    `ValueError: Field 'notes.user' is not defined in the schema` (the
+    dotted subpath form is rejected outright), and building the query
+    against the bare JSON field name instead compiles but matches wrong in
+    both directions, silently: `notes.user:ali*` misses a document with
+    `notes.user == 'alice'` (the anchored regex can never match the
+    path-prefixed bytes `user\x00salice`), while `notes.note:user*`
+    spuriously matches a document that merely has *a* `user` subpath
+    (the pattern matches the encoded path bytes of an unrelated subpath),
+    both confirmed directly against the pinned tantivy-py rather than
+    assumed.
+
+    whoosh-compat reports the same `DiagnosticKind.UNKNOWN` diagnostic and
+    `ErrorLeaf` shape as entry 29, from the same `_wildcard_kind_diagnostic`
+    check in `parser/default.py`, extended to also fire when a `Prefix`/
+    `Wildcard` ref resolves to a JSON subpath (independent of the U64
+    check: a JSON field's own kind is never U64). A hand-built `Prefix`/
+    `Wildcard` node that bypasses the parser (so it never reaches the
+    parse-time diagnostic) is refused a second time at emit, by
+    `TantivyEmitter._reject_subpath_pattern` in `emitters/tantivy_.py`,
+    which raises `UnsupportedQueryError` before any `Query.regex_query`
+    call is built, mirroring entry 5's text-range emit-time backstop.
+
+    A bare `field.subpath:*` (the "*"-alone existence-match special case,
+    entries 20 and 29) is unaffected: it never reaches
+    `_wildcard_kind_diagnostic` at parse time (handled by the earlier
+    `text == "*"` branch in `wildcard_query`) and is emitted via
+    `visit_every`/`_exists_query`, not `visit_prefix`/`visit_wildcard`, so
+    it keeps routing to the subpath-aware existence check from issue #29.
+
+    If a future tantivy-py version gains a way to scope a pattern query to
+    a JSON subpath, this can be revisited as a self-retiring carve-out with
+    a probe, the same shape as `TantivyEmitter._json_paths_supported()`
+    (ARCHITECTURE.md's "JSON `parse_query` carve-out" section); it should
+    not be emulated against the current API in the meantime.
+
+    Test references: `tests/test_parser_fields.py`'s
+    `test_wildcard_on_json_subpath_is_diagnosed` (trailing-star prefix
+    fold, `?`, and a bracket-class wildcard), `test_bare_star_on_json_subpath_is_still_an_existence_match`,
+    and `test_wildcard_on_json_plain_field_no_subpath_is_unaffected`;
+    `tests/emitter/test_emit_patterns.py`'s
+    `test_pattern_on_json_subpath_raises_at_emit` (non-fast and fast
+    subpaths, both `Prefix` and `Wildcard`) and
+    `test_pattern_on_plain_json_field_no_subpath_still_works`;
+    `tests/emitter/test_kind_matrix.py`'s `json-nonfast`/`json-fast`
+    `prefix-star`/`wildcard`/`bracket-class` cells.

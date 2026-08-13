@@ -192,6 +192,58 @@ def test_every_field(
     assert search_ids(tindex[0], q) == expected
 
 
+# -- JSON subpath pattern backstop (issue #30) -------------------------------
+
+
+@pytest.mark.parametrize(
+    ("node", "match"),
+    [
+        pytest.param(
+            ast.Prefix(field=FieldRef("notes", "user"), text="ali"),
+            r"notes\.user",
+            id="prefix-non-fast-subpath",
+        ),
+        pytest.param(
+            ast.Wildcard(field=FieldRef("notes", "user"), pattern="a?ice"),
+            r"notes\.user",
+            id="wildcard-non-fast-subpath",
+        ),
+        pytest.param(
+            ast.Prefix(field=FieldRef("attrs", "user"), text="ali"),
+            r"attrs\.user",
+            id="prefix-fast-subpath",
+        ),
+        pytest.param(
+            ast.Wildcard(field=FieldRef("attrs", "user"), pattern="a?ice"),
+            r"attrs\.user",
+            id="wildcard-fast-subpath",
+        ),
+    ],
+)
+def test_pattern_on_json_subpath_raises_at_emit(
+    tindex: TIndex, ereg: FieldRegistry, node: ast.Node, match: str
+) -> None:
+    # A hand-built Prefix/Wildcard node bypasses the parser's parse-time
+    # diagnostic entirely, so this is the backstop that catches it before
+    # it can reach the silent-wrong-results regex query that used to be
+    # built here (issue #30): resolved.dotted_name is only ever read for
+    # the error message, never handed to Query.regex_query.
+    with pytest.raises(UnsupportedQueryError, match=match):
+        emit_ast(node, tindex, ereg)
+
+
+def test_pattern_on_plain_json_field_no_subpath_still_works(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
+    # Control: the JSON-subpath backstop must not fire for an ordinary
+    # (non-JSON) field's pattern query, proving the plain-field pattern
+    # path is unaffected by the new check.
+    expected = fnmatch_ids(CONTENT_TOKENS, "shopn*")
+    assert expected == [2, 4]
+    q = emit_ast(ast.Prefix(field=FieldRef("content"), text="shopn"), tindex, ereg)
+    assert search_ids(tindex[0], q) == expected
+
+
 def test_every_field_non_fast_non_text_raises(tindex: TIndex, ereg: FieldRegistry) -> None:
     # 'asn' is registered as a fast U64 field in ereg, so build a second
     # registry with it as non-fast instead: the regex(".*") fallback

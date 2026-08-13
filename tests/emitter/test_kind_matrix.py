@@ -47,7 +47,7 @@ classified set against that declared set so a silently dropped column also
 fails loudly.
 
 Known-bad cells (issues #9, #11 [closed against a prior symptom, kept below
-as a regression control], #17, #29, #30, #34, #35) are marked
+as a regression control], #17, #29, #34, #35) are marked
 ``pytest.mark.xfail(strict=True)`` with the target outcome this project has
 already decided on (see each issue and its DIVERGENCES.md cross-reference);
 a fix flips its cell from xfail to pass, and a regression un-flips it
@@ -453,31 +453,9 @@ CELLS: list[ParameterSet] = [
     _param("json-nonfast", "bare", "notes.user:alice", Search([1])),
     _param("json-nonfast", "single-quoted", "notes.user:'alice'", Search([1])),
     _param("json-nonfast", "double-quoted", 'notes.user:"alice"', Search([1])),
-    _param(
-        "json-nonfast",
-        "prefix-star",
-        "notes.user:ali*",
-        Diag(),
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="issue #30: prefix/wildcard on a JSON subpath silently regexes the "
-            "whole field's encoded bytes instead of being diagnosed",
-        ),
-    ),
-    _param(
-        "json-nonfast",
-        "wildcard",
-        "notes.user:a?ice",
-        Diag(),
-        marks=pytest.mark.xfail(strict=True, reason="issue #30, same as prefix-star"),
-    ),
-    _param(
-        "json-nonfast",
-        "bracket-class",
-        "notes.user:[a-a]lic*",
-        Diag(),
-        marks=pytest.mark.xfail(strict=True, reason="issue #30, same as prefix-star"),
-    ),
+    _param("json-nonfast", "prefix-star", "notes.user:ali*", Diag()),
+    _param("json-nonfast", "wildcard", "notes.user:a?ice", Diag()),
+    _param("json-nonfast", "bracket-class", "notes.user:[a-a]lic*", Diag()),
     _param(
         "json-nonfast",
         "bare-star",
@@ -495,27 +473,9 @@ CELLS: list[ParameterSet] = [
     _param("json-fast", "bare", "attrs.user:alice", Search([1])),
     _param("json-fast", "single-quoted", "attrs.user:'alice'", Search([1])),
     _param("json-fast", "double-quoted", 'attrs.user:"alice"', Search([1])),
-    _param(
-        "json-fast",
-        "prefix-star",
-        "attrs.user:ali*",
-        Diag(),
-        marks=pytest.mark.xfail(strict=True, reason="issue #30, fast-field counterpart"),
-    ),
-    _param(
-        "json-fast",
-        "wildcard",
-        "attrs.user:a?ice",
-        Diag(),
-        marks=pytest.mark.xfail(strict=True, reason="issue #30, fast-field counterpart"),
-    ),
-    _param(
-        "json-fast",
-        "bracket-class",
-        "attrs.user:[a-a]lic*",
-        Diag(),
-        marks=pytest.mark.xfail(strict=True, reason="issue #30, fast-field counterpart"),
-    ),
+    _param("json-fast", "prefix-star", "attrs.user:ali*", Diag()),
+    _param("json-fast", "wildcard", "attrs.user:a?ice", Diag()),
+    _param("json-fast", "bracket-class", "attrs.user:[a-a]lic*", Diag()),
     # attrs.note:* must match only docs that actually have a "note" subpath
     # (1 and 4), not every doc that has any "attrs" value at all (1, 4, 5):
     # doc 5 only has "user", proving the subpath is really being checked.
