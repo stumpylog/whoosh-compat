@@ -474,6 +474,56 @@ parse-then-emit pipeline).
     `tests/emitter/test_kind_matrix.py`'s
     `test_json_subpath_phrase_slop_and_multitoken`.
 
+    **A second, separate consequence of this same fallback, worth recording
+    ahead of the retirement it's tied to: the fallback currently gives a
+    JSON subpath term free, tantivy-native type inference that the future
+    programmatic path will not.**
+    `_emit_json_term`'s `index.parse_query` call
+    (`f'{full}:"{escaped}"'`, line above) hands the analyzed text to
+    tantivy's own query-string grammar, which resolves a JSON leaf the way
+    tantivy's query parser always does: trying a fast-value (numeric,
+    boolean) interpretation *and* a tokenized-text interpretation and OR-ing
+    them together. So `attrs.value:100` against a document that stored
+    `attrs.value` as the JSON number `100` matches today, and so does the
+    same query against a document that stored it as the JSON string
+    `"100"`; `attrs.flag:true` matches a JSON boolean `true` the same way.
+    None of this is code whoosh-compat wrote; it's free behavior inherited
+    from handing the string to `index.parse_query`.
+
+    The `_json_paths_supported()` branch above it
+    (`self._text_term_query(resolved, tokens)`) builds a plain
+    `Query.term_query(schema, full, token)` call with a `str` token: a
+    single, explicitly `Str`-typed term, with no equivalent fast-value/text
+    union. Once tantivy-py#716 ships and the probe starts returning `True`,
+    every JSON subpath term (not just ones that happen to look numeric or
+    boolean) moves onto this path automatically, with no code change in
+    this library to review or catch the difference: a numeric or boolean
+    JSON subpath value (paperless-ngx custom fields values are the
+    motivating real-world case) would silently stop matching, with no test
+    failure locally to flag it unless the receiving project's own test
+    suite happens to cover exactly that shape.
+
+    Verified directly against the tantivy source: the primitive behind this
+    is `generate_literals_for_json_object`
+    (`src/query/query_parser/query_parser.rs`), which returns more than one
+    literal, a fast-value interpretation and a tokenized-text one, and ORs
+    them; there is no single-`Term` API that can express that union, so
+    this is a structural limitation of the target API, not an
+    implementation gap tantivy-py#716 will close on its own. This means
+    the fallback may need to survive, scoped narrowly, even after the rest
+    of this carve-out retires; see the retirement checklist this entry
+    points to. This is documentation only: no code changes here, since the
+    decision between "keep a narrow fallback forever" and "teach the
+    programmatic branch to replicate the inference deliberately" is a
+    larger design call this entry deliberately leaves open rather than
+    deciding without a real host to evaluate it against.
+
+    Retirement tracking: `.claude/skills/carve-out-retirement/SKILL.md`'s
+    JSON carve-out row now carries the same note: before treating a
+    tantivy-py version bump that flips `_json_paths_supported()` to `True`
+    as safe to ship, re-verify that non-string (numeric/boolean) JSON
+    subpath values still match correctly under the programmatic branch.
+
 23. **`NOT` of a term whose analyzer drops every token matches every
     document here, but matches none in real whoosh (confirmed divergence,
     not fixed).** `visit_term`'s zero-token TEXT/KEYWORD branch
@@ -939,3 +989,122 @@ parse-then-emit pipeline).
     padded-false, padded-true-looking, and plain true/false control
     shapes); `tests/differential/allowlist.py`'s matching entry and
     `tests/differential/corpus_docs.txt`'s padded-value lines.
+
+34. **A year at the edge of what `datetime` can represent (`0000`, `9999`) is
+    diagnosed rather than silently clamped to whoosh's ceiling (design).**
+    Real whoosh executes `created:9999`
+    and `created:[2020 TO 9999]` by resolving the year to `datetime.max`
+    (`9999-12-31T23:59:59.999999`) as an *inclusive* ceiling, confirmed
+    directly against the pinned oracle. whoosh-compat's `DateParserPlugin`
+    instead represents an ambiguous/period date as a half-open range whose
+    exclusive upper bound is the period's ceiling plus one microsecond (see
+    the "half-open date-range ceilings" invariant in `ARCHITECTURE.md`):
+    for year 9999 that arithmetic overflows past `datetime.max`, an
+    `OverflowError` `text_to_node`/`range_to_node` (`parser/dateparse.py`)
+    catch and turn into a `BAD_DATE` `Diagnostic` the same way any other
+    unparseable date is reported, rather than special-casing the ceiling
+    year to keep it inclusive.
+
+    This is a deliberate choice, not an oversight: whoosh-compat offers a
+    true open-ended range (`created:[2020 TO]`, entry 10 above) as the
+    correct way to express "from 2020 onward", so a sentinel year that
+    exists only to fake an open bound has a real replacement to point users
+    at, and the diagnostic message can do exactly that. Year `0000` is
+    diagnosed unconditionally regardless of this policy, since no
+    `datetime` representation of year 0 exists at all. Confirmed directly
+    against the oracle: real whoosh's `DateParserPlugin.text_to_dt` for a
+    bare `created:0` value degrades to a silent `NullQuery` rather than
+    raising, so this side of the pair is already covered by entry 1's
+    general "invalid dates yield diagnostics, real whoosh: silent empty
+    results" divergence; this entry exists for the year-9999 half of the
+    pair, which entry 1 does not explain on its own.
+
+    An earlier commit message justified keeping the diagnostic by claiming
+    "sentinel years are a real habit in stored queries"; that claim was
+    checked while writing this entry and has no independent support (the
+    paperless-ngx query corpus, `tests/differential/corpus_paperless.txt`,
+    contains no year-9999 line, and entry 10's own sentinel mention is about
+    a naive string-translation layer's machine-generated queries, not
+    anything a user actually types or stores). The rationale above, "this
+    diagnostic exists because a real open bound is the better answer", is
+    the one that holds up instead.
+
+    Test references: `tests/test_parser_dates.py`'s
+    `test_years_outside_the_representable_range_diagnose` and
+    `test_range_out_of_range_diagnostic_names_the_failing_bound` already
+    pin this diagnostic behavior directly; no new test was needed for this
+    entry.
+
+35. **`NOT NOT alpha` (and any other run of two or more consecutive bare
+    `NOT`s) parses instead of crashing (whoosh bug, not reproduced).** Real
+    whoosh raises a bare `IndexError` while
+    parsing `NOT NOT alpha`, `NOT NOT NOT alpha`, and `alpha NOT NOT beta`,
+    confirmed directly against the pinned oracle. The cause is
+    `Wrapper.query`'s (`whoosh/qparser/syntax.py`) unguarded
+    `self.nodes[0]`: a second, inner `NOT` produces a `NotGroup` with no
+    child of its own (the outer `NOT` consumed what would have been its
+    operand), so by the time the inner wrapper's `query()` runs, its
+    `nodes` list is empty and the plain indexing raises. This is a defect
+    in whoosh's own grammar wiring, not intended semantics (nothing about
+    whoosh's design calls for a double negative to crash instead of
+    cancelling out), so it is not reproduced.
+
+    whoosh-compat's `Wrapper.query` (`parser/syntax.py`) already guards this
+    exact shape with `if not self.nodes: return None`, which makes the
+    empty inner `NotGroup` contribute nothing to its enclosing group instead
+    of raising: `NOT NOT alpha` correctly parses as plain `alpha`, `NOT NOT
+    NOT alpha` as `NOT alpha`, and `alpha NOT NOT beta` as `alpha AND beta`.
+    This was already the right behavior before this entry was written; the
+    guard's own comment only mentioned a different shape it also happens to
+    cover (`NOT AND x`, an operator consuming the word a wrapper would have
+    wrapped), so this divergence went undocumented until now.
+
+    There is no allowlist/corpus triple for this one: real whoosh raises
+    before a query object exists, so there is no oracle-side AST to compare
+    against and no differential corpus line can exercise it (the harness
+    has no mechanism for an oracle-side exception the way it does for a
+    `NullQuery`/diagnostic). Not carried through the differential-triage
+    allowlist convention for that reason, the same way entry 31 documents
+    for the nesting-depth cap.
+
+    Test references: `tests/test_parser_basics.py`'s
+    `test_consecutive_bare_nots_parse_instead_of_raising`.
+
+36. **A comma-values field boost (`tag:alpha,beta^2`) attaches to the whole
+    split group in whoosh-compat, but to each split term individually in
+    real whoosh (design, AST-level only).**
+    whoosh-compat's `CommaValuesPlugin.do_comma_values`
+    (`parser/plugins.py`) runs at `priorities.FILTER_COMMA_VALUES` (105),
+    before `BoostPlugin.do_boost` runs at `FILTER_BOOSTS_POST` (510): the
+    comma split happens first, building an `AndGroup` of the two terms, and
+    the boost then attaches to that whole group as its single preceding
+    node. `tag:alpha,beta^2` therefore parses to
+    `Boosted(And(Term('tag','alpha'), Term('tag','beta')), 2.0)`.
+
+    Real whoosh has no comma-splitting parser plugin at all (entry 17 above
+    covers this in more detail): a `KEYWORD(commas=True)` field's own
+    analyzer splits on commas at *analysis* time, long after `BoostPlugin`
+    has already attached the boost to the single, still-unsplit term node.
+    Confirmed directly against the pinned oracle:
+    `tag:alpha,beta^2` parses to
+    `And([Term('tag', 'alpha', boost=2.0), Term('tag', 'beta', boost=2.0)])`,
+    the boost riding each split term individually rather than the group as
+    a whole.
+
+    This has no result-level consequence for this project's fixtures: the
+    matched-document sets are identical either way (both shapes require
+    every split term to match, an ordinary AND), and the two scoring shapes
+    are algebraically equal under tantivy's boolean-query scoring, which
+    sums each `Must` clause's own score: `Boost(c, And(a, b))` scores
+    `c * (score(a) + score(b))` for a matching document, while
+    `And(Boost(c, a), Boost(c, b))` scores `c*score(a) + c*score(b)`, the
+    same value by simple distributivity, for any constant `c` and any
+    per-term score. Verified live, not just algebraically: a tantivy index
+    with `body: "alpha beta"` scores an identical top hit
+    (`1.150728464126587`, exactly double the unboosted `And`'s
+    `0.5753642320632935`) for both `Query.boost_query(And(a, b), 2.0)` and
+    `And(Query.boost_query(a, 2.0), Query.boost_query(b, 2.0))`.
+
+    Test references: `tests/differential/allowlist.py`'s comma-values-boost
+    entry; `tests/differential/corpus_docs.txt`'s
+    `tag:alpha,beta^2` line.

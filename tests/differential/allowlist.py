@@ -406,6 +406,31 @@ ALLOW: list[tuple[re.Pattern[str], str]] = [
             " (unstripped check falls through to bool(qstring))"
         ),
     ),
+    # design (DIVERGENCES.md entry 36): a comma-values field boost
+    # (`tag:alpha,beta^2`) attaches to the whole split group in
+    # whoosh-compat, since CommaValuesPlugin's comma split
+    # (FILTER_COMMA_VALUES, priority 105) runs before BoostPlugin binds the
+    # boost to the preceding node (FILTER_BOOSTS_POST, priority 510):
+    # `Boosted(And(tag:alpha, tag:beta), 2.0)`. Real whoosh has no
+    # comma-splitting parser plugin at all (see entry 17 above): its
+    # KEYWORD(commas=True) analyzer splits on commas at analysis time, long
+    # after the boost already bound to the single, still-unsplit term, so
+    # each split term carries its own copy of the boost instead:
+    # `And(Boosted(tag:alpha, 2.0), Boosted(tag:beta, 2.0))`. Matched
+    # documents and summed relevance scoring are identical either way
+    # (verified both algebraically and against a live tantivy index; see
+    # the DIVERGENCES.md entry), so this is an AST-shape-only divergence,
+    # not a whoosh bug. Scoped to a comma-values field's value followed
+    # immediately by a boost.
+    (
+        re.compile(r"\btag:[^\s()]*,[^\s()]*\^\d"),
+        (
+            "DIVERGENCES.md entry 36: a comma-values field boost attaches to"
+            " the whole split AndGroup in whoosh-compat but to each split"
+            " term individually in whoosh, since the comma split happens at"
+            " parse time here vs. analysis time there"
+        ),
+    ),
 ]
 
 

@@ -89,6 +89,16 @@ notes.user:alice notes.note:insurance
 # always splits on commas, quoted or not).
 tag:'foo,bar'
 
+# --- KNOWN DIVERGENCE (design, allowlist.py, DIVERGENCES.md entry 36): a
+# comma-values field boost attaches to the whole split group in
+# whoosh-compat (CommaValuesPlugin's split runs before BoostPlugin binds the
+# boost) but to each split term individually in real whoosh (KEYWORD's
+# comma split happens at analysis time, after the boost is already bound to
+# the single unsplit term). Matched-document sets and summed relevance
+# scoring are identical either way; see the DIVERGENCES.md entry for the
+# verified arithmetic.
+tag:alpha,beta^2
+
 # --- KNOWN DIVERGENCE (design, allowlist.py): bare field:* simplifies to
 # Every(field) in whoosh-compat vs a literal Wildcard('*') in whoosh.
 title:*

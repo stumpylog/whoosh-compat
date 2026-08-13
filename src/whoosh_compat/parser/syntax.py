@@ -445,8 +445,14 @@ class Wrapper(GroupNode):
 
     def query(self, parser: Any) -> ast.Node | None:
         # A wrapper can end up with no child at all when a neighbouring
-        # operator consumes the text it would have wrapped ("NOT AND x").
-        # There is nothing to build from, so contribute nothing.
+        # operator consumes the text it would have wrapped ("NOT AND x"), or
+        # when a second, inner NOT wraps nothing because the outer NOT
+        # already consumed what would have been its operand ("NOT NOT
+        # alpha"): real whoosh's equivalent (Wrapper.query,
+        # whoosh/qparser/syntax.py) indexes self.nodes[0] unconditionally
+        # and raises IndexError for the second shape (see DIVERGENCES.md
+        # entry 35). There is nothing to build from either way, so
+        # contribute nothing.
         if not self.nodes:
             return None
         q = self.nodes[0].query(parser)

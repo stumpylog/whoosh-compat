@@ -30,6 +30,7 @@ So: verify what a release actually exposes and under what name, and re-check whe
 
 ## Retirement checklist (JSON carve-out)
 
+0. **Before celebrating the probe flipping to `True`**: re-verify that non-string (numeric/boolean) JSON subpath values still match correctly under the programmatic branch. The `parse_query` fallback currently gives a JSON subpath term free, tantivy-native type inference (`attrs.value:100` matches both a numeric-100 document and a string-"100" document; `attrs.flag:true` matches a JSON boolean) because it hands the text to tantivy's own query-string grammar, which tries a fast-value interpretation and a tokenized-text interpretation and ORs them. The programmatic `term_query` path builds a single, explicitly `Str`-typed term with no equivalent union, so this inference does not carry over automatically; see DIVERGENCES.md entry 22's extension for the verified mechanism and the paperless-ngx custom-fields motivating case. Do not treat "the probe returns `True`" alone as sufficient to retire step 4 below without this check.
 1. Confirm the feature, and the exact API it ships under, in the release notes and diff of the specific version. Do not assume it matches the open PR.
 2. **Coordinate downstream first**: raising the floor breaks any consumer still on the old pin (paperless-ngx's pin is the reason the CI `tantivy-pin` job exists). Do not land a silent break; confirm the downstream pin is moving.
 3. `pyproject.toml`: raise the `[tantivy]` extra floor; `uv lock --upgrade-package tantivy`.

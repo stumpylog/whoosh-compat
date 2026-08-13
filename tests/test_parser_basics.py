@@ -179,6 +179,45 @@ def test_nested_and_repeated_empty_groups_behave_consistently(reg: FieldRegistry
     assert parse("(())", reg) == ast.Nothing()
 
 
+# -- consecutive bare NOTs (DIVERGENCES.md entry 35): real whoosh raises a
+# -- bare IndexError for these shapes (Wrapper.query indexing an empty
+# -- NotGroup); whoosh-compat's own empty-nodes guard already makes the
+# -- inner, childless NOT contribute nothing instead --------------------
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        pytest.param(
+            "NOT NOT title:alpha",
+            ast.Term(field=FieldRef("title"), text="alpha"),
+            id="double-not-cancels",
+        ),
+        pytest.param(
+            "NOT NOT NOT title:alpha",
+            ast.Not(ast.Term(field=FieldRef("title"), text="alpha")),
+            id="triple-not-is-single-not",
+        ),
+        pytest.param(
+            "title:alpha NOT NOT title:beta",
+            ast.And(
+                children=(
+                    ast.Term(field=FieldRef("title"), text="alpha"),
+                    ast.Term(field=FieldRef("title"), text="beta"),
+                )
+            ),
+            id="double-not-mid-query-cancels",
+        ),
+    ],
+)
+def test_consecutive_bare_nots_parse_instead_of_raising(
+    reg: FieldRegistry, query: str, expected: ast.Node
+) -> None:
+    res = wc.parse(query, registry=reg, default_fields=["content", "title"])
+    assert not res.diagnostics
+    assert res.ast == expected
+
+
 # -- pathological parenthesis nesting (issue #31): parsing never raises for
 # -- query input, even input that would blow the interpreter's recursion
 # -- limit if the parser and normalize() traversed it recursively. A query
