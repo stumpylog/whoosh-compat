@@ -293,6 +293,12 @@ resolve to exactly one of three outcomes: a parse-time `Diagnostic`, a
 documented emit-time error, or an execution that honors the field kind and
 subpath. Code that dispatches on field kind or node type handles the full
 axis explicitly; an unhandled combination raises rather than falling through.
+`tests/emitter/test_kind_matrix.py` enforces this directly: it enumerates
+every `FieldKind` member against the leaf spellings reachable from query
+text and asserts each cell lands in exactly one of the three outcomes,
+deriving its rows from the live `FieldKind` enum so a new member with no
+classified cells fails the suite instead of just shrinking coverage
+silently.
 
 **Diagnostics never raise mid-parse.** See §3's error-flow paragraph: this
 is worth restating as an invariant because it's load-bearing for callers.
