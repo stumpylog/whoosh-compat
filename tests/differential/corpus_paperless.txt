@@ -28,8 +28,12 @@ content:foo OR title:multi-word
 (0) OR (title:00-000)
 # Same divergence through a quoted comma KEYWORD value: the keyword
 # analyzer splits on the comma with no minimum token length, so both
-# 1-char halves survive and resolve against the enclosing OR.
+# 1-char halves survive and resolve against the enclosing OR. tag_id pins
+# the once-forgotten non-lowercase KEYWORD sibling cell (the allowlist
+# derives its field alternation from the registry precisely so no KEYWORD
+# field can be silently missing again).
 NOT ((0) OR (tag:'0,00'))
+(0) OR (tag_id:'0,00')
 # DIVERGENCES.md entry 43: whoosh case-folds bracket-range bounds into
 # the AST; whoosh-compat's TermRange keeps the typed case (AST-level
 # only: a text TermRange is unsupported at emit, entry 5).

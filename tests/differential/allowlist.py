@@ -82,6 +82,33 @@ from __future__ import annotations
 import enum
 import re
 
+from tests.differential.oracle import ORACLE_REGISTRY
+from whoosh_compat.fields import FieldKind
+
+# Every registered TEXT/KEYWORD field name (canonical and alias), longest
+# first so a longer name is never shadowed by a shorter prefix inside a
+# regex alternation. These are exactly the kinds whose analyzer can split
+# a value into multiple tokens, i.e. the fields that can exhibit the
+# entry-15 Multitoken.DEFAULT divergence. Derived from the registry, never
+# hand-enumerated: the fuzzers draw their field vocabulary from the same
+# registry (strategies.py), so a hand-written list here is guaranteed to
+# drift into a latent CI flake the moment a field is added or renamed
+# (which is exactly how tag_id/custom_fields_id/viewer_id were once
+# missed). test_allowlist_xref.py pins the coverage field by field.
+_ANALYZER_SPLIT_FIELDS = "|".join(
+    re.escape(name)
+    for name in sorted(
+        (
+            name
+            for spec in ORACLE_REGISTRY
+            if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD)
+            for name in (spec.name, *spec.aliases)
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+
 
 class DivergenceKind(enum.Enum):
     """Which strict-xfail assertion an allowlist entry's matched query
@@ -762,8 +789,7 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     (
         re.compile(
             r"^(?=.*\bOR\b)"
-            r"(?=.*\b(?:title|content|correspondent|tag|type|path|notes"
-            r"|custom_fields|owner|original_filename|checksum)"
+            rf"(?=.*\b(?:{_ANALYZER_SPLIT_FIELDS})"
             r":['\"]?\w+[-.,]\w+)"
         ),
         (

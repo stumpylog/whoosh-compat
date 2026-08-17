@@ -33,7 +33,12 @@ from __future__ import annotations
 import pathlib
 import re
 
+import pytest
+
 from tests.differential.allowlist import ALLOW
+from tests.differential.allowlist import allowed_reason
+from tests.differential.oracle import ORACLE_REGISTRY
+from whoosh_compat.fields import FieldKind
 
 _ROOT = pathlib.Path(__file__).resolve().parents[2]
 _DIVERGENCES_PATH = _ROOT / "DIVERGENCES.md"
@@ -151,3 +156,27 @@ def test_every_divergences_corpus_claim_has_a_matching_corpus_line() -> None:
                     " exact line exists in that corpus file"
                 )
     assert not problems, "\n".join(problems)
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        pytest.param(s.name, id=s.name)
+        for s in ORACLE_REGISTRY
+        if s.kind in (FieldKind.TEXT, FieldKind.KEYWORD)
+    ],
+)
+def test_entry15_fielded_regex_covers_every_analyzer_splitting_field(field: str) -> None:
+    """The entry-15 'correctly-fielded inside an OR' allowlist entry must
+    recognize EVERY registered TEXT/KEYWORD field, since those are exactly
+    the kinds whose analyzer can split a value into multiple tokens, and
+    the grammar fuzzer draws its field vocabulary from this same registry
+    (strategies.py's TEXT_FIELDS/KEYWORD_FIELDS): a field the regex omits
+    is a latent CI flake the moment hypothesis generates a comma or dashed
+    value on it inside an OR. Deriving the parametrization from the live
+    registry means a newly registered field fails here instead of
+    silently shrinking coverage.
+    """
+    reason = allowed_reason(f"asn:1 OR {field}:'a,b'")
+    assert reason is not None, f"entry-15 fielded regex does not cover {field!r}"
+    assert "entry 15" in reason, f"{field!r} matched a different entry: {reason!r}"
