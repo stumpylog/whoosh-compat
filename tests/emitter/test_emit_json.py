@@ -500,6 +500,84 @@ def test_json_subpath_phrase_supported_branch_maps_slop(tindex: TIndex) -> None:
     )
 
 
+def test_json_subpath_term_supported_branch_matches(tindex: TIndex) -> None:
+    # Result-level pin for _emit_json_term's "supported" branch, the Term
+    # sibling of the phrase pins around it: the branch is dead code on the
+    # pinned tantivy-py (the probe never returns True for a genuine JSON
+    # field until tantivy-py#716 ships), so when the flip happens, every
+    # JSON-subpath Term query in production switches to this path; it must
+    # not do so untested. Same dotted-plain-field technique as
+    # _force_json_paths_supported documents.
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_text_field("notes.user", stored=True)
+    schema = sb.build()
+    ix = tantivy.Index(schema)
+    w = ix.writer()
+    for id_, value in ((1, "alice"), (2, "bob")):
+        doc = tantivy.Document()
+        doc.add_unsigned("id", id_)
+        doc.add_text("notes.user", value)
+        w.add_document(doc)
+    w.commit()
+    ix.reload()
+
+    reg = FieldRegistry(
+        [
+            FieldSpec(
+                "notes",
+                FieldKind.JSON,
+                subpaths=("user",),
+                analyzer=lambda t: [w for w in t.lower().split() if w],
+            ),
+        ]
+    )
+    emitter = TantivyEmitter(index=ix, registry=reg)
+    _force_json_paths_supported(emitter)
+
+    q = emitter.emit(ast.Term(field=FieldRef("notes", "user"), text="alice"))
+    assert search_ids(ix, q) == [1]
+    q_miss = emitter.emit(ast.Term(field=FieldRef("notes", "user"), text="carol"))
+    assert search_ids(ix, q_miss) == []
+
+
+def test_json_subpath_single_word_phrase_supported_branch_matches(tindex: TIndex) -> None:
+    # The single-word-Phrase cell of the same branch: _emit_json_phrase
+    # collapses a one-word phrase to the exactly equivalent term query
+    # (tantivy rejects a single-word phrase_query), so the collapse path
+    # needs its own real search, not just the multi-word pins around it.
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_text_field("notes.user", stored=True)
+    schema = sb.build()
+    ix = tantivy.Index(schema)
+    w = ix.writer()
+    doc = tantivy.Document()
+    doc.add_unsigned("id", 1)
+    doc.add_text("notes.user", "alice")
+    w.add_document(doc)
+    w.commit()
+    ix.reload()
+
+    reg = FieldRegistry(
+        [
+            FieldSpec(
+                "notes",
+                FieldKind.JSON,
+                subpaths=("user",),
+                analyzer=lambda t: [w for w in t.lower().split() if w],
+            ),
+        ]
+    )
+    emitter = TantivyEmitter(index=ix, registry=reg)
+    _force_json_paths_supported(emitter)
+
+    q = emitter.emit(ast.Phrase(field=FieldRef("notes", "user"), text="alice"))
+    assert search_ids(ix, q) == [1]
+    q_miss = emitter.emit(ast.Phrase(field=FieldRef("notes", "user"), text="bob"))
+    assert search_ids(ix, q_miss) == []
+
+
 def test_json_subpath_phrase_supported_branch_ignores_multitoken_first(tindex: TIndex) -> None:
     sb = tantivy.SchemaBuilder()
     sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
