@@ -278,6 +278,14 @@ def test_result_entry23_regex_covers_every_whoosh_stopword(word: str) -> None:
         # demotes identically on both sides and compares equal).
         pytest.param("is_shared:true", 42, id="e42-fielded"),
         pytest.param("is_shared :x", None, id="e42-nonfielded-unclaimed"),
+        # entry 15 demotion pathways: İ is the one single-character value
+        # that survives minsize (its lowercase is two codepoints), found
+        # by a deep fuzz soak through both the unknown-field and bare-JSON
+        # spellings.
+        pytest.param("zzz:İ", 15, id="e15-unknown-field-expanding-char"),
+        pytest.param("attrs:İ", 15, id="e15-bare-json-expanding-char"),
+        pytest.param("İ-ab", 15, id="e15-bare-dashed-expanding-char"),
+        pytest.param("zzz:x", None, id="e15-single-char-value-unclaimed"),
     ],
 )
 def test_allowlist_regex_scoping(query: str, expected_entry: int | None) -> None:
@@ -301,3 +309,17 @@ def test_allowlist_regex_scoping(query: str, expected_entry: int | None) -> None
         assert int(m.group(1)) == expected_entry, (
             f"{query!r} claimed by the wrong entry: {reason!r}"
         )
+
+
+def test_the_lowercase_expanding_character_set_is_exactly_i_dot() -> None:
+    """The entry-15 value proxies admit the single character İ alongside
+    their two-character minimum, because its str.lower() expands to two
+    codepoints and survives StandardAnalyzer's minsize. This derives the
+    full set from Unicode itself so the hardcoded character cannot drift:
+    if a Python upgrade ever adds another expanding character, this fails
+    and the regexes gain it deliberately rather than silently missing it.
+    """
+    import sys
+
+    expanding = {c for c in map(chr, range(0x80, sys.maxunicode + 1)) if len(c.lower()) > 1}
+    assert expanding == {"İ"}

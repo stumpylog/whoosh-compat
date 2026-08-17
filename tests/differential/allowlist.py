@@ -953,7 +953,13 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # separator to be at least two characters, confirmed directly
     # ("zzz:x"/"a:foobar", where the one-character half is dropped by
     # StandardAnalyzer's minsize=2 and only one token survives per field, do
-    # NOT diverge) as a practical proxy for "plausibly survives analysis",
+    # NOT diverge) as a practical proxy for "plausibly survives analysis".
+    # One measured exception to the two-character proxy: İ (U+0130, the
+    # only character in Unicode whose str.lower() expands to two
+    # codepoints, pinned by test_allowlist_xref's derivation test), whose
+    # single-character value survives minsize after lowercasing and
+    # genuinely diverges ("zzz:İ", found by a deep fuzz soak), so it is
+    # admitted alongside the two-character forms. The proxy remains one,
     # not a byte-for-byte simulation of StandardAnalyzer's stopword list;
     # the differential-triage skill's normal iterate-on-fuzzer-findings
     # workflow applies if a future fuzz run finds a shape (e.g. an actual
@@ -965,9 +971,9 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # swept in here.
     (
         re.compile(
-            r"(?:^|(?<=[\s(]))\w{2,}[-.]\w{2,}(?=[\s)]|$)"
+            r"(?:^|(?<=[\s(]))(?:\w{2,}|İ)[-.](?:\w{2,}|İ)(?=[\s)]|$)"
             rf"|\b(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared)\b)"
-            r"\w{2,}:[^\s():]{2,}"
+            r"\w{2,}:(?:[^\s():]{2,}|İ)"
         ),
         (
             "DIVERGENCES.md entry 15: an unfielded or unknown-field-demoted"

@@ -34,6 +34,13 @@ content:foo OR title:multi-word
 # field can be silently missing again).
 NOT ((0) OR (tag:'0,00'))
 (0) OR (tag_id:'0,00')
+# The İ pathway: U+0130 is the only character whose str.lower() expands
+# to two codepoints, so a single-character value survives minsize after
+# lowercasing and the demoted text splits into two tokens (found by a
+# deep fuzz soak, through both the unknown-field and bare-JSON
+# demotion spellings).
+zzz:İ
+attrs:İ
 # DIVERGENCES.md entry 43: whoosh case-folds bracket-range bounds into
 # the AST; whoosh-compat's TermRange keeps the typed case (AST-level
 # only: a text TermRange is unsupported at emit, entry 5).

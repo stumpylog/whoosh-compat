@@ -45,6 +45,7 @@ import re
 from tests.differential.allowlist import BOOL_EXISTS_FIELDS_PATTERN
 from tests.differential.allowlist import DATE_FIELDS_PATTERN
 from tests.differential.allowlist import KEYWORD_FIELDS_PATTERN
+from tests.differential.allowlist import REGISTERED_FIELDS_PATTERN
 from tests.differential.allowlist import ZERO_TOKEN_WORD
 
 # (pattern, DIVERGENCES.md reference + short reason)
@@ -298,9 +299,28 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
     # skipping a few additional non-divergent generated examples costs
     # nothing (see this module's docstring).
     (
+        # Alternatives, in order: a bare dashed word; a dashed word near
+        # an explicit OR; a single-quoted comma value near an explicit OR
+        # (the shape _comma_atom emits; an UNQUOTED comma value converges
+        # via the parse-time split, measured non-divergent, so only the
+        # quoted spelling is claimed); the bare-JSON demotion; and the
+        # unknown-field demotion, mirroring the differential twin. An
+        # unregistered fieldname demotes on both sides and its colon-split
+        # tokens reach the OR-vs-AND mismatch ("notes.user:YEAR" matching
+        # doc 3 in whoosh-compat only, found by a deep fuzz soak; for a
+        # DOTTED unregistered name whoosh demotes in two pieces via its
+        # mid-token tagger, entry 14's mechanism, so the parsed trees
+        # differ by more than the combinator, but the RESULT divergence is
+        # still the OR-vs-AND one, verified). İ is the one character whose
+        # lowercase expands to two codepoints, surviving minsize despite
+        # being a single character.
         re.compile(
-            r"(?<![:\w])\w+-\w+\b(?!:)|\bOR\b.*\b\w+-\w+\b|\b\w+-\w+\b.*\bOR\b"
+            r"(?<![:\w])\w+-\w+\b(?!:)"
+            r"|\bOR\b.*\b\w+-\w+\b|\b\w+-\w+\b.*\bOR\b"
+            r"|\bOR\b[^']*'[^']*,[^']*'|'[^']*,[^']*'[^']*\bOR\b"
             r"|\battrs:(?!\*)\S"
+            rf"|\b(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared)\b)"
+            r"\w{2,}:(?:[^\s():]{2,}|İ)"
         ),
         (
             "DIVERGENCES.md entry 15 (design, confirmed result-level): a"

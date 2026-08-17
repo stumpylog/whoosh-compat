@@ -269,9 +269,19 @@ parse-then-emit pipeline).
     shorter than `StandardAnalyzer`'s `minsize=2`), so there is no
     OR-vs-AND ambiguity there and both sides agree, confirming the
     mechanism is genuinely about token *count*, not about JSON-field
-    demotion specifically; the dashed-word and bare-JSON-value pathways
-    just happen to be the two shapes this project's generator vocabulary
-    reaches multi-token unfielded values through.
+    demotion specifically. Two refinements found by a deep fuzz soak:
+    the *unknown-field demotion* is a third result-level pathway
+    (`notes.user:YEAR`: an unregistered, possibly dotted fieldname
+    demotes on both sides and its colon-split tokens reach the same
+    OR-vs-AND result divergence; at the parsed-AST layer a dotted
+    spelling is claimed under entry 14, since whoosh's mid-token tagger
+    demotes it in two pieces, but the result-set difference is this
+    entry's mechanism, verified against the live dual index); and the
+    single-character value İ (U+0130) defeats the allowlists' otherwise
+    reliable two-character survives-analysis proxy, because it is the
+    only character in Unicode whose `str.lower()` expands to two
+    codepoints (pinned by a derivation test), so `zzz:İ` and `attrs:İ`
+    genuinely split into two surviving tokens and diverge.
 
     Test references: `tests/emitter/result_allowlist.py`'s unfielded/
     `OR`-nested dashed-word and bare-JSON-value entries;
