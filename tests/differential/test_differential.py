@@ -131,9 +131,15 @@ def test_diagnostic_skip_count_matches_corpus() -> None:
         if diagnostics:
             count += 1
 
-    assert count == 26, (
+    # Was 26; dropped to 23 by the RFC3339 "T"/"Z" datetime-separator fix
+    # (paperless-ngx PR #13010 back-compat, dateparse.py's
+    # ``_split_rfc3339_utc`` / "simple"'s "T"-accepting separator class):
+    # three corpus queries containing a "...T...Z" bracketed date-range
+    # bound used to fail to parse (BAD_DATE) on the whoosh-compat side and
+    # now parse cleanly, so they no longer take this diagnostic skip.
+    assert count == 23, (
         f"{count} corpus queries now take the DIVERGENCES.md entry 6 diagnostic skip,"
-        " expected 26; if this is an intentional parser change (diagnosing a new"
+        " expected 23; if this is an intentional parser change (diagnosing a new"
         " shape, or fixing one that used to diagnose), update this pinned count and"
         " say so in the commit message, don't just silently adjust the number"
     )

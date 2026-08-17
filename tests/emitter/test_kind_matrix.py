@@ -349,13 +349,17 @@ CELLS: list[ParameterSet] = [
     _param("date", "boosted", "created:2020-03-15^2.0", Search([1])),
     # -- DATETIME (added, fast, not date_only) -------------------------------
     # A full ISO instant ("...T10:00:00Z") only parses within a quoted value
-    # (the "T"/"Z" separators aren't part of the bare/unquoted natural-date
-    # grammar; see DIVERGENCES.md entry 19's neighboring quoted-vs-unquoted
-    # distinction). "bare" here uses a bare *date* (no time-of-day), which
-    # is a legitimate, distinct, unquoted DATETIME leaf spelling in its own
-    # right: it resolves to the whole day as a range, same day-granularity
-    # DATE gets, just on a field that can also carry finer precision when
-    # quoted.
+    # when written as a single field:value leaf (the colons in the
+    # time-of-day are otherwise read as new field:value separators by the
+    # bare/unquoted tokenizer; unrelated to the date grammar itself). "bare"
+    # here uses a bare *date* (no time-of-day), which is a legitimate,
+    # distinct, unquoted DATETIME leaf spelling in its own right: it
+    # resolves to the whole day as a range, same day-granularity DATE gets,
+    # just on a field that can also carry finer precision when quoted. The
+    # bracketed-range column below is a different story: no colon
+    # ambiguity inside a range's brackets, so "T"/"Z" datetimes parse there
+    # unquoted (paperless-ngx PR #13010 back-compat; see dateparse.py's
+    # ``_split_rfc3339_utc``).
     _param("datetime", "bare", "added:2020-03-15", Search([1])),
     _param(
         "datetime",
@@ -379,7 +383,7 @@ CELLS: list[ParameterSet] = [
         "datetime",
         "bracket-range",
         "added:[2020-03-15T10:00:00Z TO 2020-03-15T10:00:00Z]",
-        Diag(),
+        Search([1]),
     ),
     _param("datetime", "comma-list", "added:2020-03-15,2020-03-15", Diag()),
     _param("datetime", "boosted", "added:2020-03-15^2.0", Search([1])),

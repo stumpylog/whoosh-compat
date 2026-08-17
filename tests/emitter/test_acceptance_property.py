@@ -473,6 +473,29 @@ def test_not_of_nested_empty_group_is_a_result_level_divergence(
     assert tantivy_search_ids_prop(tindex_prop, q_diverges) == []
 
 
+def test_quoted_rfc3339_value_is_a_result_level_divergence(
+    windex_prop: WhooshIndex, tindex_prop: TIndex
+) -> None:
+    """DIVERGENCES.md entry 48: a quoted T-separated datetime value
+    parses to _NullQuery in whoosh (its grammar has no T separator and
+    the fallback chain bottoms out empty), matching nothing, while
+    whoosh-compat parses the correct DateRange and returns the document
+    the user meant. The Z spelling additionally proves the UTC-designator
+    semantics end to end: doc 1's created instant is 14:30 Berlin, i.e.
+    12:30 UTC, and only the absolute-UTC reading matches it.
+    """
+
+    q_local = "created:'2019-03-01T00:05:00'"
+    assert allowed_result_reason(q_local) is not None
+    assert whoosh_search_ids_prop(windex_prop, q_local) == []
+    assert tantivy_search_ids_prop(tindex_prop, q_local) == [4]
+
+    q_utc = "created:'2020-06-10T12:30:00Z'"
+    assert allowed_result_reason(q_utc) is not None
+    assert whoosh_search_ids_prop(windex_prop, q_utc) == []
+    assert tantivy_search_ids_prop(tindex_prop, q_utc) == [1]
+
+
 def test_not_under_andnot_is_a_result_level_divergence(
     windex_prop: WhooshIndex, tindex_prop: TIndex
 ) -> None:

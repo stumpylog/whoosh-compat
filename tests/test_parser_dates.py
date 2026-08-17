@@ -349,6 +349,239 @@ def test_separated_iso_date_precision(
     assert not r.incl_hi
 
 
+# --- RFC3339 "T"/"Z" datetime separator (paperless-ngx PR #13010 back-compat;
+# DateParser.__init__'s "simple" sequence now also accepts "T", and
+# DateParserPlugin._split_rfc3339_utc strips a trailing "Z") ---------------
+
+
+def test_rfc3339_t_separator_without_z_still_uses_local_tz(reg: FieldRegistry) -> None:
+    # No "Z": "T" is just an accepted separator (like space/dash/dot/slash
+    # already were), the value is still local wall-clock time in BERLIN.
+    r = dparse("added:'2026-08-04T10:30:00'", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2026, 8, 4, 10, 30, tzinfo=BERLIN).astimezone(UTC)
+    assert r.incl_lo
+
+
+def test_rfc3339_t_z_is_an_absolute_utc_instant_not_local(reg: FieldRegistry) -> None:
+    # With "Z": the value names an absolute UTC instant and must NOT be
+    # reinterpreted as BERLIN wall-clock time and shifted again -- this is
+    # the exact bug _split_rfc3339_utc's "tz" override on _to_utc exists to
+    # avoid. BASE/BERLIN is UTC+2 in August, so a naive local-tz
+    # misinterpretation of the same digits would be 2 hours off.
+    r = dparse("added:'2026-08-04T10:30:00Z'", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2026, 8, 4, 10, 30, tzinfo=UTC)
+    assert r.incl_lo
+
+
+def test_rfc3339_lowercase_t_and_z(reg: FieldRegistry) -> None:
+    # Sequence's separator regex is compiled with re.IGNORECASE; the "Z"
+    # designator check is explicitly case-insensitive too.
+    r = dparse("added:'2026-08-04t10:30:00z'", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2026, 8, 4, 10, 30, tzinfo=UTC)
+
+
+def test_rfc3339_range_bounds_with_z(reg: FieldRegistry) -> None:
+    # The motivating case (paperless-ngx issue/PR #13010): a bracketed range
+    # of RFC3339 "Z" datetimes, unquoted -- no colon-tokenizing ambiguity
+    # inside range bounds, unlike a bare unquoted single value.
+    r = dparse("created:[2026-01-01T00:00:00Z TO 2026-06-01T00:00:00Z]", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2026, 1, 1, tzinfo=UTC)
+    # "created" is date_only=True. Both bounds carry a microsecond field
+    # left unspecified by the grammar (there is no ".NNNNNN" in the query
+    # text), which is itself ambiguous (see is_ambiguous/adatetime), so
+    # both bounds go through the joint-disambiguation "period" path rather
+    # than the exact-instant path; the hi side's exclusive ceiling then
+    # rounds its ambiguous microsecond up, landing one calendar day past
+    # its own date once date_only-collapsed (pre-existing _to_utc ceiling
+    # behavior, not new: see test_date_only_whole_day_value_still_ceils_exactly_once).
+    assert r.hi == datetime(2026, 6, 2, tzinfo=UTC)
+    assert r.incl_lo
+    assert not r.incl_hi
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_lo", "expected_hi"),
+    [
+        pytest.param(
+            "added:[2021-06-01T00:00:00Z TO 2020]",
+            datetime(2020, 1, 1, tzinfo=BERLIN).astimezone(UTC),
+            datetime(2021, 6, 1, 0, 0, 1, tzinfo=UTC),
+            id="backwards-z-start-swapped-keeps-utc",
+        ),
+        pytest.param(
+            "added:[2021 TO 2020-06-01T00:00:00Z]",
+            datetime(2020, 6, 1, tzinfo=UTC),
+            datetime(2022, 1, 1, tzinfo=BERLIN).astimezone(UTC),
+            id="backwards-z-end-swapped-keeps-utc",
+        ),
+        # The next three ranges mix a "Z" bound with a year-AMBIGUOUS local
+        # bound. The joint step then mutates the ambiguous bound's year
+        # (borrowing it from the other side) WITHOUT swapping (times.py's
+        # backwards-swap line is unreachable unless both bounds carry
+        # explicit years), so bounds_swapped must stay False and each tz
+        # must stay with its positional bound; mistaking the borrow's
+        # value change for a swap shifts the Z bound onto local time.
+        pytest.param(
+            "added:[feb TO 2027-06-01T00:00:00Z]",
+            datetime(2027, 2, 1, tzinfo=BERLIN).astimezone(UTC),
+            datetime(2027, 6, 1, 0, 0, 1, tzinfo=UTC),
+            id="ambiguous-local-start-borrows-year-no-false-swap",
+        ),
+        pytest.param(
+            "added:[dec TO 2026-08-04T10:30:00Z]",
+            datetime(2025, 12, 1, tzinfo=BERLIN).astimezone(UTC),
+            datetime(2026, 8, 4, 10, 30, 1, tzinfo=UTC),
+            id="ambiguous-local-start-borrows-prior-year-no-false-swap",
+        ),
+        pytest.param(
+            "added:[2026-08-04T10:30:00Z TO feb]",
+            datetime(2026, 8, 4, 10, 30, tzinfo=UTC),
+            datetime(2027, 3, 1, tzinfo=BERLIN).astimezone(UTC),
+            id="ambiguous-local-end-borrows-next-year-no-false-swap",
+        ),
+        # A year-only local START with the SAME explicit year as the "Z"
+        # bound: the equal-years month/day fill copies the end's date onto
+        # the start, mutating its value with no swap possible (the filled
+        # dates are equal, never out of order), so bounds_swapped must
+        # stay False and positional tz must hold. The mirrored end-side
+        # fill takes its date from the basedate instead and CAN go out of
+        # order (both variants pinned below).
+        pytest.param(
+            "added:[2027 TO 2027-06-01T00:00:00Z]",
+            datetime(2027, 6, 1, tzinfo=BERLIN).astimezone(UTC),
+            datetime(2027, 6, 1, 0, 0, 1, tzinfo=UTC),
+            id="equal-year-start-filled-from-z-end-no-false-swap",
+        ),
+        pytest.param(
+            "added:[2026 TO 2026-08-04T10:30:00Z]",
+            datetime(2026, 8, 4, tzinfo=BERLIN).astimezone(UTC),
+            datetime(2026, 8, 4, 10, 30, 1, tzinfo=UTC),
+            id="equal-year-start-filled-from-z-end-basedate-year-no-false-swap",
+        ),
+        pytest.param(
+            "added:[2027-06-01T00:00:00Z TO 2027]",
+            datetime(2027, 6, 1, tzinfo=UTC),
+            datetime(2027, 8, 5, tzinfo=BERLIN).astimezone(UTC),
+            id="equal-year-end-filled-from-basedate-in-order",
+        ),
+        pytest.param(
+            "added:[2027-09-15T00:00:00Z TO 2027]",
+            datetime(2027, 8, 4, tzinfo=BERLIN).astimezone(UTC),
+            datetime(2027, 9, 15, 0, 0, 1, tzinfo=UTC),
+            id="equal-year-end-filled-from-basedate-genuine-swap",
+        ),
+        # A year-only start with a DIFFERENT explicit year: no fill
+        # mutates it (the equal-years precondition fails), the backwards
+        # orientation is a genuine swap (bounds_swapped True), and the
+        # tzs must follow the swapped values.
+        pytest.param(
+            "added:[2027 TO 2026-06-01T00:00:00Z]",
+            datetime(2026, 6, 1, tzinfo=UTC),
+            datetime(2028, 1, 1, tzinfo=BERLIN).astimezone(UTC),
+            id="year-only-start-different-year-genuine-swap",
+        ),
+        # A year+time local start ("2027 10pm": explicit year, NO month or
+        # day, explicit hour) is the one date-missing shape whose
+        # equal-years fill takes the basedate branch (its floor time
+        # exceeds the Z end's ceil time), which can land the filled date
+        # after the Z bound and trigger a genuine swap. The tzs must
+        # follow that swap even though the start bound was mutated first.
+        pytest.param(
+            "added:[2027 10pm TO 2027-06-01T00:00:00Z]",
+            datetime(2027, 6, 1, tzinfo=UTC),
+            datetime(2027, 8, 4, 23, 0, tzinfo=BERLIN).astimezone(UTC),
+            id="year-time-start-basedate-filled-genuine-swap",
+        ),
+        pytest.param(
+            "added:[2027 10pm TO 2027-09-15T00:00:00Z]",
+            datetime(2027, 8, 4, 22, 0, tzinfo=BERLIN).astimezone(UTC),
+            datetime(2027, 9, 15, 0, 0, 1, tzinfo=UTC),
+            id="year-time-start-basedate-filled-in-order",
+        ),
+        pytest.param(
+            "added:[2027-09-15T00:00:00Z TO 2027 10pm]",
+            datetime(2027, 8, 4, 22, 0, tzinfo=BERLIN).astimezone(UTC),
+            datetime(2027, 9, 15, 0, 0, 1, tzinfo=UTC),
+            id="year-time-end-basedate-filled-genuine-swap",
+        ),
+    ],
+)
+def test_rfc3339_mixed_tz_bounds_survive_a_backwards_swap(
+    reg: FieldRegistry, query: str, expected_lo: datetime, expected_hi: datetime
+) -> None:
+    # A backwards range with two explicit years swaps its bounds in the
+    # joint-disambiguation step; each bound's timezone (UTC for a
+    # "Z"-suffixed RFC3339 bound, the query's local tz otherwise) must
+    # follow its VALUE through the swap, or the Z bound gets reinterpreted
+    # as local wall-clock time and silently shifted, the exact bug the
+    # designator handling exists to prevent.
+    r = dparse(query, reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == expected_lo
+    assert r.hi == expected_hi
+
+
+def test_rfc3339_range_open_lo_bound_with_z(reg: FieldRegistry) -> None:
+    # A "Z" bound as the sole (lo) side of an open-ended range: no second
+    # bound to combine with, so this exercises the individual (non-joint)
+    # bound-resolution path with the tz override applied.
+    r = dparse("added:[2026-08-04T10:30:00Z TO]", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2026, 8, 4, 10, 30, tzinfo=UTC)
+    assert r.hi is None
+
+
+def test_rfc3339_range_open_hi_bound_with_z(reg: FieldRegistry) -> None:
+    r = dparse("added:[TO 2026-08-04T10:30:00Z]", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo is None
+    # Unlike the lo-side test above, an hi-only bound is ambiguous (no
+    # ".NNNNNN" microsecond in the query text) rather than exact, so it
+    # takes the exclusive-ceiling path: the ceiling rounds the unspecified
+    # microsecond up to 999999 and then adds one, carrying into the next
+    # whole second (pre-existing adatetime.ceil()/fill_in behavior, not new
+    # -- see test_rfc3339_range_bounds_with_z's comment for the same
+    # mechanism at date_only granularity).
+    assert r.hi == datetime(2026, 8, 4, 10, 30, 1, tzinfo=UTC)
+
+
+def test_rfc3339_range_mixes_z_and_non_z_bound(reg: FieldRegistry) -> None:
+    # A "Z" bound and a plain local (day-precision, unambiguous-enough to
+    # avoid the microsecond-ambiguity ceiling exercised above) bound in the
+    # same range each keep their own tz treatment (start_tz/end_tz in
+    # _range_to_node are per-bound, not shared).
+    r = dparse("added:[2026-08-04T10:30:00Z TO 2026-08-10]", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2026, 8, 4, 10, 30, tzinfo=UTC)
+    assert r.hi == datetime(2026, 8, 11, tzinfo=BERLIN).astimezone(UTC)
+
+
+def test_rfc3339_date_only_field_z_designator_is_a_no_op(reg: FieldRegistry) -> None:
+    # "created" is date_only=True: _to_utc never applies any tz (local or
+    # UTC) to a date_only field, so "Z" makes no observable difference
+    # there, but it must still parse rather than error.
+    r = dparse("created:'2026-08-04T00:00:00Z'", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2026, 8, 4, tzinfo=UTC)
+
+
+def test_trailing_z_without_preceding_t_is_not_treated_as_utc_designator(
+    reg: FieldRegistry,
+) -> None:
+    # The RFC3339 "Z" gate requires a "T" earlier in the string (mirrors
+    # paperless's own ``_bound_datetimes``'s ``if "T" in token:`` gate): a
+    # bare trailing "z"/"Z" with no "T" is not this designator at all, and
+    # is simply an unrecognizable date (there is no separate "z" grammar
+    # element either).
+    res = dparse("added:'20200304Z'", reg)
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+
+
 # --- Range queries combining two date expressions (range_to_node) ---------
 
 

@@ -1763,3 +1763,36 @@ parse-then-emit pipeline).
     `test_not_under_andnot_is_a_result_level_divergence` (the strict
     proof: whoosh returns the positive side unchanged, tantivy computes
     the correct empty subtraction) and its `_SEED_QUERIES` line.
+
+48. **A single-quoted `T`-separated datetime value parses to a working
+    `DateRange`; real whoosh parses it to `_NullQuery`, matching nothing
+    (whoosh-bug, not reproduced).** The single-value face of the RFC3339
+    `T`/`Z` extension (see `parser/dateparse.py`'s module docstring):
+    whoosh's `simple` grammar sequence has no `T` in its separator class,
+    its `text_to_dt` fails on `'2026-08-04T10:30:00'`, and the fallback
+    chain bottoms out in `_NullQuery` (measured: both the plain and
+    `Z`-suffixed spellings normalize to `_NullQuery` in the pinned
+    oracle), so a v2 user typing the quoted RFC3339 spelling silently got
+    zero results. whoosh-compat's grammar accepts `T` as a separator and
+    handles a trailing `Z` as the UTC designator it is, returning the
+    documents the user meant. Compat-favorable, the same shape as entry
+    45's double-quoted crash sibling. This entry covers the single-quoted
+    spelling only: the bare unquoted spelling colon-tokenizes differently
+    in whoosh (a partial numeric range plus leftover terms, not
+    `_NullQuery`) and is not claimed here.
+
+    The bracketed-range face of the same extension needs no entry of its
+    own: whoosh partially parses a `T`-bearing bound down to its leading
+    year (entry 12's documented partial-bound collapse), so those
+    spellings genuinely diverge under entry 12's mechanism and are
+    correctly absorbed by its allowlist entry (the three
+    `created:[...T...Z TO ...]` corpus lines).
+
+    Test references: `tests/differential/allowlist.py`'s
+    T-separated-value entry (ordered before the entry-18 bare-ISO entry,
+    whose numerically-correct-fallback mechanism does not describe the
+    `_NullQuery` outcome); `tests/emitter/result_allowlist.py`'s matching
+    entry; `tests/differential/corpus_paperless.txt`'s
+    `added:'2026-08-04T10:30:00'` and `added:'2026-08-04T10:30:00Z'`
+    lines; `tests/emitter/test_acceptance_property.py`'s
+    `test_quoted_rfc3339_value_is_a_result_level_divergence`.

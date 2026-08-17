@@ -54,12 +54,19 @@ a successful parse:
   which is exact because ``ceil()`` always lands on a period's last
   microsecond. An exact instant the user actually typed (a plain
   ``datetime``, never a ``timespan``) keeps ``incl_hi=True``.
-* Two extensions to ``English``: relative-calendar keywords (``today``,
+* Three extensions to ``English``: relative-calendar keywords (``today``,
   ``yesterday``, ``this month``, ``previous month``, ``previous week``,
   ``previous quarter``, ``this year``, ``previous year``, ported from
-  paperless's ``_dates.py:_keyword_bounds``) and a compact ``now±<n><unit>``
+  paperless's ``_dates.py:_keyword_bounds``), a compact ``now±<n><unit>``
   form (``NowCompact``, alongside the existing ``PlusMinus``/``plusdate``
-  element that already gives us whoosh's ``-1 week`` syntax "for free").
+  element that already gives us whoosh's ``-1 week`` syntax "for free"),
+  and an RFC3339 ``T``/``Z`` datetime separator (``simple``'s separator
+  character class also accepts ``T``; a trailing ``Z`` is recognized and
+  stripped by :meth:`DateParserPlugin._split_rfc3339_utc`, since the
+  naive-local grammar below has no tzinfo concept to represent "already
+  UTC, no shift" on its own), restoring paperless-ngx's PR #13010
+  backward-compatibility behavior for ``created:[2020-01-01T00:00:00Z TO
+  ...]``-style bounds.
 * Unparseable date text/bounds report a ``Diagnostic(kind=BAD_DATE)`` and
   become an :class:`whoosh_compat.ast.ErrorLeaf`, instead of whoosh's
   ``ErrorNode``/callback mechanism.
@@ -677,7 +684,21 @@ class DateParser:
 
         tup = (simple_year, simple_month, simple_day, simple_hour,
                simple_minute, simple_second, simple_usec)
-        simple_seq = Sequence(tup, sep="[- .:/]*", name="simple", progressive=True)
+        # "T" joins the existing space/dash/dot/colon/slash separator class
+        # (case-insensitive via Sequence's rcompile(..., re.IGNORECASE), so
+        # lowercase "t" is accepted too) so an RFC3339 datetime like
+        # "2026-01-01T00:00:00" parses the same shape as the already-working
+        # space-separated "2026-01-01 00:00:00": paperless-ngx's PR #13010
+        # restored this exact backward-compatibility behavior for the old
+        # Whoosh-backed search (see paperless's own
+        # ``_translate.py::_bound_datetimes``'s ``if "T" in token:`` branch),
+        # which whoosh-compat's DateParserPlugin.date_from below re-derives
+        # correctly instead of shelling out to datetime.fromisoformat: a
+        # trailing "Z" UTC designator is handled separately (see
+        # _split_rfc3339_utc), since this naive grammar has no tzinfo
+        # concept of its own to represent "no shift, already UTC" (see the
+        # module docstring's "Timezone handling is new" paragraph).
+        simple_seq = Sequence(tup, sep="[- .:/T]*", name="simple", progressive=True)
         self.simple = Sequence((simple_seq, r"(?=(\s|$))"), sep="")
 
         self.setup()
@@ -895,7 +916,8 @@ class DateParserPlugin(Plugin):
 
         return self.basedate.astimezone(self.tz).replace(tzinfo=None)
 
-    def _to_utc(self, dt_naive: datetime, date_only: bool, *, ceil: bool = False) -> datetime:
+    def _to_utc(self, dt_naive: datetime, date_only: bool, *, ceil: bool = False,
+                tz: tzinfo | None = None) -> datetime:
         """Converts a naive local datetime produced by the grammar to an
         aware UTC datetime, per the field's storage semantics.
 
@@ -914,13 +936,49 @@ class DateParserPlugin(Plugin):
         an extra day it was never asked to cover. Callers pass ``ceil`` for
         the hi side of an exclusive bound only; the lo side, and any
         both-inclusive exact-instant hi, must keep truncating down.
+
+        ``tz`` overrides ``self.tz`` for this call only: an RFC3339 value
+        with an explicit trailing "Z" UTC designator (see
+        ``_split_rfc3339_utc``) names an absolute instant that must NOT be
+        reinterpreted as a local time and shifted again, so its caller
+        passes ``tz=UTC`` here instead (a no-op ``replace``, since the value
+        is already the naive wall-clock equivalent of a UTC instant).
         """
 
         if date_only:
             if ceil and dt_naive.time() != time():
                 dt_naive = dt_naive + timedelta(days=1)
             return datetime(dt_naive.year, dt_naive.month, dt_naive.day, tzinfo=UTC)
-        return dt_naive.replace(tzinfo=self.tz).astimezone(UTC)
+        return dt_naive.replace(tzinfo=tz or self.tz).astimezone(UTC)
+
+    # RFC3339's trailing UTC designator: a bare "Z" (no numeric UTC offset
+    # forms like "+00:00" -- out of scope for this gap, see paperless
+    # issue/PR #13010, which only ever emits "Z"). Requires a "T" somewhere
+    # earlier in the string so an unrelated trailing "z"/"Z" doesn't get
+    # misread as this designator (mirrors paperless's own
+    # ``_translate.py::_bound_datetimes``'s ``if "T" in token:`` gate).
+    _RFC3339_UTC_RE: ClassVar[re.Pattern[str]] = re.compile(
+        r"^(?P<body>.*T.*)Z$", re.IGNORECASE
+    )
+
+    def _split_rfc3339_utc(self, text: str) -> tuple[str, bool]:
+        """Strip a trailing RFC3339 "Z" UTC designator from ``text``, if
+        present, and report whether one was found.
+
+        The grammar (``English``) works entirely in naive datetimes with no
+        tzinfo concept of its own (see ``times.py``'s module docstring), so
+        "Z" can't be represented by handing it to the grammar directly: it
+        has to be recognized and handled here, at the one layer that knows
+        about timezones at all. The returned ``bool`` tells callers to pass
+        ``tz=UTC`` to ``_to_utc`` for this value instead of ``self.tz``, so
+        the value is taken as the absolute instant it names rather than
+        reinterpreted as local wall-clock time and shifted again.
+        """
+
+        m = self._RFC3339_UTC_RE.match(text)
+        if m:
+            return m.group("body"), True
+        return text, False
 
     def _error(self, node: syntax.SyntaxNode, text: str, field: str) -> DateErrorNode:
         diagnostic = Diagnostic(
@@ -987,9 +1045,11 @@ class DateParserPlugin(Plugin):
         self, node: syntax.SyntaxNode, spec: FieldSpec, text: str
     ) -> syntax.SyntaxNode:
         local_now = self._local_now()
-        result = self.dateparser.date_from(text, local_now)
+        parse_text, force_utc = self._split_rfc3339_utc(text)
+        result = self.dateparser.date_from(parse_text, local_now)
         if result is None:
             return self._error(node, text, spec.name)
+        value_tz = UTC if force_utc else self.tz
 
         if isinstance(result, timespan) and result.start != result.end:
             # By construction (see module docstring), a timespan's start/end
@@ -1014,9 +1074,9 @@ class DateParserPlugin(Plugin):
             lo_naive = hi_naive = cast(datetime, result.start if isinstance(result, timespan) else result)
             incl_lo = incl_hi = True
 
-        lo = self._to_utc(lo_naive, spec.date_only)
+        lo = self._to_utc(lo_naive, spec.date_only, tz=value_tz)
         hi = (
-            self._to_utc(hi_naive, spec.date_only, ceil=not incl_hi)
+            self._to_utc(hi_naive, spec.date_only, ceil=not incl_hi, tz=value_tz)
             if hi_naive is not None
             else None
         )
@@ -1067,16 +1127,28 @@ class DateParserPlugin(Plugin):
         bound_parser = ToEnd(self.dateparser.get_parser())
         raw_start: Any = None
         raw_end: Any = None
+        # Each bound gets its own RFC3339 "Z" check (see text_to_node /
+        # _split_rfc3339_utc): a range can freely mix a "Z"-suffixed bound
+        # with a plain local one, e.g.
+        # ``created:[2020-01-01T00:00:00Z TO 2020-06-01]``.
+        start_tz = self.tz
+        end_tz = self.tz
         if node.start:
+            start_text, start_utc = self._split_rfc3339_utc(node.start)
+            if start_utc:
+                start_tz = UTC
             try:
-                raw_start = bound_parser.date_from(node.start, local_now)
+                raw_start = bound_parser.date_from(start_text, local_now)
             except (ValueError, OverflowError):
                 return self._error(node, node.start, spec.name)
             if raw_start is None:
                 return self._error(node, node.start, spec.name)
         if node.end:
+            end_text, end_utc = self._split_rfc3339_utc(node.end)
+            if end_utc:
+                end_tz = UTC
             try:
-                raw_end = bound_parser.date_from(node.end, local_now)
+                raw_end = bound_parser.date_from(end_text, local_now)
             except (ValueError, OverflowError):
                 return self._error(node, node.end, spec.name)
             if raw_end is None:
@@ -1122,6 +1194,17 @@ class DateParserPlugin(Plugin):
                     return self._error(node, node.start, spec.name)
                 return self._error(node, node.end, spec.name)
             lo_naive, hi_naive = cast(datetime, ts.start), cast(datetime, ts.end)
+            # A mixed-tz range (one RFC3339 "Z" bound, one local): each
+            # bound's tz must follow its VALUE through the joint step's
+            # backwards-swap, or the Z bound gets reinterpreted as local
+            # wall-clock time and silently shifted. The joint step itself
+            # reports whether its swap line fired (bounds_swapped, a
+            # whoosh-compat addition to the forked timespan): joint
+            # disambiguation may also MUTATE a bound before ordering (year
+            # borrowing, equal-years month/day fill), so the swap cannot
+            # be inferred from the resolved values, only from the flag.
+            if ts.bounds_swapped:
+                start_tz, end_tz = end_tz, start_tz
         else:
             if raw_start is not None:
                 sd = (raw_start.disambiguated(local_now)
@@ -1210,13 +1293,21 @@ class DateParserPlugin(Plugin):
         if lo_naive is not None and not start_exact:
             incl_lo = True
 
+        # start_tz/end_tz (UTC iff that bound had an RFC3339 "Z" designator,
+        # self.tz otherwise) follow each bound's VALUE: the joint branch
+        # above swaps them alongside a backwards-range value swap, so by
+        # this point lo's tz belongs to lo's value and hi's to hi's.
         try:
-            lo = self._to_utc(lo_naive, spec.date_only) if lo_naive is not None else None
+            lo = (
+                self._to_utc(lo_naive, spec.date_only, tz=start_tz)
+                if lo_naive is not None
+                else None
+            )
         except (ValueError, OverflowError):
             return self._error(node, blame("lo", node.start) or "", spec.name)
         try:
             hi = (
-                self._to_utc(hi_naive, spec.date_only, ceil=not incl_hi)
+                self._to_utc(hi_naive, spec.date_only, ceil=not incl_hi, tz=end_tz)
                 if hi_naive is not None
                 else None
             )

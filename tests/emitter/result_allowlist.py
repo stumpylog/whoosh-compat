@@ -258,6 +258,22 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
             " numeric range is treated as suspect rather than narrowed further"
         ),
     ),
+    # whoosh-bug (DIVERGENCES.md entry 48): a single-quoted T-separated
+    # datetime value. whoosh parses it to _NullQuery (matches nothing);
+    # whoosh-compat parses the correct DateRange and returns the intended
+    # documents. Ordered before the dashed-token entry-15 pattern, which
+    # would otherwise claim the digits inside the quotes under the wrong
+    # divergence. The quote is REQUIRED: the bare unquoted spelling
+    # colon-tokenizes differently in whoosh (not _NullQuery), so this
+    # reason string would be false for it.
+    (
+        re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):'\d{{4}}-\d\d-\d\d[Tt]"),
+        (
+            "whoosh-bug (DIVERGENCES.md entry 48): a single-quoted T-separated"
+            " datetime value parses to _NullQuery (matches nothing) in"
+            " whoosh but a correct DateRange in whoosh-compat"
+        ),
+    ),
     # whoosh-bug (DIVERGENCES.md entry 45): a double-quoted separated-ISO
     # date value. whoosh parses it to a Phrase that RAISES QueryError at
     # search time (a DATETIME field has no positions), so there is no

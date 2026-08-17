@@ -261,6 +261,13 @@ class timespan:
     start: DateLike
     end: DateLike
 
+    # Set to True on the timespan RETURNED by disambiguated() when its
+    # both-explicit-years branch swapped the (out-of-order) bounds, so a
+    # caller tracking per-bound metadata (e.g. an RFC3339 "Z" timezone
+    # override) can follow each bound's value through the swap. Not part
+    # of upstream whoosh; always False on a directly constructed timespan.
+    bounds_swapped: bool = False
+
     def __init__(self, start: DateLike, end: DateLike) -> None:
         """
         :param start: a ``datetime`` or ``adatetime`` object representing the
@@ -306,6 +313,7 @@ class timespan:
         start, end = copy.copy(self.start), copy.copy(self.end)
         start_year_was_amb = start.year is None
         end_year_was_amb = end.year is None
+        swapped = False
 
         if has_no_date(start) and has_no_date(end):
             # The start and end points are just times, so use the basedate
@@ -370,6 +378,7 @@ class timespan:
                 end.year = start.year + 1  # type: ignore[misc,operator]
             else:
                 start, end = end, start
+                swapped = True
 
         start = floor(start)
         end = ceil(end)
@@ -379,7 +388,9 @@ class timespan:
             # is after the end time, move the end time to the next day
             end += timedelta(days=1)
 
-        return timespan(start, end)
+        result = timespan(start, end)
+        result.bounds_swapped = swapped
+        return result
 
 
 # Functions for working with datetime/adatetime objects

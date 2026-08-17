@@ -501,6 +501,26 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         ),
         DivergenceKind.MISMATCH,
     ),
+    # whoosh-bug (DIVERGENCES.md entry 48): a single-quoted T-separated
+    # datetime value ('2026-08-04T10:30:00', with or without the Z
+    # designator). whoosh's grammar has no T separator and its fallback
+    # chain bottoms out in _NullQuery (matches nothing); whoosh-compat
+    # parses the correct DateRange. Ordered BEFORE the entry-18 bare-ISO
+    # entry, whose regex also matches these strings but whose
+    # numerically-correct field-self-parse mechanism does not describe
+    # the _NullQuery outcome. The quote is REQUIRED: the bare unquoted
+    # spelling colon-tokenizes differently in whoosh (a partial
+    # NumericRange plus leftover terms, not _NullQuery), so this reason
+    # string would be false for it.
+    (
+        re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):'\d{{4}}-\d\d-\d\d[Tt]"),
+        (
+            "whoosh-bug (DIVERGENCES.md entry 48): a single-quoted T-separated"
+            " datetime value parses to _NullQuery (matches nothing) in"
+            " whoosh but a correct DateRange in whoosh-compat"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
     # design (DIVERGENCES.md entry 18): a bare (non-bracketed) separated-ISO
     # date value on a date field ("created:2020-01-01", "created:2020-01")
     # is numerically correct on both sides but structurally different: real
