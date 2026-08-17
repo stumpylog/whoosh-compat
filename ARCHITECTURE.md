@@ -391,6 +391,26 @@ datetimes there (a tz-aware one raises `ValueError`). The fix,
 one call site that needs it; nothing else in the pipeline treats naive and
 aware datetimes as interchangeable.
 
+**Date-range bounds are clamped to tantivy's representable window.**
+tantivy's `DateTime` is an i64 nanosecond count, giving a representable
+window of roughly [1677-09-21T00:12:43Z, 2262-04-11T23:47:16Z]; a range
+bound outside it is converted with *silent* i64 overflow, wrapping modulo
+2^64 nanoseconds (measured on the pinned tantivy-py: a [3771, 3773) year
+range matched a 2019 document, and `created:[2018 TO 9998]` matched
+nothing while whoosh matched everything). `visit_daterange`
+(`emitters/tantivy_.py`) therefore clamps bounds into the window before
+`range_query`: a clamped edge becomes inclusive (every instant it stands
+in for is unrepresentable anyway), and a range lying entirely outside the
+window emits a match-nothing query. This restores whoosh's own correct
+handling of far-past/far-future years, so it carries no DIVERGENCES.md
+entry; it is tracked as a carve-out (see the carve-out-retirement skill)
+because the constants' whole-second inward rounding is only safe while
+tantivy-py truncates datetimes to whole seconds, which a future release
+must re-verify. Index-time dates are the host's responsibility: an
+out-of-window date (or a sub-second instant inside the sliver just above
+the true minimum, which second-truncation pushes below it) is already
+stored wrapped, and no query-side handling can repair that.
+
 **Kind dispatch is a closed matrix.** A query leaf's behavior is a function
 of (leaf node type, field kind, value spelling, JSON subpath or not). The
 costliest defects in this codebase's history were rules implemented for one

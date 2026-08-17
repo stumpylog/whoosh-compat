@@ -20,6 +20,7 @@ dependency.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 from collections.abc import Callable
 from datetime import UTC
@@ -208,6 +209,27 @@ def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str 
             literal.append(c)
     flush()
     return "".join(out)
+
+
+# tantivy's DateTime is an i64 nanosecond count, giving a representable
+# window of roughly [1677-09-21T00:12:43.145Z, 2262-04-11T23:47:16.854Z].
+# A range bound outside it is converted with SILENT i64 overflow, wrapping
+# modulo 2**64 ns: measured on the pinned tantivy-py, a [3771, 3773) year
+# range matched a 2019 document and a [2018, 9999) range matched nothing.
+# Bounds are clamped into the window before range_query (see
+# visit_daterange); the constants are rounded inward to whole seconds,
+# which loses nothing since tantivy-py 0.26 truncates datetimes to whole
+# seconds anyway (see _to_naive_utc's note below). Index-time dates are the
+# host's responsibility: a document indexed with an out-of-window date
+# (or a sub-second instant in the sliver just above the true minimum,
+# which second-truncation pushes below it) is already stored wrapped,
+# which no query-side handling can repair. See ARCHITECTURE.md's
+# date-window paragraph and the carve-out-retirement skill's table row
+# for the re-verification condition on tantivy-py bumps.
+# Naive UTC by the same contract as _to_naive_utc's output, which these
+# are compared against.
+_TANTIVY_DATE_MIN = datetime(1677, 9, 21, 0, 12, 44)  # noqa: DTZ001
+_TANTIVY_DATE_MAX = datetime(2262, 4, 11, 23, 47, 16)  # noqa: DTZ001
 
 
 def _to_naive_utc(value: datetime) -> datetime:
@@ -809,6 +831,25 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             raise QueryEmitError(
                 f"date range bound {bad!r} is not a valid datetime for {spec.name!r}"
             ) from exc
+
+        # Clamp into tantivy's representable window (see _TANTIVY_DATE_MIN
+        # above): a bound past either edge would otherwise wrap modulo
+        # 2**64 nanoseconds and match an arbitrary wrong document set. A
+        # range lying entirely outside the window can match nothing (no
+        # representable instant is inside it); a bound clamped to a window
+        # edge becomes inclusive, since the edge stands in for every
+        # unrepresentable instant beyond it. whoosh handles these same
+        # years correctly, so clamping is what keeps result parity.
+        if (lo is not None and lo > _TANTIVY_DATE_MAX) or (
+            hi is not None and hi < _TANTIVY_DATE_MIN
+        ):
+            return tantivy.Query.empty_query()
+        if lo is not None and lo < _TANTIVY_DATE_MIN:
+            lo = _TANTIVY_DATE_MIN
+            node = dataclasses.replace(node, incl_lo=True)
+        if hi is not None and hi > _TANTIVY_DATE_MAX:
+            hi = _TANTIVY_DATE_MAX
+            node = dataclasses.replace(node, incl_hi=True)
         return self._range_query(resolved, tantivy.FieldType.Date, lo, hi, node)
 
     # -- boolean combinators --------------------------------------------

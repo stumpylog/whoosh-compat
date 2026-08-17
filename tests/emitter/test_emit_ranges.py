@@ -63,6 +63,53 @@ def test_date_range(
     assert search_ids(tindex[0], q) == expected
 
 
+@pytest.mark.parametrize(
+    ("lo", "hi", "expected"),
+    [
+        # tantivy(-py) converts range bounds to i64 NANOSECONDS with
+        # silent overflow, so a bound outside roughly [1677-09-21,
+        # 2262-04-11] wraps modulo 2**64 ns and the emitted range matches
+        # an arbitrary wrong set (measured: without clamping, a
+        # [3771, 3773) range MATCHED a 2019 document, and [2018, 9999)
+        # matched NOTHING). The emitter clamps bounds into tantivy's
+        # representable window; whoosh handles these same years correctly,
+        # so post-clamp both pipelines agree.
+        pytest.param(utc(2018, 1, 1), utc(9999, 1, 1), [1, 2, 3, 4, 5], id="far-future-hi-clamps"),
+        pytest.param(utc(1000, 1, 1), utc(2020, 1, 1), [2, 3, 5], id="pre-window-lo-clamps"),
+        pytest.param(utc(1000, 1, 1), utc(9999, 1, 1), [1, 2, 3, 4, 5], id="both-bounds-clamp"),
+        pytest.param(utc(3771, 1, 1), utc(3773, 1, 1), [], id="fully-past-window-matches-nothing"),
+        pytest.param(
+            utc(1000, 1, 1), utc(1500, 1, 1), [], id="fully-before-window-matches-nothing"
+        ),
+        pytest.param(utc(3000, 1, 1), None, [], id="open-hi-lo-past-window-matches-nothing"),
+        pytest.param(None, utc(1500, 1, 1), [], id="open-lo-hi-before-window-matches-nothing"),
+        pytest.param(utc(2018, 1, 1), utc(2263, 1, 1), [1, 2, 3, 4, 5], id="hi-just-past-window"),
+    ],
+)
+@pytest.mark.parametrize(
+    "field",
+    [
+        pytest.param("created", id="date-only"),
+        pytest.param("added", id="datetime"),
+    ],
+)
+def test_date_range_bounds_outside_tantivy_window(
+    tindex: TIndex,
+    ereg: FieldRegistry,
+    field: str,
+    lo: datetime | None,
+    hi: datetime | None,
+    expected: list[int],
+) -> None:
+    # Parametrized over both date kinds: DATE(date_only) and DATETIME
+    # share the single visit_daterange path, and the expected sets hold
+    # for both since every fixture doc's created and added fall on the
+    # same dates.
+    node = ast.DateRange(field=FieldRef(field), lo=lo, hi=hi, incl_lo=True, incl_hi=False)
+    q = emit_ast(node, tindex, ereg)
+    assert search_ids(tindex[0], q) == expected
+
+
 def test_date_range_parsed(
     tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
 ) -> None:

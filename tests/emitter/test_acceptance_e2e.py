@@ -231,6 +231,18 @@ SCENARIOS_EQUAL = [
     pytest.param("-foo shopname", [], id="attached-dash-foo-plus-shopname"),
     pytest.param("asn:[100 TO 102]", [1, 2, 3], id="numeric-range"),
     pytest.param(
+        "created:[2018 TO 9998]",
+        [1, 2, 3, 4, 5],
+        id="far-future-hi-date-range",
+        # 9998, not 9999: year 9999's exclusive ceiling overflows
+        # datetime.max at parse time and diagnoses on both sides (a
+        # pre-existing, pinned behavior), so 9998 is the largest year
+        # that reaches the emitter. Before the emitter's tantivy
+        # date-window clamp, the far-future bound wrapped modulo 2**64
+        # nanoseconds inside tantivy and the range silently matched
+        # NOTHING while whoosh matched every doc.
+    ),
+    pytest.param(
         "title:billing-2020^2",
         [1],
         id="boosted-analyzer-split-value",

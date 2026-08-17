@@ -584,6 +584,11 @@ _MAX_EXAMPLES = int(os.environ.get("WHOOSH_COMPAT_ACCEPTANCE_SOAK_EXAMPLES", _DE
 _SEED_QUERIES = (
     "created:[2020-06-15 TO 2020-06-15]",
     "created:[2020-12-31 TO 2021-01-01]",
+    # A far-future bare year: found by a deep fuzz soak matching a wrong
+    # document through tantivy's i64-nanosecond date wrap before the
+    # emitter's window clamp existed; seeded so the fix is exercised
+    # deterministically, not only by random draw.
+    "created:3772",
     "attrs.user:alice",
     "release_date:'2020-06-10 00:00'",
     "tag:billing",
