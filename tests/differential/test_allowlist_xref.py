@@ -126,7 +126,7 @@ def test_every_divergences_entry_claiming_an_allowlist_entry_has_one() -> None:
 # A corpus filename immediately followed by "'s" (optionally split across a
 # line break) and one or more backtick-quoted literals, ending at the word
 # "line"/"lines". Requires the first backtick to follow directly (only
-# whitespace in between), so prose like "corpus_docs.txt's issue #16
+# whitespace in between), so prose like "corpus_docs.txt's quoted-star
 # section" (no literal immediately named) does not spuriously match.
 _CORPUS_CLAIM_RE = re.compile(
     r"`tests/differential/(corpus_\w+\.txt)`'s\s+"

@@ -26,13 +26,13 @@ has_tag:false
 has_tag:''
 -foo
 
-# --- issue #10: empty groups are dropped at parse time rather than
+# --- empty-group drop: empty groups are dropped at parse time rather than
 # annihilating the enclosing query.
 shopname ()
 NOT ()
 shopname (() ())
 
-# --- issue #16: a quoted star on a numeric or boolean field is an
+# --- quoted-star existence: a quoted star on a numeric or boolean field is an
 # existence match, matching the unquoted field:* form. has_tag:"*"
 # (double-quoted, a Phrase) is deliberately not included here: real
 # whoosh itself raises (not a NullQuery, a bare Exception) trying to
@@ -46,7 +46,7 @@ type_id:'*'
 type_id:"*"
 has_tag:'*'
 
-# --- issue #17: a wildcard/prefix pattern on a numeric field, or a
+# --- unsupported-pattern diagnostics: a wildcard/prefix pattern on a numeric field, or a
 # BOOLEAN_EXISTS field (reopened), is diagnosed at parse time
 # (DIVERGENCES.md entry 29); these skip via the existing entry 6
 # diagnostics-present check like any other parse-time diagnostic.
@@ -107,7 +107,7 @@ tag:alpha,beta^2
 # Every(field) in whoosh-compat vs a literal Wildcard('*') in whoosh.
 title:*
 
-# --- issue #13568: v2->v3 migration broke saved views using bracket-class
+# --- paperless-ngx#13568: v2->v3 migration broke saved views using bracket-class
 # wildcards like "title:*202[0-3]". Both queries below are verbatim from the
 # report (the second is the 2025 variant of the first).
 tag:steuer AND tag:valentin AND (title:*2024 OR (NOT title:*202[0-3] AND NOT title:*201[0-9] AND created:2024))

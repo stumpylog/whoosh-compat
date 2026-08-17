@@ -43,15 +43,16 @@ each entry's :class:`DivergenceKind` selects between:
   every entry below.
 * :attr:`DivergenceKind.ORACLE_ERROR`: real whoosh itself raises while
   parsing this shape, so there is no oracle query object to compare at all.
-  The test asserts the oracle still raises. No current corpus line actually
-  matches an entry of this kind (every oracle-crashing shape found so far,
-  e.g. the "NOT NOT alpha" consecutive-bare-NOTs crash documented in
-  DIVERGENCES.md entry 35 and the double-quoted-``"*"``-on-BOOLEAN crash in
-  entry 28, has no differential corpus line exercising it: see those
-  entries' own "no allowlist/corpus triple" notes), but the kind exists so a
-  future entry of this shape has somewhere to declare it instead of forcing
-  a MISMATCH-shaped assertion onto a query that never produces a comparable
-  tree.
+  The test asserts the oracle still raises. One corpus line exercises an
+  entry of this kind today: ``has_tag:"true"`` in
+  ``tests/differential/corpus_docs.txt`` (the double-quoted-value-on-BOOLEAN
+  crash, DIVERGENCES.md entry 38), so ``test_matches_oracle``'s
+  ORACLE_ERROR branch is live code, not a provision for the future. Other
+  oracle-crashing shapes (e.g. the "NOT NOT alpha" consecutive-bare-NOTs
+  crash documented in DIVERGENCES.md entry 35 and the
+  double-quoted-``"*"``-on-BOOLEAN crash in entry 28) deliberately have no
+  differential corpus line: see those entries' own "no allowlist/corpus
+  triple" notes.
 
 A third outcome, a whoosh-compat parse *diagnostic* (DIVERGENCES.md entry
 6: ``Term``/``Phrase`` values whoosh-compat can't parse, e.g. an invalid
@@ -133,9 +134,40 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # emit-time text is) applies identically to every field/pattern, not
     # just that one string. The field prefix is optional (`(?:\w+:)?`) so
     # this also covers an unfielded, multifield-expanded pattern like the
-    # original bare "Wär*" corpus line, which has no ":" at all.
+    # original bare "Wär*" corpus line, which has no ":" at all. The token
+    # scan excludes quote characters and requires a clean token boundary,
+    # so quoted-phrase content ('title:"Foo Bar?"', where the "?" is
+    # analyzed away identically on both sides and the trees compare EQUAL)
+    # no longer matches this entry: an overmatch there is never a real
+    # entry-2 divergence, only lost fuzz coverage plus a spurious
+    # strict-xfail if such a line ever landed in the corpus. Residual
+    # approximation: a standalone pattern token in the MIDDLE of a
+    # multi-word quoted phrase ('title:"Foo A* Bar"') still matches;
+    # tightening that away needs quote-context tracking a regex cannot do.
+    # design (DIVERGENCES.md entry 43, entry 2's range sibling): whoosh
+    # case-folds bracket-range bounds into the AST (RangePlugin runs the
+    # analyzer chain with tokenize=False over each bound); whoosh-compat's
+    # TermRange keeps the case the user typed. Ordered BEFORE the entry-2
+    # pattern entry so a range spelling like "title:[A* TO B]" matches this
+    # reason instead of being absorbed under the Wildcard/Prefix paperwork
+    # (the strict-xfail still fires either way; the point is citing the
+    # divergence the query actually exhibits).
     (
-        re.compile(r"\b(?:\w+:)?(?=[^\s()]*[A-Z])(?=[^\s()]*[*?])[^\s()]+"),
+        # The uppercase must belong to a bound, not the range's own "TO"
+        # separator: an uppercase letter neither preceded by another
+        # uppercase (the O of a standalone "TO") nor starting a standalone
+        # "TO" token (its T).
+        re.compile(r"\w+:[\[{][^\]}]*(?<![A-Z])(?!TO\b)[A-Z][^\]}]*[\]}]"),
+        (
+            "DIVERGENCES.md entry 43: whoosh case-folds TermRange bounds into"
+            " the AST (analyzer chain with tokenize=False per bound);"
+            " whoosh-compat keeps the raw case, and a text TermRange is"
+            " unsupported at emit anyway (entry 5), so this is AST-level only"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
+    (
+        re.compile(r"\b(?:\w+:)?(?=[^\s()\"']*[A-Z])(?=[^\s()\"']*[*?])[^\s()\"']+(?=[\s()]|$)"),
         (
             "DIVERGENCES.md entry 2: wildcard/prefix pattern case is folded into"
             " the AST by whoosh (LowercaseFilter runs even with tokenize=False)"
@@ -487,14 +519,14 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         DivergenceKind.MISMATCH,
     ),
     # design (DIVERGENCES.md entry 27, found by the property-based fuzzer
-    # while fixing issue #10): ANDNOT/ANDMAYBE/REQUIRE whose positive/
+    # during the empty-group-drop work): ANDNOT/ANDMAYBE/REQUIRE whose positive/
     # required/scored side analyzes to zero tokens, nested inside further
     # grouping alongside a sibling clause, poisons the whole enclosing And
     # on whoosh-compat's side but real whoosh drops it. Both sides agree
     # the degenerate AndNot/AndMaybe/Require itself resolves to "match
     # nothing"; the divergence is only in whether that Nothing propagates
     # through an *enclosing* And (whoosh-compat's ast.normalize() "Nothing
-    # propagates through And" rule, deliberately kept as-is per issue #10)
+    # propagates through And" rule, deliberately kept as-is)
     # or gets dropped from it (real whoosh's And.normalize(), which drops a
     # NullQuery child instead of poisoning). No corpus line uses ANDNOT/
     # ANDMAYBE/REQUIRE at all (grep-verified), so this only affects the
@@ -526,8 +558,8 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # uniformly to has_type/has_path/has_custom_fields/has_owner too (the
     # acceptance-layer result property's grammar-aware generator, which
     # also draws from the same BOOL_EXISTS_FIELDS pool, later found the
-    # same mismatch reachable on "has_path" specifically, not yet listed
-    # here despite the comment above already claiming full coverage): the
+    # same mismatch reachable on "has_path" specifically, now listed in
+    # the alternation below like its siblings): the
     # root cause (term_query's strip-before-check vs BOOLEAN._obj_to_bool's
     # unstripped-then-bool(qstring) fallback) is the same code path for
     # every BOOLEAN_EXISTS field, not something specific to has_tag.
@@ -692,7 +724,7 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
             r"|created|modified|added|path_id|path|has_path|notes|num_notes"
             r"|custom_fields_id|custom_fields|custom_field_count"
             r"|has_custom_fields|owner_id|owner|has_owner|viewer_id|checksum"
-            r"|page_count|original_filename|release_date)\b)"
+            r"|page_count|original_filename|release_date|is_shared)\b)"
             r"\w{2,}:[^\s():]{2,}"
         ),
         (
@@ -741,6 +773,26 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
             " whoosh-compat, but against whoosh's fixed AND default in real"
             " whoosh; a singleton paren wrapper does not shield the term,"
             " since analyze() normalizes before resolving context"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
+    # out-of-scope (DIVERGENCES.md entry 42): the v2 whoosh schema's
+    # is_shared BOOLEAN column is deliberately not a registered field
+    # (paperless's tantivy backend does permission filtering outside
+    # whoosh-compat, and its public search surface does not expose
+    # is_shared), so the oracle parses is_shared:<value> as a typed
+    # boolean Term while whoosh-compat demotes it as an unknown field.
+    # This is a known-to-oracle-only shape, distinct from entry 15's
+    # both-sides-unknown multitoken class, whose regex above excludes
+    # is_shared for exactly that reason.
+    (
+        re.compile(r"\bis_shared\s*:"),
+        (
+            "DIVERGENCES.md entry 42: is_shared is deliberately not a"
+            " registered field (v2's BOOLEAN permission-bookkeeping column;"
+            " paperless's tantivy backend filters permissions outside"
+            " whoosh-compat), so the oracle parses a typed boolean Term"
+            " while whoosh-compat demotes the unknown field to text"
         ),
         DivergenceKind.MISMATCH,
     ),

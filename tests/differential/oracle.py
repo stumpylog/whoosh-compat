@@ -146,6 +146,18 @@ def _make_oracle_registry() -> FieldRegistry:
     calls them (``DATETIME(sortable=True)`` for all three): whoosh's own
     ``LocalDateParser`` converts *all* of them uniformly through the local
     timezone, so matching that requires the same field kind on our side.
+
+    ``is_shared`` (a ``BOOLEAN`` column in :func:`oracle_schema`) is
+    deliberately NOT registered: a vestigial v2 field whose only reader
+    (the "shared by me" filter's server-built criterion,
+    paperless-ngx#4859) moved to the ORM in paperless-ngx#7507, leaving
+    it written but read by nothing; paperless's tantivy backend filters
+    permissions entirely outside whoosh-compat, its new search schema
+    dropped the field, and no ``FieldKind`` expresses a plain stored
+    boolean. A query addressing it
+    is an unknown field on this side and a typed boolean term on the
+    oracle side: DIVERGENCES.md entry 42, with its own allowlist entry
+    and corpus line.
     """
 
     return FieldRegistry(
@@ -429,7 +441,7 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
         # from an enclosing compound rather than annihilating it (verified
         # directly: And([Term, And([])]).normalize() == Term), matching
         # whoosh-compat's own parser, which now drops an empty group before
-        # it ever becomes a live AST node (issue #10). Building
+        # it ever becomes a live AST node. Building
         # ast.And(children=()) here instead would resurrect the same
         # annihilation this fix is about, purely as a harness artifact.
         if not and_subs:

@@ -30,6 +30,10 @@ content:foo OR title:multi-word
 # analyzer splits on the comma with no minimum token length, so both
 # 1-char halves survive and resolve against the enclosing OR.
 NOT ((0) OR (tag:'0,00'))
+# DIVERGENCES.md entry 43: whoosh case-folds bracket-range bounds into
+# the AST; whoosh-compat's TermRange keeps the typed case (AST-level
+# only: a text TermRange is unsupported at emit, entry 5).
+title:[A* TO B]
 bank statement
 bank   statement
 bank statement today
@@ -63,6 +67,12 @@ type:invoice
 # taggers demote it to text identically: unlike the dotted-name case
 # below, there's no dot for whoosh-compat's tagger to treat specially).
 foobar:today
+
+# DIVERGENCES.md entry 42: is_shared exists in the v2 whoosh schema (a
+# BOOLEAN permission-bookkeeping column) but is deliberately not a
+# registered field here, so the oracle parses a typed boolean Term while
+# whoosh-compat demotes the unknown field to a multifield text search.
+is_shared:true
 
 # --- compared: NUMERIC (U64) fields must NOT be caught by date-field
 # rewriting (only created/modified/added are date fields): both scalar

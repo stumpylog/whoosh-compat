@@ -507,7 +507,7 @@ parse-then-emit pipeline).
     A bare JSON field name (no subpath) is addressed via the same
     `field:*` -> `Every(field)` path when the query is exactly the
     existence check, even though the same bare name demotes to a text
-    search for any other term/pattern (issue #11): the parser's
+    search for any other term/pattern: the parser's
     `FieldsPlugin.do_fieldnames` carves the "*"-alone shape out of that
     demotion before it applies, using the same `text == "*"` detection
     `QueryParser.wildcard_query` already uses for the general case here.
@@ -876,7 +876,8 @@ parse-then-emit pipeline).
 
 27. **A degenerate `ANDNOT`/`ANDMAYBE`/`REQUIRE` operand poisons an
     enclosing `And` on whoosh-compat's side but is dropped on whoosh's
-    (design, found by the property-based fuzzer while fixing issue #10).**
+    (design, found by the property-based fuzzer during the empty-group-drop
+    work).**
     Issue #10 restored the rule that an empty group (`()`) drops out of the
     tree at parse time instead of becoming a live `Nothing()`. Once a
     literal empty group can appear as an `ANDNOT`/`ANDMAYBE`/`REQUIRE`
@@ -921,7 +922,7 @@ parse-then-emit pipeline).
     parser level directly.
 
 28. **A double-quoted `"*"` on a BOOLEAN_EXISTS field is not reproduced as a
-    whoosh crash (whoosh-bug, issue #16).** Real whoosh's `PhrasePlugin`
+    whoosh crash (whoosh-bug).** Real whoosh's `PhrasePlugin`
     calls `field.process_text()` on every quoted value regardless of field
     type, and `whoosh.fields.BOOLEAN` has no analyzer at all
     (`BOOLEAN.tokenize` raises `Exception("... field has no analyzer")` for
@@ -931,13 +932,14 @@ parse-then-emit pipeline).
     type, not intended semantics, so it is not reproduced: whoosh-compat's
     `visit_phrase` treats a double-quoted `"*"` on a `BOOLEAN_EXISTS` field
     the same as the single-quoted and unquoted forms, an existence match
-    (see entry 27's neighbor, issue #16's `_exists_query`/`Every` redirect
+    (see entry 27's neighbor, the quoted-star existence special case's
+    `_exists_query`/`Every` redirect
     through `exists_target`). The single-quoted form (`has_tag:'*'`) does
     not crash real whoosh (`BOOLEAN.parse_query` special-cases `"*"`
     directly, matching whoosh-compat's own `term_query` fix) and is
     corpus-compared normally.
 
-    Test references: `tests/differential/corpus_docs.txt`'s issue #16
+    Test references: `tests/differential/corpus_docs.txt`'s quoted-star
     section (only the single-quoted and numeric forms are corpus lines, for
     exactly this reason); `tests/emitter/test_emit_phrase.py`'s
     `test_quoted_star_phrase_matches_unquoted_star` and
@@ -947,7 +949,8 @@ parse-then-emit pipeline).
 
 29. **A wildcard/prefix pattern on a numeric field or a BOOLEAN_EXISTS field
     is diagnosed at parse time, not silently mangled (whoosh-bug, not
-    reproduced; issue #17, reopened for the BOOLEAN_EXISTS case).**
+    reproduced; the unsupported-pattern diagnostic, extended to the
+    BOOLEAN_EXISTS case).**
     Real whoosh's `WildcardPlugin`, for a NUMERIC field, silently drops the
     wildcard character(s) and searches whatever's left as a literal exact
     value: confirmed directly against the oracle, `type_id:1*` parses to
@@ -979,7 +982,8 @@ parse-then-emit pipeline).
     that bypasses the parser.
 
     A bare `field:*` (the "*"-alone existence-match special case, entry 20
-    and issue #16) is unaffected: this entry is specifically about a
+    and the quoted-star existence special case) is unaffected: this entry
+    is specifically about a
     genuine wildcard *pattern* (`?`, multiple/leading `*`, or a bracket
     class), checked only after the "*"-alone case has already been
     handled.
@@ -995,13 +999,13 @@ parse-then-emit pipeline).
     non-fast `exists_target`, both `Prefix` and `Wildcard`);
     `tests/emitter/test_kind_matrix.py`'s `boolean-exists-fast`/
     `boolean-exists-nonfast` `prefix-star`/`wildcard`/`bracket-class` cells;
-    `tests/differential/corpus_docs.txt`'s issue #17 section (skips via the
+    `tests/differential/corpus_docs.txt`'s unsupported-pattern section (skips via the
     existing entry 6 diagnostics-present check, same as any other
     parse-time diagnostic).
 
 30. **A wildcard/prefix pattern on a JSON subpath is diagnosed at parse
     time rather than silently querying the whole field's encoded bytes
-    (tantivy-py gap, not a whoosh divergence; issue #30).** Unlike entry
+    (tantivy-py gap, not a whoosh divergence).** Unlike entry
     29's U64 case, this is not a whoosh defect being declined: whoosh has
     no JSON field concept at all, so there is no whoosh behavior to
     compare against. tantivy stores JSON terms as path-prefixed encoded
@@ -1035,7 +1039,7 @@ parse-then-emit pipeline).
     `_wildcard_kind_diagnostic` at parse time (handled by the earlier
     `text == "*"` branch in `wildcard_query`) and is emitted via
     `visit_every`/`_exists_query`, not `visit_prefix`/`visit_wildcard`, so
-    it keeps routing to the subpath-aware existence check from issue #29.
+    it keeps routing to the subpath-aware existence check.
 
     If a future tantivy-py version gains a way to scope a pattern query to
     a JSON subpath, this can be revisited as a self-retiring carve-out with
@@ -1170,12 +1174,14 @@ parse-then-emit pipeline).
     This divergence applies uniformly to every registered `BOOLEAN_EXISTS`
     field, not just `has_tag`: the allowlist entry's field alternation was
     originally scoped to `has_tag` only (the sole field the hand-curated
-    corpus lines exercised), and was broadened to
-    `has_correspondent`/`has_tag`/`has_type`/`has_custom_fields`/`has_owner`
+    corpus lines exercised), and was broadened to all six registered
+    `BOOLEAN_EXISTS` fields (`has_correspondent`/`has_tag`/`has_type`/
+    `has_path`/`has_custom_fields`/`has_owner`)
     after the expanded generator's `_bool_exists_quoted_atom` (unlike the
     old corpus lines, drawing from every registered BOOLEAN_EXISTS field)
     found the identical mismatch on `has_correspondent` and confirmed
-    directly it reproduces on the other three as well: the root cause
+    directly it reproduces on the others as well (`has_path` was confirmed
+    last, by the acceptance-layer result property's generator): the root cause
     (`term_query`'s strip-before-check vs `BOOLEAN._obj_to_bool`'s
     unstripped-then-`bool(qstring)` fallback) is the same code path
     regardless of which field it runs on.
@@ -1354,8 +1360,8 @@ parse-then-emit pipeline).
     and pattern-shaped double-quoted values) all raise
     `Exception: <class 'whoosh.fields.BOOLEAN'> field has no analyzer` while
     parsing, for every registered `BOOLEAN_EXISTS` field
-    (`has_correspondent`/`has_tag`/`has_type`/`has_custom_fields`/`has_owner`),
-    not just one. This is a genuine whoosh limitation (a `BOOLEAN` field
+    (`has_correspondent`/`has_tag`/`has_type`/`has_path`/
+    `has_custom_fields`/`has_owner`), not just one. This is a genuine whoosh limitation (a `BOOLEAN` field
     simply cannot support a phrase query at all, in any form), not intended
     semantics that a query language would deliberately reject a specific
     value shape for, so whoosh-compat does not reproduce it: a double-quoted
@@ -1365,8 +1371,8 @@ parse-then-emit pipeline).
     see `tests/emitter/test_emit_phrase.py::test_phrase_on_boolean_exists_field`.
 
     Test references: `tests/differential/allowlist.py`'s
-    `has_correspondent|has_tag|has_type|has_custom_fields|has_owner` entry
-    (`DivergenceKind.ORACLE_ERROR`); `tests/differential/strategies.py`'s
+    double-quoted BOOLEAN_EXISTS entry (all six registered fields,
+    `has_path` included, `DivergenceKind.ORACLE_ERROR`); `tests/differential/strategies.py`'s
     `_bool_exists_double_quoted_atom`; `tests/emitter/test_emit_phrase.py::test_phrase_on_boolean_exists_field`
     (result-level: this shape already worked correctly on whoosh-compat's
     side before this entry existed, it was simply never compared against the
@@ -1531,3 +1537,63 @@ parse-then-emit pipeline).
     `test_numeric_range_exclusive_bound_is_a_whoosh_bug` (each still
     verifies both a broken and an agreeing bound directly, independent of
     the broad allowlist scope).
+
+42. **`is_shared` is not a registered field; real v2 whoosh's schema had a
+    `BOOLEAN` `is_shared` column (out-of-scope).** The v2 schema this
+    project's oracle clones (`tests/differential/oracle.py`'s
+    `oracle_schema()`) includes `is_shared=BOOLEAN()`, written at index
+    time (derived from the document's viewer list,
+    `is_shared=len(viewer_ids) > 0`). Its history in paperless-ngx: added
+    by the "shared by me" filter feature (paperless-ngx#4859), whose
+    server-built filter criterion (`query.Term("is_shared", True)`, never
+    user-typed query text) was the field's only reader; that reader moved
+    to the ORM in paperless-ngx#7507, leaving the column written but
+    read by nothing for the rest of the whoosh era. After that, only a
+    hand-typed `is_shared:true` query could ever address it, an accident
+    of whoosh parsing any schema field rather than a supported feature. paperless-ngx's tantivy
+    backend does permission filtering entirely outside whoosh-compat
+    (`build_permission_filter()` constructs raw `tantivy.Query` objects),
+    and its public search-field surface (`src/documents/search/_fields.py`)
+    deliberately does not expose `is_shared`, so whoosh-compat's paperless
+    registry (`_make_oracle_registry()`, mirroring that surface) omits it
+    on purpose. There is also no `FieldKind` that could express it: the
+    registry has `BOOLEAN_EXISTS` (an existence check against a target
+    field) but no plain stored-boolean kind, and adding one for a field no
+    consumer exposes would be speculative. Consequence: real v2 whoosh
+    parses `is_shared:true` as a typed `Term(is_shared, True)`; whoosh-compat
+    treats `is_shared` as an unknown field and demotes the text to a
+    multifield default-field search, the same treatment any unknown field
+    gets. A host that wants the v2 behavior back would add a
+    `BOOLEAN_EXISTS`-style or future boolean kind field to its registry;
+    nothing in the parser special-cases the name.
+
+    Test references: `tests/differential/allowlist.py`'s `is_shared`
+    entry; corpus line `is_shared:true` in
+    `tests/differential/corpus_paperless.txt`. The unknown-field
+    allowlist entry for DIVERGENCES.md entry 15 explicitly excludes
+    `is_shared` from its unknown-field alternative so this distinct
+    divergence (known-to-oracle vs unknown-to-compat) is not silently
+    absorbed under entry 15's both-sides-unknown multitoken class.
+
+43. **`TermRange` bounds keep the case the user typed; real whoosh
+    case-folds them into the AST (design, entry 2's range sibling).** The
+    same mechanism as entry 2, reached through a different node type:
+    whoosh's `RangePlugin` runs the field's analyzer chain over each
+    bracket-range bound with `tokenize=False` (`LowercaseFilter` still
+    applies), so `title:[A* TO B]` parses to `TermRange(lo='a*', hi='b')`
+    on the oracle side, while whoosh-compat's `TermRange` carries the raw
+    `lo='A*', hi='B'` (no parse-time folding anywhere in whoosh-compat,
+    the same principle entry 2 documents for `Wildcard`/`Prefix`
+    patterns). Unlike entry 2 there is no emit-time counterpart to do the
+    folding later: a text-field `TermRange` is unsupported at emit
+    entirely (`visit_termrange` raises `UnsupportedQueryError`, entry 5),
+    so the divergence is AST-level only and can never reach a search
+    result. Previously this shape was silently absorbed by entry 2's
+    allowlist regex (any token with an uppercase letter and a `*`/`?`),
+    i.e. asserted-as-expected under paperwork describing a different node
+    type; it now has its own entry, ordered before entry 2's so the range
+    spelling matches the right reason first.
+
+    Test references: `tests/differential/allowlist.py`'s bracketed-range
+    entry (ordered before the entry-2 pattern entry); corpus line
+    `title:[A* TO B]` in `tests/differential/corpus_paperless.txt`.

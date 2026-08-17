@@ -33,7 +33,7 @@ new FieldKind member without classifying its cells fails the suite": it
 walks the live ``FieldKind`` enum, not a hand-copied list, so a new member
 shows up there as an assertion failure until someone adds rows for it.
 
-Columns are the leaf productions named in issue #46: bare term, single- and
+Columns are the leaf productions reachable from query text: bare term, single- and
 double-quoted, prefix star, ``?`` wildcard, bracket-class wildcard, bare
 ``field:*``, a bracketed range, a comma list, and a ``^N`` boost. Not every
 column is a meaningful, distinct production for every row (a comma list is
@@ -239,9 +239,10 @@ ROW_COLUMNS: dict[str, frozenset[str]] = {
     # DATE/DATETIME configuration at all (FieldRegistry rejects it), so
     # "comma-list" here just exercises what a literal, unsupported comma in
     # a date value does (still classified, just not distinct "comma list"
-    # semantics).
+    # semantics): both rows classify it, so a future change routing
+    # DATETIME comma values differently from DATE ones fails the matrix.
     "date": ALL_COLUMNS,
-    "datetime": ALL_COLUMNS - {"comma-list"},
+    "datetime": ALL_COLUMNS,
     # BOOLEAN_EXISTS: no numeric/date bound to range over, and comma_values
     # is not a valid BOOLEAN_EXISTS configuration.
     "boolean-exists-fast": ALL_COLUMNS - {"comma-list"},
@@ -380,6 +381,7 @@ CELLS: list[ParameterSet] = [
         "added:[2020-03-15T10:00:00Z TO 2020-03-15T10:00:00Z]",
         Diag(),
     ),
+    _param("datetime", "comma-list", "added:2020-03-15,2020-03-15", Diag()),
     _param("datetime", "boosted", "added:2020-03-15^2.0", Search([1])),
     # -- BOOLEAN_EXISTS, fast target (has_tag -> tag_id) ---------------------
     _param("boolean-exists-fast", "bare", "has_tag:true", Search([1, 2, 4])),
@@ -464,7 +466,7 @@ def test_kind_matrix_cell(qs: str, outcome: object, ereg: FieldRegistry, tindex:
 
 def test_every_fieldkind_has_a_row() -> None:
     """A new FieldKind member with no rows here fails this assertion
-    instead of silently having zero matrix coverage (issue #46's "adding a
+    instead of silently having zero matrix coverage (the matrix design's "adding a
     new FieldKind member without classifying its cells fails the suite"
     acceptance criterion).
     """
@@ -505,7 +507,7 @@ def test_every_row_classifies_its_applicable_columns() -> None:
 
 
 def test_json_subpath_phrase_slop_and_multitoken(tindex: TIndex) -> None:
-    """issue #34: a quoted phrase on a JSON subpath must map whoosh slop the
+    """A quoted phrase on a JSON subpath must map whoosh slop the
     same way a plain-field phrase does, and must never consult
     Multitoken.FIRST (or any other multitoken mode): a Phrase node's text is
     a phrase, not a multitoken term value.
@@ -559,7 +561,7 @@ def test_json_subpath_phrase_slop_and_multitoken(tindex: TIndex) -> None:
 
 
 def test_json_subpath_phrase_ignores_multitoken_first(tindex: TIndex) -> None:
-    """issue #34's second symptom: Multitoken.FIRST must not apply to a
+    """Second symptom of the same defect: Multitoken.FIRST must not apply to a
     quoted Phrase node (only to a multi-token Term value); a phrase's words
     are the phrase, not independent tokens to pick "the first" of.
     """
@@ -607,7 +609,7 @@ def test_json_subpath_phrase_ignores_multitoken_first(tindex: TIndex) -> None:
 
 
 def test_u64_phrase_drop_check_does_not_apply_text_policy() -> None:
-    """issue #35: the group-membership zero-token drop check
+    """The group-membership zero-token drop check
     (_node_drops/_drop_check_tokens) restricts itself to TEXT/KEYWORD for a
     Term, and now (post-fix) also restricts itself for a Phrase, matching
     how visit_phrase dispatches on kind. Configuring an analyzer on a U64
@@ -665,7 +667,7 @@ def test_u64_phrase_drop_check_does_not_apply_text_policy() -> None:
 
 
 def test_boolean_exists_phrase_in_group_is_not_dropped() -> None:
-    """issue #35's control: a BOOLEAN_EXISTS phrase must never be treated as
+    """Control for the zero-token drop check: a BOOLEAN_EXISTS phrase must never be treated as
     droppable by analysis either (it was never subject to tokenization to
     begin with), pinning the other non-TEXT/KEYWORD kind through the same
     group-membership path.
@@ -722,12 +724,12 @@ def test_boolean_exists_phrase_in_group_is_not_dropped() -> None:
 def test_json_bare_field_bare_star_existence(
     qs: str, outcome: object, ereg: FieldRegistry, tindex: TIndex
 ) -> None:
-    """issue #11, reopened: demoting a bare JSON field name addressed with a
+    """Bare-JSON demotion: demoting a bare JSON field name addressed with a
     real term (attrs:foo) must not also demote the bare-star existence
     special case (attrs:*), which the emitter still fully supports and
     which worked end to end before the original demotion fix. "notes" (the
     non-fast JSON field) still raises the documented UnsupportedQueryError
-    for the same shape (issue #29's message), and "attrs.user:*" (an actual
+    for the same shape (the subpath-unsupported message), and "attrs.user:*" (an actual
     subpath existence check) is unaffected, pinning the boundary this fix's
     dispatch logic sits next to.
     """
