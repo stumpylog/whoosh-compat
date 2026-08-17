@@ -276,6 +276,13 @@ def test_result_entry23_regex_covers_every_whoosh_stopword(word: str) -> None:
         pytest.param("NOT (() title:the)", 23, id="e23-empty-group-noise"),
         pytest.param("0 NOT (NOT (() title:the))", 23, id="e23-nested-not-noise"),
         pytest.param("NOT (a) title:the", None, id="e23-real-term-blocks"),
+        # The co-occurrence family entry: NOT + empty group + zero-token
+        # word in arbitrary scaffolding; the agreeing single-level
+        # corpus line "NOT ()" must stay unclaimed (the NOT keyword
+        # itself does not count as the zero-token word).
+        pytest.param("((0) OR (NOT ((()) AND (title:the))))", 23, id="e23-40-family"),
+        pytest.param("NOT ()", None, id="e23-40-single-level-unclaimed"),
+        pytest.param("title:foo AND ()", None, id="e23-40-no-not-unclaimed"),
         pytest.param("NOT title:the-", 23, id="e23-trailing-separator"),
         # entries 20/13: a trailing boost must not defeat the anchors.
         pytest.param("tag:*^2", 20, id="e20-boosted-bare-star"),

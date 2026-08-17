@@ -114,6 +114,8 @@ _DIVERGENCE_SEEDS = (
     "NOT title:the",  # entry 23: NOT of a zero-token term
     # entry 23 through empty-group and nested-NOT noise (deep-fuzz find).
     "0 NOT (NOT (() title:the))",
+    # The composed 23/40 family in arbitrary scaffolding (deep-fuzz find).
+    "((0) OR (NOT ((()) AND (title:the))))",
 )
 
 # Explicit, seeded examples of the generator vocabulary a full-library review

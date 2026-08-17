@@ -642,9 +642,12 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # Not(Nothing) -> Every rule then upgrades to Every(): whoosh-compat's
     # comparison tree becomes "matches everything", while real whoosh's
     # Not(NullQuery).normalize() stays NullQuery ("matches nothing"), same
-    # as entry 23. Scoped to a NOT directly wrapping a single known-
-    # zero-token-word value on any field (the ZERO_TOKEN_WORD fragment,
-    # derived from whoosh's own STOP_WORDS set at the top of this module).
+    # as entry 23. This entry is scoped to a NOT wrapping (possibly
+    # through empty-group and nested-NOT noise) a known-zero-token-word
+    # value on any field (the ZERO_TOKEN_WORD fragment, derived from
+    # whoosh's own STOP_WORDS set at the top of this module); the broader
+    # co-occurrence entry directly below catches the same family in
+    # arbitrary scaffolding this prefix cannot reach.
     # The value may be a CHAIN of zero-token pieces joined by the
     # characters StandardAnalyzer splits on (dash/comma/slash): every
     # piece analyzes away, so the-of, the,x, and a-b are zero-token too
@@ -684,6 +687,32 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         (
             "DIVERGENCES.md entry 23: NOT of a zero-token term/phrase reaches the"
             " same emit-time divergence at the AST-comparison layer"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
+    # design (DIVERGENCES.md entries 23 and 40 jointly): the composed
+    # family of the two entries above: a NOT anywhere in the query, an
+    # empty group anywhere, and a zero-token word anywhere, in arbitrary
+    # scaffolding ("((0) OR (NOT ((()) AND (title:the))))", found by a
+    # deep fuzz soak after three narrower spellings of the same family
+    # each leaked past the prefix-based entry-23 regex). The three
+    # co-occurrence lookaheads claim the whole family at once instead of
+    # chasing spellings. The zero-token word must not be an (uppercase)
+    # operator keyword, so the corpus line "NOT ()" (single-level, both
+    # sides agree, entry 40's own excluded shape) stays unclaimed; per
+    # the strict-xfail convention, any corpus line matching this entry
+    # must be chosen to genuinely diverge.
+    (
+        re.compile(
+            r"(?=.*\bNOT\b)(?=.*\(\))"
+            rf"(?=.*(?:[\s(:]|^)(?!(?:NOT|AND|OR|ANDNOT|ANDMAYBE|REQUIRE|TO)\b)"
+            rf"{ZERO_TOKEN_WORD}(?![\w.,/-]))"
+        ),
+        (
+            "DIVERGENCES.md entry 23 (with entry 40's empty-group rule): a"
+            " NOT, an empty group, and a zero-token word co-occurring in"
+            " arbitrary scaffolding reach the composed"
+            " collapsed-empty/zero-token divergence family"
         ),
         DivergenceKind.MISMATCH,
     ),
