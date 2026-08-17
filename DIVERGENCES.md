@@ -95,12 +95,16 @@ parse-then-emit pipeline).
     match instead of failing, so `created:[2020-06-15 TO 2020-06-20]`
     collapses to the whole of 2020 in real whoosh (confirmed directly
     against the oracle, see `tests/differential/corpus_paperless.txt`'s
-    comment on that corpus line). whoosh-compat's `range_to_node` now calls
-    `self.dateparser.date_from` (the `ToEnd`-wrapped form `text_to_node`
-    already used) instead of the bare grammar object's `date_from`, so a
-    partial match on either bound correctly fails (surfacing a `BAD_DATE`
-    diagnostic) rather than silently collapsing to whatever coarser
-    precision the first alternative happened to match. Combined with a
+    comment on that corpus line). whoosh-compat's `_range_to_node` parses each
+    bound through `ToEnd(self.dateparser.get_parser())`: the same
+    full-consumption requirement `text_to_node`'s wrapped `date_from`
+    applies, but WITHOUT the wrapper's per-bound disambiguation, which
+    must not run before the joint `timespan.disambiguated()` combine step
+    (disambiguating each bound independently is what produced the
+    inverted `[dec to feb]` ranges; see `_range_to_node`'s own comment).
+    A partial match on either bound therefore correctly fails (surfacing
+    a `BAD_DATE` diagnostic) rather than silently collapsing to whatever
+    coarser precision the first alternative happened to match. Combined with a
     separate whoosh-compat bug fix to the `bundle` Choice's alternative
     order (`simple` is now tried before `datetime`, so a partial `dmy`
     year-only match can no longer starve the separated-numeric grammar of
@@ -1577,8 +1581,8 @@ parse-then-emit pipeline).
     nothing in the parser special-cases the name.
 
     Test references: `tests/differential/allowlist.py`'s `is_shared`
-    entry; corpus line `is_shared:true` in
-    `tests/differential/corpus_paperless.txt`. The unknown-field
+    entry; `tests/differential/corpus_paperless.txt`'s `is_shared:true`
+    line. The unknown-field
     allowlist entry for DIVERGENCES.md entry 15 explicitly excludes
     `is_shared` from its unknown-field alternative so this distinct
     divergence (known-to-oracle vs unknown-to-compat) is not silently
@@ -1604,8 +1608,8 @@ parse-then-emit pipeline).
     spelling matches the right reason first.
 
     Test references: `tests/differential/allowlist.py`'s bracketed-range
-    entry (ordered before the entry-2 pattern entry); corpus line
-    `title:[A* TO B]` in `tests/differential/corpus_paperless.txt`.
+    entry (ordered before the entry-2 pattern entry);
+    `tests/differential/corpus_paperless.txt`'s `title:[A* TO B]` line.
 
 44. **Exact date-range bounds honor the typed `{`/`}` exclusivity; real
     whoosh's date ranges are always inclusive on both sides (whoosh-bug,
