@@ -606,6 +606,75 @@ def test_range_out_of_range_diagnostic_names_the_failing_bound(
     assert res.diagnostics[0].raw_value == bad_bound
 
 
+@pytest.mark.parametrize(
+    ("query", "bad_bound"),
+    [
+        pytest.param("added:[2020 to 0001]", "0001", id="failing-end-swapped-to-lo"),
+        pytest.param("added:[9999 to 2020]", "9999", id="failing-start-swapped-to-hi"),
+        pytest.param("added:[now to 0001]", "0001", id="exact-start-swapped-with-bad-end"),
+        pytest.param(
+            "added:['9999-12-31' to 9999]",
+            "9999",
+            id="innocent-max-ceiling-start-not-blamed",
+            # No swap here: the failing value is genuinely the end bound's
+            # exclusive ceiling. The start bound's own ceiling also sits at
+            # datetime.max, so a probe applying hi-side arithmetic to both
+            # bounds indiscriminately would blame the innocent start; the
+            # side-aware rule keeps the positional attribution because the
+            # positional bound fails its own side's arithmetic too.
+        ),
+        pytest.param(
+            "added:['9999-12-31 23:59:59.999999' to 9999]",
+            "9999",
+            id="exact-max-instant-start-not-blamed",
+        ),
+        pytest.param(
+            "added:[9999 to 0001]",
+            "9999",
+            # The first failing site is the hi-side exclusive ceiling, and
+            # its overflowing value genuinely came from the start bound's
+            # text (the swap put 9999 at hi): the re-attribution branch
+            # fires because 9999 fails hi-side arithmetic on its own while
+            # 0001 (which only fails as a lo) survives it.
+            id="both-bad-names-first-failing-value",
+        ),
+        pytest.param(
+            "added:[0001 to 9999]",
+            "9999",
+            # Forward sibling of the case above: same first-failing-site
+            # answer whichever side each bad year was typed on.
+            id="both-bad-forward-names-first-failing-value",
+        ),
+        pytest.param(
+            "created:{'9999-12-31' TO '9999-12-31 23:59:59.999999'}",
+            "9999-12-31 23:59:59.999999",
+            id="exclusive-bracket-exact-end-stays-blamed",
+            # No swap. The end bound is exact, but the user's exclusive
+            # bracket makes date_only ceil it up a day, overflowing: the
+            # probe must model that same typed exclusivity, or the end
+            # bound looks healthy and the innocent max-ceiling start gets
+            # blamed instead.
+        ),
+    ],
+)
+def test_range_diagnostic_names_failing_bound_after_joint_swap(
+    reg: FieldRegistry, query: str, bad_bound: str
+) -> None:
+    # The joint-disambiguation step swaps a backwards range with two
+    # explicit years (whoosh's own range heuristic), after which the lo/hi
+    # conversion failures no longer line up with the bounds' textual
+    # positions: the year-1 end bound becomes lo (its Berlin-to-UTC
+    # conversion underflows datetime.min), the year-9999 start bound
+    # becomes hi (its exclusive ceiling overflows datetime.max). The
+    # diagnostic must name the bound whose VALUE failed, not whichever
+    # bound sat at that side of the brackets.
+    res = dparse(query, reg)
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics[0].raw_value == bad_bound
+    assert bad_bound in res.diagnostics[0].message
+
+
 def test_range_bad_start_diagnostic(reg: FieldRegistry) -> None:
     res = dparse("added:[notadate TO 2020]", reg)
     assert res.diagnostics

@@ -1132,14 +1132,80 @@ class DateParserPlugin(Plugin):
                       if isinstance(raw_end, (adatetime, timespan)) else raw_end)
                 hi_naive = cast(datetime, ed.end if isinstance(ed, timespan) else ed)
 
+        def _individual(raw: Any) -> datetime | timespan:
+            """A bound's own resolution, ignoring the other bound."""
+            if isinstance(raw, (adatetime, timespan)):
+                return cast("datetime | timespan", raw.disambiguated(local_now))
+            return cast(datetime, raw)
+
+        def _fails_as_lo(raw: Any) -> bool:
+            """Would this bound's own value fail where the lo bound failed?"""
+            try:
+                probed = _individual(raw)
+                p_lo = cast(datetime, probed.start if isinstance(probed, timespan) else probed)
+                self._to_utc(p_lo, spec.date_only)
+            except (ValueError, OverflowError):
+                return True
+            return False
+
+        def _fails_as_hi(raw: Any) -> bool:
+            """Would this bound's own value fail where the hi bound failed?
+
+            Mimics the real hi-side arithmetic: an ambiguous bound (an
+            individual timespan) gets the half-open exclusive-ceiling
+            adjustment; an exact instant keeps the exclusivity the user
+            actually typed on the end bracket (``ceil=not incl_hi``, the
+            same flag the real failing site used: an exclusive ``}`` on a
+            date_only field ceils the bound up a day, which is exactly the
+            arithmetic that can overflow).
+            """
+            try:
+                probed = _individual(raw)
+                if isinstance(probed, timespan):
+                    p_hi = cast(datetime, probed.end) + timedelta(microseconds=1)
+                    self._to_utc(p_hi, spec.date_only, ceil=True)
+                else:
+                    self._to_utc(probed, spec.date_only, ceil=not incl_hi)
+            except (ValueError, OverflowError):
+                return True
+            return False
+
+        def blame(failing_side: str, default_text: str | None) -> str | None:
+            """The bound whose typed text produced the failing value.
+
+            Positional attribution (lo failure -> node.start, hi failure ->
+            node.end) is wrong exactly when the joint disambiguation step
+            swapped a backwards range (times.py's timespan.disambiguated,
+            its "just swap the start and end" branch): the value failing at
+            one side came from the OTHER side's text. Rather than
+            re-deriving the swap decision, re-attribute only on clear
+            evidence of it: the OPPOSITE bound fails the failing side's own
+            arithmetic on its own while the positional bound survives that
+            same arithmetic. Both-fail and neither-fail keep the positional
+            default (either the attribution is genuinely ambiguous, or the
+            failure is a joint artifact neither bound reproduces alone).
+            The arithmetic is side-specific on purpose: probing a lo-side
+            bound with hi-side ceiling arithmetic would blame an innocent
+            start bound whose own ceiling merely sits at datetime.max.
+            """
+            if not can_combine:
+                return default_text
+            if failing_side == "lo":
+                if _fails_as_lo(raw_end) and not _fails_as_lo(raw_start):
+                    return node.end
+            elif _fails_as_hi(raw_start) and not _fails_as_hi(raw_end):
+                return node.start
+            return default_text
+
         if hi_naive is not None and not end_exact:
             try:
                 hi_naive = hi_naive + timedelta(microseconds=1)
             except OverflowError:
-                # The exclusive-ceiling adjustment is end-bound-only
-                # arithmetic (e.g. year 9999's last microsecond plus one
-                # lands past datetime.max): always the end bound's fault.
-                return self._error(node, node.end, spec.name)
+                # The exclusive-ceiling adjustment (e.g. year 9999's last
+                # microsecond plus one lands past datetime.max) happens at
+                # the hi side, but after a joint swap the hi VALUE may have
+                # come from the start bound's text: blame() decides.
+                return self._error(node, blame("hi", node.end) or "", spec.name)
             incl_hi = False
         if lo_naive is not None and not start_exact:
             incl_lo = True
@@ -1147,7 +1213,7 @@ class DateParserPlugin(Plugin):
         try:
             lo = self._to_utc(lo_naive, spec.date_only) if lo_naive is not None else None
         except (ValueError, OverflowError):
-            return self._error(node, node.start, spec.name)
+            return self._error(node, blame("lo", node.start) or "", spec.name)
         try:
             hi = (
                 self._to_utc(hi_naive, spec.date_only, ceil=not incl_hi)
@@ -1155,7 +1221,7 @@ class DateParserPlugin(Plugin):
                 else None
             )
         except (ValueError, OverflowError):
-            return self._error(node, node.end, spec.name)
+            return self._error(node, blame("hi", node.end) or "", spec.name)
         # An exclusivity flag is meaningless for a bound that isn't there at
         # all (there's nothing to exclude): normalize it to True/inclusive
         # rather than preserving whatever bracket character the user
