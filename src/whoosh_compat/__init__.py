@@ -96,18 +96,31 @@ def parse(
         the current time in ``tz`` when a date plugin is active.
 
     :raises ValueError: if ``default_fields`` is empty, ``default_fields``
-        names a field ``registry`` doesn't know, or a ``field_boosts`` key
-        doesn't resolve to a known field. These are host configuration
-        mistakes: the registry's own philosophy is that a misconfiguration
-        raises at construction, not at query time, and this extends the
-        same bar to configuration passed here (issue #20). An alias
-        resolves normally in both ``default_fields`` and ``field_boosts``
-        (a ``field_boosts`` key is canonicalized to its field's own name
+        names a field ``registry`` doesn't know, a ``field_boosts`` key
+        doesn't resolve to a known field, or ``basedate`` is a naive
+        (tz-less) datetime. These are host configuration mistakes: the
+        registry's own philosophy is that a misconfiguration raises at
+        construction, not at query time, and this extends the same bar to
+        configuration passed here. The naive-``basedate`` rejection is
+        unconditional (it does not depend on whether the registry has any
+        DATE/DATETIME fields, even though only those attach the date
+        plugin that would read it): whether bad configuration raises must
+        not vary with unrelated registry contents. An alias resolves
+        normally in both ``default_fields`` and ``field_boosts`` (a
+        ``field_boosts`` key is canonicalized to its field's own name
         before use); it is not one of the rejected cases.
     """
 
     if not default_fields:
         raise ValueError("default_fields must not be empty")
+    if basedate is not None and basedate.tzinfo is None:
+        # Mirrors DateParserPlugin.__init__'s own check, but hoisted here
+        # so the rejection is unconditional: without it, a registry with no
+        # DATE/DATETIME fields (where the plugin is never attached) would
+        # silently accept and ignore the same misconfiguration.
+        raise ValueError(
+            "basedate must be timezone-aware (a naive datetime is ambiguous: attach a tzinfo)"
+        )
     canonical_fields = []
     for name in default_fields:
         ref = registry.make_ref(name)

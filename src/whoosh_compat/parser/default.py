@@ -385,7 +385,7 @@ class QueryParser:
                 # by WildcardPlugin, which already special-cases it the same
                 # way, see wildcard_query). Without this, a quoted "*" tried
                 # the ordinary U64/BOOLEAN_EXISTS coercion and, for U64,
-                # diagnosed as BAD_NUMBER (issue #16).
+                # diagnosed as BAD_NUMBER.
                 node: ast.Node = ast.Every(field=ref)
                 return ast.Boosted(node, boost) if boost != 1.0 else node
 
@@ -526,12 +526,12 @@ class QueryParser:
           (verified against the oracle: ``type_id:1*`` parses to
           ``Term('type_id', <bytes for int 1>)``, not a rejected query or
           a wildcard search): a whoosh defect, not intended semantics, so
-          it is not reproduced here (issue #17, DIVERGENCES.md entry 29).
+          it is not reproduced here (DIVERGENCES.md entry 29).
         * A ref resolving to a JSON subpath. tantivy stores JSON terms as
           path-prefixed encoded bytes, and there is no tantivy-py API on
           the pinned version that can build a pattern query scoped to one
           subpath; emitting one against the whole field would silently
-          match (or miss) the wrong documents (issue #30, DIVERGENCES.md
+          match (or miss) the wrong documents (DIVERGENCES.md
           entry 30). This case is independent of field kind: a JSON
           field's own kind is always JSON, so it never also hits the U64
           branch above.
@@ -541,7 +541,7 @@ class QueryParser:
           Real whoosh executes ``has_tag:t*`` leniently, mangled to
           ``Term('has_tag', True)``: the same silent-mangle defect class
           the U64 branch above documents, not intended semantics, so it
-          is not reproduced here either (issue #17, DIVERGENCES.md
+          is not reproduced here either (DIVERGENCES.md
           entry 29).
 
         Diagnosing at parse time instead of letting it fail (or silently
@@ -549,7 +549,7 @@ class QueryParser:
         parser's invalid-input contract (BAD_NUMBER, BAD_DATE).
 
         Called after the ``text == "*"`` existence-match special case
-        (issue #16) has already been handled, so it only ever sees a
+        has already been handled, so it only ever sees a
         genuine wildcard *pattern*, never a bare-star existence check
         (DIVERGENCES.md entries 20 and 29 both call out that boundary).
         """
@@ -624,9 +624,14 @@ class QueryParser:
         """Returns the AST node for a prefix query."""
 
         ref = self.field_ref(fieldname)
+        # A Prefix only ever arises from do_wildcards' trailing-star fold,
+        # which strips the "*" before this method runs: re-append it for
+        # the diagnostic's raw_value so the value reads exactly as the
+        # user typed it (a host rendering the error would otherwise quote
+        # a value containing no wildcard at all).
         err = self._wildcard_kind_diagnostic(
             ref,
-            text,
+            f"{text}*",
             kw.get("startchar"),  # type: ignore[arg-type]
             kw.get("endchar"),  # type: ignore[arg-type]
         )
