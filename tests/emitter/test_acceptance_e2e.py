@@ -230,6 +230,15 @@ SCENARIOS_EQUAL = [
     pytest.param("title:*", [1, 2, 3, 4, 5], id="bare-star-every-doc-with-title"),
     pytest.param("-foo shopname", [], id="attached-dash-foo-plus-shopname"),
     pytest.param("asn:[100 TO 102]", [1, 2, 3], id="numeric-range"),
+    pytest.param(
+        "title:billing-2020^2",
+        [1],
+        id="boosted-analyzer-split-value",
+        # DIVERGENCES.md entry 46: the parsed shapes differ
+        # (Boosted(And(billing, 2020)) here vs And(Boosted each) in
+        # whoosh), but the matched-document sets are identical, which is
+        # exactly what this equal-results scenario pins.
+    ),
 ]
 
 

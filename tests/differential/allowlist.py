@@ -149,6 +149,40 @@ DATE_FIELDS_PATTERN = "|".join(
     )
 )
 
+# Every registered comma_values field name (and alias): the fields
+# CommaValuesPlugin splits at parse time, i.e. the entry-36 domain.
+# Same no-drift derivation rationale as above (entry 36's regex was once
+# scoped to 'tag' alone, silently missing its comma siblings).
+COMMA_FIELDS_PATTERN = "|".join(
+    re.escape(name)
+    for name in sorted(
+        (
+            name
+            for spec in ORACLE_REGISTRY
+            if spec.comma_values
+            for name in (spec.name, *spec.aliases)
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+
+# Every registered TEXT field name (and alias), for entries scoped to
+# analyzer-splitting TEXT values specifically.
+TEXT_FIELDS_PATTERN = "|".join(
+    re.escape(name)
+    for name in sorted(
+        (
+            name
+            for spec in ORACLE_REGISTRY
+            if spec.kind is FieldKind.TEXT
+            for name in (spec.name, *spec.aliases)
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+
 # Every registered KEYWORD field name (and alias), for excluding them from
 # zero-token-word entries: whoosh's KEYWORD analyzer only splits on commas,
 # with no stopword/minsize filtering, so a stopword-shaped KEYWORD value is
@@ -716,15 +750,38 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # documents and summed relevance scoring are identical either way
     # (verified both algebraically and against a live tantivy index; see
     # the DIVERGENCES.md entry), so this is an AST-shape-only divergence,
-    # not a whoosh bug. Scoped to a comma-values field's value followed
-    # immediately by a boost.
+    # not a whoosh bug. Scoped to any comma-values field's value followed
+    # immediately by a boost (the field alternation is derived from the
+    # registry's comma_values flags; a hand-written 'tag'-only scope once
+    # silently missed tag_id/custom_fields_id/viewer_id).
     (
-        re.compile(r"\btag:[^\s()]*,[^\s()]*\^\d"),
+        re.compile(rf"\b(?:{COMMA_FIELDS_PATTERN}):[^\s()]*,[^\s()]*\^\d"),
         (
             "DIVERGENCES.md entry 36: a comma-values field boost attaches to"
             " the whole split AndGroup in whoosh-compat but to each split"
             " term individually in whoosh, since the comma split happens at"
             " parse time here vs. analysis time there"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
+    # design (DIVERGENCES.md entry 46): entry 36's analyzer-split sibling.
+    # A boosted TEXT value the analyzer splits (title:foo-bar^2) attaches
+    # the boost to the whole split group in whoosh-compat (analyze() splits
+    # inside the already-bound Boosted wrapper) but to each split term in
+    # whoosh (its analyzer splits after the boost bound to the unsplit
+    # term). Matched documents identical either way; AST-shape only.
+    (
+        # Separator class is dash/comma/slash, the characters
+        # StandardAnalyzer actually splits a TEXT value on (measured). A
+        # single dot between word characters is deliberately EXCLUDED:
+        # the analyzer keeps foo.bar as one token, so a dotted-only
+        # boosted value never splits, never diverges, and claiming it
+        # would make the first dotted corpus line fail as a stale entry.
+        re.compile(rf"\b(?:{TEXT_FIELDS_PATTERN}):[^\s()]*\w[-,/]\w[^\s()]*\^\d"),
+        (
+            "DIVERGENCES.md entry 46: a boost on an analyzer-split TEXT"
+            " value attaches to the whole split group in whoosh-compat but"
+            " to each split term individually in whoosh"
         ),
         DivergenceKind.MISMATCH,
     ),

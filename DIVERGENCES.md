@@ -1314,9 +1314,16 @@ parse-then-emit pipeline).
     `0.5753642320632935`) for both `Query.boost_query(And(a, b), 2.0)` and
     `And(Query.boost_query(a, 2.0), Query.boost_query(b, 2.0))`.
 
+    The allowlist entry's field alternation is derived from the registry's
+    `comma_values` flags (a hand-written `tag`-only scope once silently
+    missed the `tag_id`/`custom_fields_id`/`viewer_id` sibling cells; see
+    entry 46, this mechanism's analyzer-split sibling, for the broadening
+    history).
+
     Test references: `tests/differential/allowlist.py`'s comma-values-boost
     entry; `tests/differential/corpus_docs.txt`'s
-    `tag:alpha,beta^2` line.
+    `tag:alpha,beta^2` line and `tests/differential/corpus_paperless.txt`'s
+    `tag_id:alpha,beta^2` line.
 
 37. **A `date_only` field is a whoosh-compat-only concept with no whoosh
     analogue whatsoever (design).** Real v2 whoosh (`whoosh.fields.DATETIME`)
@@ -1663,3 +1670,39 @@ parse-then-emit pipeline).
     `test_double_quoted_iso_date_is_a_documented_divergence` (executed:
     whoosh raises QueryError at search time, tantivy returns the matching
     document).
+
+46. **A boost on an analyzer-split TEXT value attaches to the whole split
+    group; real whoosh boosts each split term individually (design, entry
+    36's analyzer-split sibling).** `title:foo-bar^2` reaches the same
+    combining question entry 36 documents for comma values, through
+    analysis instead of `CommaValuesPlugin`: whoosh-compat's `analyze()`
+    splits the multi-token value inside the already-bound `Boosted`
+    wrapper (`Boosted(And(title:foo, title:bar), 2.0)`), while real
+    whoosh's field analyzer splits at query-build time, after the boost
+    bound to the single unsplit term, so each split term carries its own
+    boost copy (`And(Boosted(title:foo, 2.0), Boosted(title:bar, 2.0))`).
+    Matched documents are identical either way (the boost algebra is the
+    same distribution entry 36 already verified; confirmed end-to-end by
+    the equal-results acceptance scenario below, and re-confirmed during
+    review across seven boosted-split shapes), so this is an
+    AST-shape-only divergence. One interaction worth naming: a boosted
+    split value written inside a user-typed `OR` can produce different
+    result sets, but that difference reproduces identically with the
+    boost removed, i.e. it is entry 15's Or-context `Multitoken.DEFAULT`
+    divergence, not this entry's boost placement. The allowlist regex's
+    separator class is dash/comma/slash, the characters
+    `StandardAnalyzer` actually splits on; a single dot between word
+    characters stays one token (measured), so dotted-only spellings are
+    deliberately not claimed.
+
+    Entry 36's own allowlist regex was also originally scoped to `tag:`
+    alone; it now derives its field alternation from the registry's
+    `comma_values` flags, so the once-forgotten `tag_id`/
+    `custom_fields_id`/`viewer_id` sibling cells are covered and cannot
+    silently drop out again.
+
+    Test references: `tests/differential/allowlist.py`'s boosted
+    analyzer-split entry; `tests/differential/corpus_paperless.txt`'s
+    `title:foo-bar^2` and `tag_id:alpha,beta^2` lines;
+    `tests/emitter/test_acceptance_e2e.py`'s
+    `boosted-analyzer-split-value` equal-results scenario.

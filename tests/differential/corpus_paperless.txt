@@ -111,6 +111,12 @@ modified:20231201
 # whoosh-compat's DateParserPlugin preserves the typed boost instead.
 added:yesterday^2
 
+# DIVERGENCES.md entries 36 and 46: a boost on a value the parser or
+# analyzer splits. tag_id pins entry 36's once-forgotten comma sibling;
+# title pins entry 46's analyzer-split sibling.
+tag_id:alpha,beta^2
+title:foo-bar^2
+
 # --- compared: quoted multi-word natural-date keywords (whoosh's own
 # multi-word-value quoting mechanism; contrast with the unquoted forms
 # further below, which are a documented divergence).
