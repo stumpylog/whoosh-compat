@@ -909,6 +909,24 @@ def test_do_dates_leaves_non_range_non_text_date_field_node_untouched(reg: Field
     assert result[0] is group[0]  # untouched, not replaced
 
 
+def test_range_exclusive_brackets_honored_for_exact_bounds(reg: FieldRegistry) -> None:
+    # DIVERGENCES.md entry 44: an exact bound ("now", a concrete instant)
+    # keeps the bracket exclusivity the user typed, where real whoosh's
+    # DateRangeNode silently drops the flags (always inclusive-both, the
+    # same plumbing oversight class as entry 3's boost drop). The
+    # ambiguous-bound counterpart directly below pins the inverse rule.
+    r = dparse("added:{now TO now}", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == BASE.astimezone(UTC)
+    assert r.hi == BASE.astimezone(UTC)
+    assert r.incl_lo is False
+    assert r.incl_hi is False
+    inclusive = dparse("added:[now TO now]", reg).ast
+    assert isinstance(inclusive, ast.DateRange)
+    assert inclusive.incl_lo is True
+    assert inclusive.incl_hi is True
+
+
 def test_range_exclusive_bounds_ignored_for_ambiguous_bounds(reg: FieldRegistry) -> None:
     # "2020"/"2021" are ambiguous (year-only) bounds, not exact instants, so
     # range_to_node forces incl_lo=True regardless of the query's "{" exclusive

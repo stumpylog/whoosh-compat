@@ -1597,3 +1597,40 @@ parse-then-emit pipeline).
     Test references: `tests/differential/allowlist.py`'s bracketed-range
     entry (ordered before the entry-2 pattern entry); corpus line
     `title:[A* TO B]` in `tests/differential/corpus_paperless.txt`.
+
+44. **Exact date-range bounds honor the typed `{`/`}` exclusivity; real
+    whoosh's date ranges are always inclusive on both sides (whoosh-bug,
+    not reproduced).** whoosh's `DateParserPlugin.range_to_dt` builds a
+    `DateRangeNode` that takes no `startexcl`/`endexcl` parameters and
+    whose `query()` constructs `query.DateRange` with default inclusive
+    bounds, silently discarding the brackets the user typed (verified
+    against the pinned oracle: `added:{now TO now}` parses inclusive-both
+    in whoosh). whoosh's own `RangePlugin` captures the exclusivity flags
+    and its `TermRange` honors them, so the drop is a `DateRangeNode`
+    plumbing oversight, exactly parallel to the boost drop entry 3
+    documents for the same node class, not intended query semantics.
+    whoosh-compat's `_range_to_node` keeps the typed flags for bounds
+    classified exact (a concrete datetime such as `now`, or a
+    fully-specified instant); ambiguous bounds are period-shaped and get
+    the half-open ceiling treatment regardless (the ARCHITECTURE.md
+    half-open-ceilings invariant), so exclusivity honoring is only
+    observable on exact bounds.
+
+    Result-relevant: `added:{now TO now}` matches the instant in whoosh
+    and nothing in whoosh-compat. The generators do draw `{`/`}` brackets
+    (`strategies.py`'s `_date_range_atom`), but only around bare-year
+    bounds, which are ambiguous and therefore never reach the
+    exclusivity-honoring exact-bound path, so the observable divergence is
+    pinned by a corpus line rather than fuzz coverage.
+
+    Test references: `tests/differential/allowlist.py`'s
+    exclusive-date-bracket entry (ordered before the entry-12 date-range
+    entry, so the exclusivity spelling cites this entry rather than being
+    absorbed under the tz-bypass paperwork);
+    `tests/differential/corpus_paperless.txt`'s `added:{now TO now}` line;
+    `tests/test_parser_dates.py`'s
+    `test_range_exclusive_brackets_honored_for_exact_bounds` (the direct
+    unit pin) and `tests/emitter/test_acceptance_e2e.py`'s
+    `test_exclusive_exact_date_range_is_a_documented_divergence` (the
+    executed result-level proof, whoosh matching the instant and tantivy
+    matching nothing under identity tz conversion).

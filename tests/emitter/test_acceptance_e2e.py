@@ -34,6 +34,7 @@ comments below for the specific evidence.
 from __future__ import annotations
 
 import re
+from datetime import UTC
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -264,6 +265,31 @@ def test_created_previous_month_unquoted_is_a_documented_divergence(
     assert result.diagnostics, "expected a diagnostic for the unparseable 'previous' date token"
     with pytest.raises(QueryEmitError):
         emit_(result.ast, index=tindex[0], registry=ereg)
+
+
+def test_exclusive_exact_date_range_is_a_documented_divergence(
+    windex: WhooshIndex, tindex: TIndex, ereg: FieldRegistry
+) -> None:
+    """whoosh-bug (DIVERGENCES.md entry 44): whoosh's DateRangeNode drops
+    the typed {}/exclusivity flags (always inclusive-both), so
+    added:{now TO now} matches the instant in whoosh; whoosh-compat honors
+    the typed brackets on exact bounds, so the same query is a zero-width
+    exclusive range matching nothing. UTC basedate/tz on both sides so the
+    entry-12 tz-bypass divergence cannot confound the comparison: with
+    identity tz conversion, the ONLY difference between the two pipelines
+    here is the exclusivity flags.
+    """
+
+    # Doc 1's added instant (see conftest DOCS: 2020-03-15T10:00:00Z).
+    utc = ZoneInfo("UTC")
+    instant = datetime(2020, 3, 15, 10, 0, 0, tzinfo=UTC)
+    q = "added:{now TO now}"
+    assert whoosh_search_ids(windex, q, instant, UTC) == [1]
+    assert tantivy_search_ids(tindex, ereg, q, basedate=instant, tz=utc) == []
+    # Control: the inclusive spelling matches the doc on both sides.
+    q_incl = "added:[now TO now]"
+    assert whoosh_search_ids(windex, q_incl, instant, UTC) == [1]
+    assert tantivy_search_ids(tindex, ereg, q_incl, basedate=instant, tz=utc) == [1]
 
 
 def test_notes_user_json_subpath_has_no_v2_analogue(

@@ -129,6 +129,26 @@ ZERO_TOKEN_WORD = (
     + r"|\w)"
 )
 
+# Every registered DATETIME field name (and alias), for scoping
+# date-range entries. Same no-drift derivation rationale as above.
+# Deliberately DATETIME only, matching strategies.DATE_FIELDS: the one
+# DATE-kind field (release_date) is a whoosh-compat-only concept with no
+# column in the real v2 schema, so its queries belong to entry 37's
+# no-oracle-analogue paperwork, not to date-range mechanism entries.
+DATE_FIELDS_PATTERN = "|".join(
+    re.escape(name)
+    for name in sorted(
+        (
+            name
+            for spec in ORACLE_REGISTRY
+            if spec.kind is FieldKind.DATETIME
+            for name in (spec.name, *spec.aliases)
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+
 # Every registered KEYWORD field name (and alias), for excluding them from
 # zero-token-word entries: whoosh's KEYWORD analyzer only splits on commas,
 # with no stopword/minsize filtering, so a stopword-shaped KEYWORD value is
@@ -334,6 +354,28 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # An earlier version of this allowlist wrongly carried a "#8" entry here
     # by analogy without verifying it against the actual v2 oracle; removed
     # after confirming "-foo" compares and passes structurally.
+    # whoosh-bug (DIVERGENCES.md entry 44): a date range typed with an
+    # exclusive bracket. whoosh's DateRangeNode never forwards
+    # startexcl/endexcl (always inclusive-both, the same plumbing oversight
+    # class as entry 3's boost drop); whoosh-compat honors the typed
+    # brackets on exact bounds. Ordered BEFORE the entry-12 date-range
+    # entry so the exclusive spelling cites this divergence rather than
+    # being absorbed under the tz-bypass paperwork (both are MISMATCH kind;
+    # the ordering only affects citation accuracy). Scoped to a bracketed
+    # range on a registered date field where either bracket is the
+    # exclusive one.
+    (
+        re.compile(
+            rf"\b(?:{DATE_FIELDS_PATTERN}):"
+            r"(?:\{[^\]}]*[\]}]|\[[^\]}]*\})"
+        ),
+        (
+            "whoosh-bug (DIVERGENCES.md entry 44): whoosh's DateRangeNode"
+            " drops typed {}/exclusivity flags (always inclusive-both);"
+            " whoosh-compat honors them on exact bounds"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
     # whoosh-bug (DIVERGENCES.md entry 12): real whoosh's range-bound date parsing
     # (DateParserPlugin.range_to_dt) calls
     # `self.dateparser.get_parser().date_from(...)`, the *grammar object's*

@@ -211,6 +211,10 @@ added:[2022 TO 2023]
 modified:[2021 TO 2021]
 created:[2020 to 2020]
 created:[2025 TO 2020]
+# DIVERGENCES.md entry 44: an exclusive bracket on an exact-bound date
+# range. whoosh's DateRangeNode drops the typed {} flags (always
+# inclusive-both); whoosh-compat honors them on exact bounds like now.
+added:{now TO now}
 
 # --- KNOWN DIVERGENCE (design, allowlist.py): unquoted multi-word natural-
 # date keywords. Real paperless v2 rewrites these via an *app-level* regex
