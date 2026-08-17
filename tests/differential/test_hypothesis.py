@@ -112,6 +112,8 @@ _DIVERGENCE_SEEDS = (
     "title:*",  # entry 20: bare field:* -> Every(field)
     "added:'2020 12:30'",  # entry 21: year + colon-time ambiguity
     "NOT title:the",  # entry 23: NOT of a zero-token term
+    # entry 23 through empty-group and nested-NOT noise (deep-fuzz find).
+    "0 NOT (NOT (() title:the))",
 )
 
 # Explicit, seeded examples of the generator vocabulary a full-library review

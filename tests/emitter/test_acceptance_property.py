@@ -473,6 +473,30 @@ def test_not_of_nested_empty_group_is_a_result_level_divergence(
     assert tantivy_search_ids_prop(tindex_prop, q_diverges) == []
 
 
+def test_not_under_andnot_is_a_result_level_divergence(
+    windex_prop: WhooshIndex, tindex_prop: TIndex
+) -> None:
+    """DIVERGENCES.md entry 47: whoosh's root-only Not composes
+    incoherently as an AndNot operand. For the deep-fuzz finding query
+    the positive side alone matches doc 4 and the negative
+    (``NOT (0)``) alone matches every document, so set algebra gives the
+    empty set, which tantivy computes; whoosh returns the positive side
+    unchanged, ignoring the all-matching negative. The parsed ASTs are
+    identical on both sides, so only a real dual-index search can see
+    this divergence at all.
+    """
+
+    q = "(NOT (created:'this year')) ANDNOT (NOT (0))"
+    assert allowed_result_reason(q) is not None
+    assert whoosh_search_ids_prop(windex_prop, q) == [4]
+    assert tantivy_search_ids_prop(tindex_prop, q) == []
+    # The components, agreeing on both sides, isolating the composition.
+    assert whoosh_search_ids_prop(windex_prop, "NOT (created:'this year')") == [4]
+    assert tantivy_search_ids_prop(tindex_prop, "NOT (created:'this year')") == [4]
+    assert whoosh_search_ids_prop(windex_prop, "NOT (0)") == [1, 2, 3, 4]
+    assert tantivy_search_ids_prop(tindex_prop, "NOT (0)") == [1, 2, 3, 4]
+
+
 def test_andnot_zero_token_positive_matches_everything_here(
     windex_prop: WhooshIndex, tindex_prop: TIndex
 ) -> None:
@@ -589,6 +613,10 @@ _SEED_QUERIES = (
     # emitter's window clamp existed; seeded so the fix is exercised
     # deterministically, not only by random draw.
     "created:3772",
+    # A NOT operand under ANDNOT: whoosh's root-only Not composes
+    # incoherently there (DIVERGENCES.md entry 47, found by a deep fuzz
+    # soak at the result level; the parsed ASTs are identical).
+    "(NOT (created:'this year')) ANDNOT (NOT (0))",
     "attrs.user:alice",
     "release_date:'2020-06-10 00:00'",
     "tag:billing",

@@ -270,6 +270,12 @@ def test_result_entry23_regex_covers_every_whoosh_stopword(word: str) -> None:
         pytest.param("NOT (title:a-b)", 23, id="e23-zero-token-chain"),
         pytest.param("NOT title:the-of", 23, id="e23-stopword-chain"),
         pytest.param("NOT title:the-invoice", None, id="e23-rescued-chain-unclaimed"),
+        # Empty-group and nested-NOT noise between the NOT and the value
+        # (deep-fuzz-found spellings) is tolerated; a real intervening
+        # term still blocks the claim.
+        pytest.param("NOT (() title:the)", 23, id="e23-empty-group-noise"),
+        pytest.param("0 NOT (NOT (() title:the))", 23, id="e23-nested-not-noise"),
+        pytest.param("NOT (a) title:the", None, id="e23-real-term-blocks"),
         pytest.param("NOT title:the-", 23, id="e23-trailing-separator"),
         # entries 20/13: a trailing boost must not defeat the anchors.
         pytest.param("tag:*^2", 20, id="e20-boosted-bare-star"),
@@ -291,9 +297,11 @@ def test_result_entry23_regex_covers_every_whoosh_stopword(word: str) -> None:
 def test_allowlist_regex_scoping(query: str, expected_entry: int | None) -> None:
     """Pins the overmatch/undermatch boundary of the precision-sensitive
     allowlist regexes: each claimed spelling was verified by execution to
-    genuinely diverge (or, for the date-range row, to belong to the cited
-    entry's mechanism), and each unclaimed spelling to compare equal or
-    belong elsewhere. A regex edit that widens or narrows past these
+    genuinely diverge, to belong to the cited entry's mechanism, or (for
+    a few oracle-unmappable spellings, e.g. the empty-group-noise row,
+    whose oracle tree to_ast cannot represent) to be skipped identically
+    with or without the claim; each unclaimed spelling compares equal or
+    belongs elsewhere. A regex edit that widens or narrows past these
     boundaries fails here instead of surfacing as a spurious strict-xfail
     or a silently absorbed regression.
     """

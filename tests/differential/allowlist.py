@@ -671,7 +671,13 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # is a real comparison, not this divergence.
     (
         re.compile(
-            r"\bNOT\s*\(*\s*"
+            # The prefix tolerates empty-group and nested-NOT noise
+            # between the NOT and the fielded value ("NOT (() title:the)",
+            # "0 NOT (NOT (() title:the))", found by a deep fuzz soak):
+            # each unit is an open paren, a complete empty group, or a
+            # further NOT keyword, so a real intervening term still blocks
+            # the match.
+            r"\bNOT\s*(?:\(\)\s*|\(\s*|NOT\s+)*"
             rf"(?!(?:{KEYWORD_FIELDS_PATTERN}):)\w+:"
             rf"{ZERO_TOKEN_WORD}(?:[-,/]{ZERO_TOKEN_WORD})*[-,/]?(?![\w.,/-])"
         ),

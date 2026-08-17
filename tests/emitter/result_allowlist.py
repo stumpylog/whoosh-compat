@@ -274,6 +274,25 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
             " whoosh but a correct day/month-period DateRange in whoosh-compat"
         ),
     ),
+    # whoosh-bug (DIVERGENCES.md entry 47): a NOT operand under
+    # ANDNOT/ANDMAYBE/REQUIRE. whoosh's Not is root-only (its matcher's
+    # own comment); as a binary-query operand the composition produces
+    # incoherent results (measured: AndNot(Not(a), Every()) returns a
+    # strict subset that no consistent algebra yields, and a Not negative
+    # can be ignored entirely), while whoosh-compat computes ordinary set
+    # algebra. Scoped, entry-41-style, to any query combining one of the
+    # binary keywords with a standalone NOT token: the incoherence's
+    # trigger is not characterized further on purpose. \bNOT\b cannot
+    # match inside the ANDNOT keyword itself (no word boundary after the
+    # D), so a query using only ANDNOT does not match.
+    (
+        re.compile(r"(?=.*\b(?:ANDNOT|ANDMAYBE|REQUIRE)\b)(?=.*\bNOT\b)"),
+        (
+            "whoosh-bug (DIVERGENCES.md entry 47): whoosh's root-only Not"
+            " composes incoherently as an ANDNOT/ANDMAYBE/REQUIRE operand;"
+            " whoosh-compat computes ordinary boolean set algebra"
+        ),
+    ),
     # DIVERGENCES.md entry 15 (design, confirmed result-level): a multitoken
     # TEXT-field value nested inside a top-level Or (either an unfielded
     # word, always multifield-expanded into an Or, or a fielded value

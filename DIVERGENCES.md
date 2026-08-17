@@ -1722,3 +1722,44 @@ parse-then-emit pipeline).
     `title:foo-bar^2` and `tag_id:alpha,beta^2` lines;
     `tests/emitter/test_acceptance_e2e.py`'s
     `boosted-analyzer-split-value` equal-results scenario.
+
+47. **`ANDNOT` with a `NOT` operand produces incoherent results in real
+    whoosh (measured); whoosh-compat computes ordinary boolean set
+    algebra (whoosh-bug, not reproduced; result-level only, the parsed
+    ASTs are identical on both sides).** whoosh's `query.Not` is a
+    root-only construct by its own admission: `Not.matcher`'s source
+    comment says it is "usually only called if Not is the root query"
+    and that `And`/`Or` do special handling of `Not` subqueries, handling
+    the binary queries (`AndNot`/`AndMaybe`/`Require`) do not perform
+    (verified in source: all three wrap the child `Not.matcher` directly).
+    The incoherence itself was MEASURED on `AndNot`; `AndMaybe`/`Require`
+    probes with `Not` operands have so far all agreed with set algebra,
+    and those two keywords are covered by the allowlist entry defensively
+    via the shared root-only mechanism, not by observed misbehavior.
+    Measured against a live index (four docs, `Not(tag:billing)` matching
+    docs 2 and 4): `AndNot(Not(billing), Every())` returns doc 2 alone,
+    which no consistent reading produces (subtraction gives the empty
+    set; ignoring the negative gives docs 2 and 4); the deep-fuzz find
+    `(NOT (created:'this year')) ANDNOT (NOT (0))` returns the positive
+    side unchanged, ignoring a negative that matches every document;
+    while other spellings (`AndNot(Not(billing), Not(billing))`, plain
+    positives) subtract correctly. As with entry 41, the point is the
+    incoherence's existence, not its precise trigger: chasing the exact
+    matcher interaction further would be archaeology of a defect this
+    project does not intend to reproduce. whoosh-compat's emitter builds
+    compositional boolean queries (`Must`/`MustNot` with all-negative
+    padding), and tantivy computes the correct set-algebra answer for
+    every probed spelling.
+
+    Result-level only: the parsed and normalized ASTs are identical on
+    both sides (verified for the finding query), so no differential
+    allowlist entry or corpus line is possible; the paperwork is the
+    result-level allowlist entry plus the finding query seeded into the
+    acceptance property's explicit examples.
+
+    Test references: `tests/emitter/result_allowlist.py`'s
+    NOT-with-binary-operator entry;
+    `tests/emitter/test_acceptance_property.py`'s
+    `test_not_under_andnot_is_a_result_level_divergence` (the strict
+    proof: whoosh returns the positive side unchanged, tantivy computes
+    the correct empty subtraction) and its `_SEED_QUERIES` line.
