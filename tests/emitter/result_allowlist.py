@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import re
 
+from tests.differential.allowlist import DATE_FIELDS_PATTERN
 from tests.differential.allowlist import KEYWORD_FIELDS_PATTERN
 from tests.differential.allowlist import ZERO_TOKEN_WORD
 
@@ -254,6 +255,22 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
             " of any document's actual field value, for several distinct,"
             " only partially characterized bound shapes; every bracketed"
             " numeric range is treated as suspect rather than narrowed further"
+        ),
+    ),
+    # whoosh-bug (DIVERGENCES.md entry 45): a double-quoted separated-ISO
+    # date value. whoosh parses it to a Phrase that RAISES QueryError at
+    # search time (a DATETIME field has no positions), so there is no
+    # oracle result set to compare; whoosh-compat parses the correct
+    # day-period DateRange. Ordered before the entry-15 dashed-token
+    # pattern below, which would otherwise claim the spelling (its
+    # \w+-\w+ alternative matches the digits inside the quotes) under
+    # the wrong divergence.
+    (
+        re.compile(rf'\b(?:{DATE_FIELDS_PATTERN}):"\d{{4}}[-. /]\d[^"]*"'),
+        (
+            "whoosh-bug (DIVERGENCES.md entry 45): double-quoted"
+            " separated-ISO date parses to a search-time-crashing Phrase in"
+            " whoosh but a correct day/month-period DateRange in whoosh-compat"
         ),
     ),
     # DIVERGENCES.md entry 15 (design, confirmed result-level): a multitoken

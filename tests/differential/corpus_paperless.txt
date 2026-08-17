@@ -135,6 +135,10 @@ added:"previous quarter"
 created:2020-01-01
 created:2020-01
 created:'2020.01.01'
+# DIVERGENCES.md entry 45: the double-quoted sibling. whoosh's ErrorNode
+# fallback wraps a PhraseNode here, yielding a Phrase that crashes at
+# search time; whoosh-compat parses the correct day-period DateRange.
+created:"2020-01-01"
 
 # --- KNOWN DIVERGENCE (DIVERGENCES.md entry 6, structural not pattern-based): bad
 # date: test_differential.py skips on any non-empty diagnostics list.

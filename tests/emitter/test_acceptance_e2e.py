@@ -50,6 +50,7 @@ from whoosh.filedb.filestore import RamStorage
 from whoosh.index import Index as WhooshIndex
 from whoosh.lang.porter import stem as porter_stem
 from whoosh.qparser import QueryParser
+from whoosh.query import QueryError as WhooshQueryError
 from whoosh.support.charset import accent_map
 
 from tests.differential.oracle import oracle_schema
@@ -290,6 +291,29 @@ def test_exclusive_exact_date_range_is_a_documented_divergence(
     q_incl = "added:[now TO now]"
     assert whoosh_search_ids(windex, q_incl, instant, UTC) == [1]
     assert tantivy_search_ids(tindex, ereg, q_incl, basedate=instant, tz=utc) == [1]
+
+
+def test_double_quoted_iso_date_is_a_documented_divergence(
+    windex: WhooshIndex, tindex: TIndex, ereg: FieldRegistry
+) -> None:
+    """whoosh-bug (DIVERGENCES.md entry 45): a double-quoted separated-ISO
+    date parses in whoosh to Phrase('created', ['2019-06-01']) (the
+    ErrorNode fallback wrapping a PhraseNode), which raises QueryError at
+    search time because a DATETIME field has no positions: a v2 user
+    typing the quoted spelling got a hard error. whoosh-compat parses the
+    quoted value into the day-period DateRange and returns the document
+    the user meant (doc 2, created 2019-06-01).
+    """
+
+    q = 'created:"2019-06-01"'
+    with pytest.raises(WhooshQueryError, match="no positions"):
+        whoosh_search_ids(windex, q, BASE, BERLIN)
+    assert tantivy_search_ids(tindex, ereg, q) == [2]
+    # Control: the bare spelling works on both sides (entry 18's
+    # numerically-correct NumericRange fallback in whoosh).
+    q_bare = "created:2019-06-01"
+    assert whoosh_search_ids(windex, q_bare, BASE, BERLIN) == [2]
+    assert tantivy_search_ids(tindex, ereg, q_bare) == [2]
 
 
 def test_notes_user_json_subpath_has_no_v2_analogue(

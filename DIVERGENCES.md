@@ -1634,3 +1634,32 @@ parse-then-emit pipeline).
     `test_exclusive_exact_date_range_is_a_documented_divergence` (the
     executed result-level proof, whoosh matching the instant and tantivy
     matching nothing under identity tz conversion).
+
+45. **A double-quoted separated-ISO date value parses to a working
+    `DateRange`; real whoosh parses it to a `Phrase` that crashes the
+    search (whoosh-bug, not reproduced).** The double-quoted sibling cell
+    of entry 18's bare/single-quoted spellings, with a worse downstream:
+    for `created:"2020-01-01"`, whoosh's `DateParserPlugin.text_to_dt`
+    fails to fully parse the value (the same grammar-ordering limitation
+    entries 12 and 18 describe), and `ErrorNode.query()` falls back to
+    running the wrapped node's own `query()`. For the bare spelling that
+    wrapped node is a term (entry 18's numerically-correct
+    `NumericRange` via the field's self-parse); for the double-quoted
+    spelling it is a `PhraseNode`, whose fallback builds
+    `query.Phrase('created', ['2020-01-01'])`. That Phrase then RAISES at
+    search time (`whoosh.query.QueryError: Phrase search: 'created' field
+    has no positions`, measured against a live v2-schema index), so a v2
+    user typing the quoted spelling got a hard error, not results.
+    whoosh-compat's single grammar path parses the quoted value directly
+    into the day- or month-period `DateRange` (matching the precision the
+    user typed) and returns the documents the user meant.
+
+    Test references: `tests/differential/allowlist.py`'s
+    double-quoted-date entry; `tests/emitter/result_allowlist.py`'s
+    matching entry (ordered before the dashed-token entry-15 pattern so
+    the spelling cites this divergence, not the multitoken one);
+    `tests/differential/corpus_paperless.txt`'s `created:"2020-01-01"`
+    line; `tests/emitter/test_acceptance_e2e.py`'s
+    `test_double_quoted_iso_date_is_a_documented_divergence` (executed:
+    whoosh raises QueryError at search time, tantivy returns the matching
+    document).

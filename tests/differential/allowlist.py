@@ -426,12 +426,28 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # the bracketed-range corpus lines above (those are covered by the
     # broader "\[" entry regardless).
     (
-        re.compile(r"\b(?:created|modified|added):'?\d{4}[-. /]\d"),
+        re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):'?\d{{4}}[-. /]\d"),
         (
             "DIVERGENCES.md entry 18: bare separated-ISO date value parses"
             " correctly on both sides but via a different mechanism/AST"
             " shape (whoosh's ErrorNode-falls-back-to-field.parse_query vs"
             " whoosh-compat's single DateParserPlugin grammar path)"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
+    # whoosh-bug (DIVERGENCES.md entry 45): the double-quoted sibling of
+    # the entry-18 spellings. The ErrorNode fallback wraps a PhraseNode
+    # here, so whoosh parses query.Phrase('created', ['2020-01-01']),
+    # which raises QueryError at search time (a DATETIME field has no
+    # positions); whoosh-compat parses the quoted value into the correct
+    # day/month-period DateRange. Both sides parse cleanly, so the AST
+    # comparison is an ordinary MISMATCH (Phrase vs DateRange).
+    (
+        re.compile(rf'\b(?:{DATE_FIELDS_PATTERN}):"\d{{4}}[-. /]\d[^"]*"'),
+        (
+            "whoosh-bug (DIVERGENCES.md entry 45): double-quoted"
+            " separated-ISO date parses to a search-time-crashing Phrase in"
+            " whoosh but a correct day/month-period DateRange in whoosh-compat"
         ),
         DivergenceKind.MISMATCH,
     ),
