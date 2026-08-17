@@ -12,6 +12,8 @@ from dataclasses import field
 from enum import Enum
 from enum import auto
 from types import MappingProxyType
+from typing import Any
+from typing import cast
 
 # The character class of the fieldname tagger's expression
 # (parser/plugins.py's FieldsPlugin.expr, r"(?P<text>[\w.]+|[*]):"): the
@@ -210,6 +212,26 @@ class FieldSpec:
         # read-only snapshot, never the tuple sugar or the caller's own
         # mapping object.
         object.__setattr__(self, "subpaths", MappingProxyType(normalized))
+
+    # The mappingproxy stored above is not picklable and breaks the
+    # default slots-dataclass __reduce_ex__ path (pickle AND copy.deepcopy
+    # both route through it), so state is exported with subpaths as a
+    # plain dict and re-wrapped in a fresh read-only proxy on restore. The
+    # round-trip preserves both equality and the mutation protection.
+    # (dataclasses.asdict remains unsupported: it deep-copies field values
+    # directly, bypassing this hook entirely, and a bare mappingproxy
+    # cannot be deep-copied; nothing in this library or its known hosts
+    # calls asdict on a spec.)
+    def __getstate__(self) -> dict[str, Any]:
+        state = {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
+        state["subpaths"] = dict(cast("Mapping[str, SubpathSpec]", self.subpaths))
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        for name, value in state.items():
+            if name == "subpaths":
+                value = MappingProxyType(dict(value))
+            object.__setattr__(self, name, value)
 
 
 @dataclass(frozen=True, slots=True)

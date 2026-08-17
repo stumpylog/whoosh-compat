@@ -932,6 +932,42 @@ def test_subpaths_tuple_sugar_is_read_only_too() -> None:
         spec.subpaths["extra"] = SubpathSpec()  # type: ignore[index]
 
 
+def test_fieldspec_and_registry_pickle_and_deepcopy() -> None:
+    """The read-only subpaths snapshot (a mappingproxy) must not cost the
+    spec its copyability: a host passing a registry across process
+    boundaries (multiprocessing workers, caches) gets a TypeError from
+    pickle otherwise. The round-trip must preserve equality AND the
+    read-only protection (the restored subpaths is a fresh proxy, not a
+    caller-mutable dict).
+    """
+    import copy
+    import pickle
+
+    spec = FieldSpec(name="attrs", kind=FieldKind.JSON, subpaths=("user",), fast=True)
+    plain = FieldSpec(name="title", kind=FieldKind.TEXT)
+    reg = FieldRegistry([spec, plain])
+
+    for original in (spec, plain):
+        for restored in (pickle.loads(pickle.dumps(original)), copy.deepcopy(original)):
+            assert restored == original
+            assert restored.subpaths == original.subpaths
+            with pytest.raises(TypeError):
+                restored.subpaths["smuggled"] = SubpathSpec()  # type: ignore[index]
+
+    # Every pickle protocol, not just the default: slots dataclasses
+    # interact differently with older protocols.
+    for protocol in range(pickle.HIGHEST_PROTOCOL + 1):
+        restored_spec = pickle.loads(pickle.dumps(spec, protocol))
+        assert restored_spec == spec
+
+    reg2 = pickle.loads(pickle.dumps(reg))
+    ref = reg2.make_ref("attrs.user")
+    assert ref is not None
+    assert reg2.resolve(ref) is not None
+    reg3 = copy.deepcopy(reg)
+    assert reg3.make_ref("title") is not None
+
+
 def test_fieldspec_is_hashable() -> None:
     # frozen=True advertises value semantics; a frozen spec that blows up
     # in hash() the moment it carries subpaths is a trap for any future
