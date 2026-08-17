@@ -227,12 +227,39 @@ class ErrorLeaf(Node):
 
 
 def _dedupe(nodes: tuple[Node, ...]) -> tuple[Node, ...]:
-    """Remove duplicate nodes, preserving first-seen order."""
-    seen: set[Node] = set()
+    """Remove duplicate nodes, preserving first-seen order.
+
+    Duplicate means semantically interchangeable, which is ALMOST node
+    equality: ``Phrase.words`` is excluded from ``__eq__``/``__hash__``
+    (analysis provenance, like spans), but for a phrase it is genuinely
+    result-bearing, since the emitter builds the positional
+    ``phrase_query`` from ``words``, not ``text``. An analyzer whose
+    tokens contain spaces (shingle-style) can therefore produce two
+    equal-comparing phrases with different word tuples and different
+    match sets; real whoosh's own ``Phrase.__eq__`` compares the word
+    lists and keeps both. The ``analyzed`` flag is result-bearing the
+    same way, one cell over: an analyzed ``Term``/``Phrase`` and an
+    unanalyzed one with the same text compare equal, but the unanalyzed
+    sibling would still be tokenized (and possibly split or dropped) by
+    a later ``analyze()`` pass, so merging a mixed-flag pair silently
+    picks one of two different downstream meanings. Pipeline-produced
+    trees never mix flags (parse yields all-unanalyzed, analyze yields
+    all-analyzed), so that half only guards hand-built trees. The dedupe
+    key therefore extends node equality with ``(words, analyzed)``,
+    leaving the equality contract itself unchanged.
+    """
+    seen: set[tuple[Node, tuple[str, ...] | None, bool | None]] = set()
     result: list[Node] = []
     for n in nodes:
-        if n not in seen:
-            seen.add(n)
+        key: tuple[Node, tuple[str, ...] | None, bool | None]
+        if isinstance(n, Phrase):
+            key = (n, n.words, n.analyzed)
+        elif isinstance(n, Term):
+            key = (n, None, n.analyzed)
+        else:
+            key = (n, None, None)
+        if key not in seen:
+            seen.add(key)
             result.append(n)
     return tuple(result)
 

@@ -376,6 +376,37 @@ def test_andnot_group_wrapped_pre_existing_nothing_poisons_not_inverts() -> None
     assert analyze(node, REG) == analyze(normalize(node), REG)
 
 
+def test_distinct_phrase_tokenizations_survive_analysis_side_by_side() -> None:
+    # An analyzer whose tokens contain spaces (shingle-style) can tokenize
+    # two different phrase texts into DIFFERENT word tuples that join to
+    # the same string. The two phrases carry distinct positional
+    # constraints (the emitter builds phrase_query from words), and real
+    # whoosh keeps both in an Or (its Phrase.__eq__ compares word lists);
+    # analysis plus normalization must not dedupe one away.
+    shingles = FieldRegistry(
+        [
+            FieldSpec(
+                "sh",
+                FieldKind.TEXT,
+                analyzer=lambda t: [w.replace("-", " ") for w in t.split()],
+            )
+        ]
+    )
+    ref = FieldRef("sh")
+    tree = Or(
+        children=(
+            Phrase(field=ref, text="a-b c"),
+            Phrase(field=ref, text="a b-c"),
+        )
+    )
+    result = analyze(tree, shingles)
+    assert isinstance(result, Or)
+    words = sorted(
+        p.words for p in result.children if isinstance(p, Phrase) and p.words is not None
+    )
+    assert words == [("a", "b c"), ("a b", "c")]
+
+
 def test_aliased_node_context_follows_each_position() -> None:
     # One frozen Term object legitimately reused at two tree positions
     # (value semantics invite object sharing): each occurrence must

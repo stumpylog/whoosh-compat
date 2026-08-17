@@ -482,7 +482,19 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
         return ast.Require(scored=scored, filter_only=filter_only)
 
     if isinstance(q, wq.Phrase):
-        return ast.Phrase(field=_field_ref(q.fieldname), text=" ".join(q.words), slop=q.slop)
+        # Carry the oracle's own word list, not just the joined text:
+        # ast.normalize()'s duplicate-sibling dedupe keys on Phrase.words
+        # (two equal-comparing phrases with different word tuples have
+        # different positional match sets, and whoosh keeps both), so a
+        # words=None projection here would let the expected-side normalize
+        # dedupe phrases whoosh itself kept distinct, a false mismatch
+        # where whoosh-compat is the more faithful side.
+        return ast.Phrase(
+            field=_field_ref(q.fieldname),
+            text=" ".join(q.words),
+            words=tuple(q.words),
+            slop=q.slop,
+        )
 
     if isinstance(q, wq.Prefix):
         return ast.Prefix(field=_field_ref(q.fieldname), text=q.text)

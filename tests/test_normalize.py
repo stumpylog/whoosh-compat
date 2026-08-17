@@ -139,6 +139,52 @@ class TestRule5Dedupe:
         t = And(children=(T("b"), T("a"), T("b")))
         assert normalize(t) == And(children=(T("b"), T("a")))
 
+    def test_dedupe_keeps_analyzed_phrases_with_distinct_words(self) -> None:
+        # Phrase.words is excluded from equality/hashing (analysis
+        # provenance, like spans), so two analyzed phrases whose DIFFERENT
+        # token tuples space-join to the same text compare equal. Possible
+        # only with an analyzer whose tokens contain spaces (shingle-style,
+        # explicitly supported); the emitter builds the positional
+        # phrase_query from words, so deduping one away silently drops its
+        # distinct match set. Real whoosh compares the word lists and
+        # keeps both (measured); dedupe must key on words, not just
+        # node equality.
+        from whoosh_compat.ast import Phrase
+        from whoosh_compat.fields import FieldRef
+
+        p1 = Phrase(field=FieldRef("t"), text="a b c", words=("a b", "c"), analyzed=True)
+        p2 = Phrase(field=FieldRef("t"), text="a b c", words=("a", "b c"), analyzed=True)
+        assert p1 == p2  # the equality contract itself is unchanged
+        result = normalize(Or(children=(p1, p2)))
+        assert isinstance(result, Or)
+        assert len(result.children) == 2
+
+    def test_dedupe_keeps_mixed_analyzed_flag_terms(self) -> None:
+        # The analyzed flag's sibling cell: an analyzed Term and an
+        # unanalyzed one with the same multi-word text compare equal, but
+        # the unanalyzed one would still be tokenized (split into an
+        # And/Or of tokens) by a later analyze() pass, so merging the
+        # pair silently picks one of two different downstream meanings.
+        # Only reachable from a hand-built mixed-flag tree (the pipeline
+        # never mixes flags), which the AST contract permits.
+        from whoosh_compat.ast import Term as TermNode
+        from whoosh_compat.fields import FieldRef
+
+        t1 = TermNode(field=FieldRef("t"), text="foo bar", analyzed=True)
+        t2 = TermNode(field=FieldRef("t"), text="foo bar", analyzed=False)
+        assert t1 == t2
+        result = normalize(Or(children=(t1, t2)))
+        assert isinstance(result, Or)
+        assert len(result.children) == 2
+
+    def test_dedupe_still_merges_genuinely_identical_analyzed_phrases(self) -> None:
+        from whoosh_compat.ast import Phrase
+        from whoosh_compat.fields import FieldRef
+
+        p1 = Phrase(field=FieldRef("t"), text="a b", words=("a", "b"), analyzed=True)
+        p2 = Phrase(field=FieldRef("t"), text="a b", words=("a", "b"), analyzed=True)
+        assert normalize(Or(children=(p1, p2))) == p1
+
 
 # Rule 6: Every() absorption in Or, dropping in And.
 class TestRule6EveryAbsorption:

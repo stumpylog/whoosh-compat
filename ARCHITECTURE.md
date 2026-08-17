@@ -159,7 +159,16 @@ library's stability contract: emitters (present and future) depend only on
 explicitly, rather than a joined string an emitter would have to re-split),
 and are deliberately excluded from equality/hashing the same way
 `startchar`/`endchar` are, since they are analysis provenance, not
-independent semantic content.
+independent semantic content. One deliberate carve-out: the
+duplicate-sibling dedupe (shared by `normalize()` and `analyze()`'s group
+rebuild, which routes through the same `_dedupe`) keys on node equality
+*plus* `Phrase.words` and the `analyzed` flag, because both genuinely are
+result-bearing there: the emitter builds its positional `phrase_query`
+from `words` (a shingle-style analyzer whose tokens contain spaces can
+produce two equal-comparing phrases with different word tuples and
+different match sets; real whoosh's own `Phrase.__eq__` compares the word
+lists and keeps both), and an unanalyzed leaf, unlike its equal-comparing
+analyzed twin, would still be tokenized by a later `analyze()` pass.
 
 **`fields.py`**: `FieldKind` (TEXT, KEYWORD, U64, DATE, DATETIME,
 BOOLEAN_EXISTS, JSON), `Multitoken` (how multi-token field values combine:
