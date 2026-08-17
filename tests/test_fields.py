@@ -857,6 +857,58 @@ def test_validation_rejects_shadowing_of_alias_dotted_subpath_route(
     assert "user" in str(excinfo.value)
 
 
+@pytest.mark.parametrize(
+    "bad",
+    [
+        pytest.param("a-b", id="hyphen"),
+        pytest.param("a/b", id="slash"),
+        pytest.param("a b", id="space"),
+        pytest.param("a:b", id="colon"),
+        pytest.param('a"b', id="double-quote"),
+        pytest.param("*", id="bare-star"),
+    ],
+)
+@pytest.mark.parametrize("where", [pytest.param("name"), pytest.param("alias")])
+def test_validation_rejects_tagger_unreachable_names_and_aliases(where: str, bad: str) -> None:
+    """The subpath whitelist's sibling cells on the (name | alias |
+    subpath) axis: a canonical name or alias containing any character
+    outside the fieldname tagger's alphabet can never be typed in query
+    text, so every query addressing it silently degrades to default-field
+    text noise with no diagnostic. Rejected eagerly, same as subpaths.
+    (Such a field would still resolve through make_ref for
+    default_fields/field_boosts purposes, but a field that can only ever
+    be addressed through host configuration and never through query text
+    is a misconfiguration trap, not a feature.)
+    """
+    if where == "name":
+        spec = FieldSpec(name=bad, kind=FieldKind.TEXT)
+    else:
+        spec = FieldSpec(name="ok", kind=FieldKind.TEXT, aliases=(bad,))
+    with pytest.raises(ValueError, match="tagger"):
+        FieldRegistry([spec])
+
+
+@pytest.mark.parametrize(
+    "good",
+    [
+        pytest.param("plain", id="plain-word"),
+        pytest.param("with_underscore", id="underscore"),
+        pytest.param("digits123", id="digits"),
+        pytest.param("field.with.dots", id="dotted-plain-name"),
+    ],
+)
+def test_validation_accepts_tagger_reachable_names(good: str) -> None:
+    # Controls, including the deliberately supported dotted PLAIN field
+    # name: make_ref tries an exact match before any dotted-subpath split
+    # (see fields.py's dotted-JSON-name validation comment and
+    # tests/emitter/test_emit_terms.py's dotted-plain-field tests), so
+    # such a name resolves directly; only JSON-kind names reject dots, a
+    # separate check. DIVERGENCES.md entry 14 documents the adjacent
+    # dot-inclusive tagger behavior.
+    reg = FieldRegistry([FieldSpec(name=good, kind=FieldKind.TEXT)])
+    assert reg.make_ref(good) is not None
+
+
 def test_subpaths_mapping_is_snapshotted_and_read_only() -> None:
     """The stored subpaths must be a defensive, read-only snapshot: a host
     that keeps a reference to the mapping it passed in must not be able to

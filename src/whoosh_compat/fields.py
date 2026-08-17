@@ -15,9 +15,10 @@ from types import MappingProxyType
 
 # The character class of the fieldname tagger's expression
 # (parser/plugins.py's FieldsPlugin.expr, r"(?P<text>[\w.]+|[*]):"): the
-# alphabet a registered JSON subpath must stay inside to be addressable
-# from query text at all. See FieldRegistry.__init__'s subpath validation.
-_TAGGER_REACHABLE_SUBPATH = re.compile(r"[\w.]+")
+# alphabet a registered canonical name, alias, or JSON subpath must stay
+# inside to be addressable from query text at all. See
+# FieldRegistry.__init__'s name/alias and subpath validation.
+_TAGGER_REACHABLE = re.compile(r"[\w.]+")
 
 
 class FieldKind(Enum):
@@ -309,7 +310,7 @@ class FieldRegistry:
                             f"Field '{spec.name}': a JSON field's subpath must not be "
                             f"empty (no query text can ever address it)"
                         )
-                    if not _TAGGER_REACHABLE_SUBPATH.fullmatch(subpath):
+                    if not _TAGGER_REACHABLE.fullmatch(subpath):
                         raise ValueError(
                             f"Field '{spec.name}': subpath '{subpath}' contains a "
                             f"character the fieldname tagger can never produce "
@@ -332,14 +333,33 @@ class FieldRegistry:
             if spec.kind == FieldKind.BOOLEAN_EXISTS and spec.exists_target is None:
                 raise ValueError(f"Field '{spec.name}': BOOLEAN_EXISTS requires exists_target")
 
-            # Validate: canonical name and aliases must be non-empty. An
-            # empty name can never be typed in a query.
+            # Validate: canonical name and aliases must be non-empty and
+            # addressable through the fieldname tagger, the same whitelist
+            # the subpath validation below applies (an empty name, or one
+            # containing any character outside the tagger's [\w.] alphabet,
+            # can never be typed in a query: every query addressing it
+            # would silently degrade to default-field text noise with no
+            # diagnostic). A name reachable only through default_fields/
+            # field_boosts configuration but never query text is a trap,
+            # not a feature, so the rejection is unconditional.
             if spec.name == "":
                 raise ValueError("Field name must not be empty")
+            if not _TAGGER_REACHABLE.fullmatch(spec.name):
+                raise ValueError(
+                    f"Field '{spec.name}': name contains a character the fieldname "
+                    f"tagger can never produce (only word characters and '.' are "
+                    f"addressable from query text)"
+                )
             seen_aliases: set[str] = set()
             for alias in spec.aliases:
                 if alias == "":
                     raise ValueError(f"Field '{spec.name}': alias must not be empty")
+                if not _TAGGER_REACHABLE.fullmatch(alias):
+                    raise ValueError(
+                        f"Field '{spec.name}': alias '{alias}' contains a character "
+                        f"the fieldname tagger can never produce (only word "
+                        f"characters and '.' are addressable from query text)"
+                    )
                 if alias in seen_aliases:
                     raise ValueError(
                         f"Field '{spec.name}': alias '{alias}' is repeated within this spec"

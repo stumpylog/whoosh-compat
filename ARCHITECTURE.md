@@ -196,7 +196,10 @@ stored on a constructed instance, and read everywhere else in the library
 validates the mapping's keys: an empty subpath string, a subpath containing
 whitespace, `:`, or `"` (or any other character outside the fieldname tagger's
 expression, `r"(?P<text>[\w.]+|[*]):"`, which can only ever produce word
-characters and dots), and a registered canonical name or alias that exactly
+characters and dots; the same whitelist applies to every canonical name
+and alias, since a field no query text can address is a misconfiguration
+trap regardless of which part of the dotted route carries the bad
+character), and a registered canonical name or alias that exactly
 matches `<jsonfield>.<subpath>` for a registered subpath, where
 `<jsonfield>` is the JSON field's canonical name or any of its aliases
 (each alias makes `<alias>.<subpath>:` a supported query route too, and a
