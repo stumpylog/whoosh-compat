@@ -26,7 +26,7 @@ def test_term(tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.No
 def test_emit_has_no_schema_parameter(
     tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
 ) -> None:
-    # issue #27: schema is recoverable from index.schema, so every call site
+    # schema is recoverable from index.schema, so every call site
     # could pass a value that could be derived (and could pass an
     # inconsistent pair); dropped from the public signature.
     node = parse("content:invoice")
@@ -53,7 +53,7 @@ def test_u64(tindex: TIndex, ereg: FieldRegistry) -> None:
 def test_u64_term_non_numeric_text_raises_query_emit_error(
     tindex: TIndex, ereg: FieldRegistry
 ) -> None:
-    # issue #24: parsed input can't reach this (term_query diagnoses a bad
+    # Hand-built-AST backstop: parsed input can't reach this (term_query diagnoses a bad
     # U64 value at parse time), but a hand-built ast.Term can. visit_phrase's
     # U64 branch already wrapped int(); visit_term's didn't.
     node = ast.Term(field=FieldRef("asn"), text="notanumber")
@@ -62,7 +62,7 @@ def test_u64_term_non_numeric_text_raises_query_emit_error(
 
 
 def test_date_kind_term_raises_unsupported_query_error(tindex: TIndex, ereg: FieldRegistry) -> None:
-    # issue #24: DATE/DATETIME term emission was never implemented (the
+    # DATE/DATETIME term emission was never implemented (the
     # parser always converts these via DateParserPlugin first), but a
     # hand-built ast.Term addressing a DATE field bypasses that; it used to
     # raise a bare NotImplementedError.

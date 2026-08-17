@@ -185,12 +185,14 @@ stored on a constructed instance, and read everywhere else in the library
 `make_ref`'s `subpath in spec.subpaths`, the JSON-path-support probe in
 `emitters/tantivy_.py`), is always the mapping. `FieldRegistry.__init__`
 validates the mapping's keys: an empty subpath string, a subpath containing
-whitespace, `:`, or `"` (none of which the fieldname tagger's expression,
-`r"(?P<text>[\w.]+|[*]):"`, can ever produce), and a registered canonical
-name or alias that exactly matches `<jsonfield>.<subpath>` for a registered
-subpath (which would permanently shadow it under `make_ref`'s
-exact-match-first rule) are all rejected at construction, regardless of
-registration order.
+whitespace, `:`, or `"` (or any other character outside the fieldname tagger's
+expression, `r"(?P<text>[\w.]+|[*]):"`, which can only ever produce word
+characters and dots), and a registered canonical name or alias that exactly
+matches `<jsonfield>.<subpath>` for a registered subpath, where
+`<jsonfield>` is the JSON field's canonical name or any of its aliases
+(each alias makes `<alias>.<subpath>:` a supported query route too, and a
+collision would permanently shadow it under `make_ref`'s exact-match-first
+rule) are all rejected at construction, regardless of registration order.
 
 Every AST leaf that carries a field (`Term`, `Phrase`, `Prefix`, `Wildcard`,
 `TermRange`, `NumericRange`, `DateRange`, `Every`) holds a `FieldRef`, not a
@@ -240,10 +242,13 @@ programmatically" (the JSON-subpath carve-out, §5).
 
 **Errors/diagnostics flow (`errors.py`)**: `Diagnostic(message, kind,
 startchar, endchar, field, raw_value)` is a plain data record; `DiagnosticKind`
-currently has `BAD_DATE`/`BAD_NUMBER`/`TOO_DEEP`/`UNKNOWN`. `field` and `raw_value`
+currently has `BAD_DATE`/`BAD_NUMBER`/`TOO_DEEP`/`UNSUPPORTED_PATTERN`
+(`errors.py` is the authority; hosts branching exhaustively on the kind
+should read the enum itself). `field` and `raw_value`
 default to `None` and are populated wherever a `Diagnostic` is constructed
 against a known field (`DateParserPlugin._error()` in `dateparse.py`, and
-both `BAD_NUMBER` sites in `default.py`'s `QueryParser`): `field` is a
+both `BAD_NUMBER` sites plus the `UNSUPPORTED_PATTERN` site
+(`_wildcard_kind_diagnostic`) in `default.py`'s `QueryParser`): `field` is a
 `FieldRef` naming the field the diagnostic concerns (always the canonical
 name, since a `Diagnostic` is only ever built once a field has resolved to
 a spec), `raw_value` is the offending text as the user typed it. A host
@@ -432,6 +437,15 @@ parse-time cap to rely on, and previously cost two stack frames per nesting
 level on top of whatever the parser itself had already used, roughly
 halving the tolerated depth versus the raw parse.
 
+The cap bounds recursion depth, not CPU time: parse time is still
+quadratic in the length of a long unmatched word-character run (the
+fieldname tagger's regex scans to end-of-input at each successive tag
+position), measured at ~6s for a 40KB pathological query and byte-identical
+with real whoosh's own timing. That cost is inherited deliberately (a
+rewritten tagger regex would risk parity for a purely adversarial input
+shape); the README's host-contract section tells hosts to cap query length
+at their own boundary instead.
+
 **Spans are preserved through `normalize()`, not just set at parse time.**
 Every `Node` carries an optional `startchar`/`endchar` (character offsets
 into the original query string), attached by the parser (`parser/common.py`'s
@@ -456,6 +470,16 @@ that child's own span alone rather than widening it to the parent's. This
 makes spans usable as a genuine subtree-to-source-text mapping on the
 post-`normalize()`, post-`parse()` public tree, not just on the raw
 pre-normalize parser output.
+
+One known caveat, inherited verbatim from the forked whoosh code and
+confirmed identical in the pinned oracle: a `Wildcard`/`Prefix` leaf's
+span covers only the wildcard *marker* character, not the merged pattern
+(`inv*` yields `Prefix(startchar=3, endchar=4)`, just the `*`), because
+`WildcardPlugin.do_wildcards` concatenates adjacent text nodes' text into
+the wildcard node without ever widening its char range. A host using
+spans for error highlighting should expect single-character spans for
+these two leaf types (and for the `UNSUPPORTED_PATTERN` diagnostics built
+from them; their `raw_value` does carry the full pattern as typed).
 
 ## 5. Extension points
 

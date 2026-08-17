@@ -1,4 +1,4 @@
-"""``emit()`` always normalizes its input first (issue #36).
+"""``emit()`` always normalizes its input first.
 
 Before this contract, ``emit(t)`` and ``emit(normalize(t))`` could return
 different matched-document sets for hand-built trees containing literal

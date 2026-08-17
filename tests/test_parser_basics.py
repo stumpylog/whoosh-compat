@@ -162,7 +162,7 @@ def test_dangling_minus_tolerated(reg: FieldRegistry) -> None:
     assert isinstance(t, ast.And)
 
 
-# -- empty groups (issue #10): dropped at parse time, never entering the
+# -- empty groups: dropped at parse time, never entering the
 # -- tree, rather than becoming a live Nothing() that then propagates -------
 
 
@@ -218,7 +218,7 @@ def test_consecutive_bare_nots_parse_instead_of_raising(
     assert res.ast == expected
 
 
-# -- pathological parenthesis nesting (issue #31): parsing never raises for
+# -- pathological parenthesis nesting: parsing never raises for
 # -- query input, even input that would blow the interpreter's recursion
 # -- limit if the parser and normalize() traversed it recursively. A query
 # -- past the nesting cap gets a diagnostic instead of a RecursionError.

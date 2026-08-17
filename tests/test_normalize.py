@@ -186,7 +186,7 @@ class TestRule8BoostOneStrips:
 # deeper than anything the parser's own nesting cap would ever allow through
 # (that cap only bounds *parenthesization* depth reached via parse(), see
 # tests/test_parser_basics.py), so this exercises the traversal mechanism
-# itself, independent of the parse-time cap (issue #31).
+# itself, independent of the parse-time cap.
 class TestIterativeNormalizeDeepTree:
     def test_deep_not_chain_does_not_raise_recursion_error(self) -> None:
         depth = 5000

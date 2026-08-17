@@ -219,7 +219,7 @@ def test_boolean_exists_quoted_truthiness_shapes(
     assert search_ids(tindex[0], q) == expected
 
 
-# -- exists checks on a fast JSON field (issue #7) --------------------------
+# -- exists checks on a fast JSON field --------------------------
 #
 # A JSON fast field's subpath columns are only checked by exists_query when
 # json_subpaths=True is passed; the default silently checks nothing, so a
@@ -412,7 +412,7 @@ def test_every_field_on_the_boolean_exists_field_itself(
     # "existence" only ever makes sense via its exists_target). visit_term's
     # BOOLEAN_EXISTS branch already redirects through exists_target;
     # visit_every needs the same redirect for a bare field:* on the
-    # BOOLEAN_EXISTS field itself, issue #16's "matches the unquoted form"
+    # BOOLEAN_EXISTS field itself, the "matches the unquoted form"
     # comparison exposed the gap.
     every_q = emit_ast(ast.Every(field=FieldRef("has_tag")), tindex, ereg)
     boolean_exists_q = emit_ast(ast.Term(field=FieldRef("has_tag"), text=True), tindex, ereg)
@@ -452,7 +452,7 @@ def test_boosted(tindex: TIndex, ereg: FieldRegistry) -> None:
 def test_boosted_bad_boost_type_raises_query_emit_error(
     tindex: TIndex, ereg: FieldRegistry
 ) -> None:
-    # issue #24: a safety-net case, not one of the individually-fixed
+    # A safety-net case, not one of the individually-fixed
     # branches: tantivy.Query.boost_query itself raises a bare TypeError
     # for a non-numeric boost (only reachable via a hand-built AST; the
     # parser's own BoostPlugin only ever produces a float). Caught by
@@ -613,7 +613,7 @@ def test_non_text_term_as_direct_group_child(tindex: TIndex, ereg: FieldRegistry
     assert search_ids(tindex[0], q) == [1]
 
 
-# -- issue #6: emit time must not be exponential in nesting depth for
+# -- emit time must not be exponential in nesting depth for
 # -- alternating boolean groups. _group_child used to decide whether a
 # -- nested group drops by fully *emitting* its children (discarding the
 # -- result) and then emitting the whole subtree again if it survives, so
@@ -626,7 +626,7 @@ def _alternating_drop_tree(depth: int) -> ast.Node:
     """Alternating And/Or, `depth` levels deep: each level's first child is
     a zero-token term ("the", dropped by _stopword_analyzer below) and the
     second child is the next level down, bottoming out in a real, surviving
-    term. Matches issue #6's repro shape exactly.
+    term. Matches the original exponential-blowup repro shape exactly.
     """
     node: ast.Node = ast.Term(field=FieldRef("content"), text="invoice")
     for i in range(depth):

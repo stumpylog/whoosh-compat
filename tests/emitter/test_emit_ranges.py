@@ -198,7 +198,7 @@ def test_range_open_on_both_sides_means_field_exists(tindex: TIndex, ereg: Field
     assert search_ids(tindex[0], q) == [1, 2, 3, 4, 5]
 
 
-# -- issue #24: a hand-built (not just parsed) AST node with a bad bound
+# -- a hand-built (not just parsed) AST node with a bad bound
 # -- must never let a raw exception escape emit(); parsed input can't reach
 # -- these shapes (the parser always diagnoses a bad numeric bound), but a
 # -- host constructing ast.NumericRange/ast.DateRange directly can.

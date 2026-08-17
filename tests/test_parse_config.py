@@ -1,4 +1,4 @@
-"""Host-configuration validation at parse() entry (issue #20).
+"""Host-configuration validation at parse() entry.
 
 The registry's own philosophy is that a misconfiguration raises at
 construction, not at query time; these tests cover the same bar applied to
@@ -27,7 +27,7 @@ def test_unknown_default_field_raises(reg: FieldRegistry) -> None:
 def test_alias_default_field_is_accepted(reg: FieldRegistry) -> None:
     # An alias is a valid designation, not a host bug: it already resolves
     # correctly downstream (term_query -> field_ref -> make_ref), so this is
-    # not one of the cases issue #20 asks parse() to reject.
+    # not one of the cases parse()'s config validation rejects.
     r = wc.parse("hello", registry=reg, default_fields=["type"])
     assert r.ast == ast.Term(field=FieldRef("document_type"), text="hello")
 

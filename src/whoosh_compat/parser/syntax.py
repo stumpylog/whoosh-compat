@@ -283,7 +283,7 @@ class GroupNode(SyntaxNode):
             # normalize()'s And/Not algebra (an empty group inside `foo ()`
             # would annihilate the whole And, and `NOT ()` would normalize
             # to Every()), which is not what whoosh does: whoosh drops an
-            # empty group from the tree entirely (issue #10).
+            # empty group from the tree entirely.
             return None
 
         q: ast.Node = self._build(tuple(subs))

@@ -246,7 +246,7 @@ def test_json_subpath_exists_fast_field_scoped_to_subpath(
     qs: str,
     expected: list[int],
 ) -> None:
-    # issue #29: a fast JSON field's `field.subpath:*` must check only that
+    # Subpath-aware existence: a fast JSON field's `field.subpath:*` must check only that
     # subpath's own fast column, not "does any subpath of this field have a
     # value". Doc 5 has attrs.user but no attrs.note, so the two subpaths
     # must emit genuinely different (not byte-identical) queries and
@@ -274,7 +274,7 @@ def test_json_subpath_exists_whole_field_control_unchanged(
 def test_json_subpath_exists_nonfast_raises_naming_dotted_form(
     tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
 ) -> None:
-    # issue #29's second symptom: a non-fast JSON field has no way to answer
+    # Second symptom of the same gap: a non-fast JSON field has no way to answer
     # "exists" for a subpath, but the error message must name the
     # subpath-qualified form the user actually typed ("notes.user:*"), not
     # the bare field name ("notes:*"), which is not reachable syntax at all.
@@ -284,7 +284,7 @@ def test_json_subpath_exists_nonfast_raises_naming_dotted_form(
 
 
 def test_json_subpath_exists_multilevel_fast_field(tindex: TIndex) -> None:
-    # issue #29 explicitly calls out verifying multi-level subpaths
+    # Multi-level subpaths deserve explicit verification
     # (a.b.c), not just single-level, against a real tantivy index.
     sb = tantivy.SchemaBuilder()
     sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
@@ -325,7 +325,7 @@ def test_json_subpath_unknown_subpath_falls_back_to_plain_field(
     assert node == ast.Term(field=FieldRef("content"), text="notes.bogus:alice")
 
 
-# -- issue #34: a quoted phrase on a JSON subpath must map whoosh slop and
+# -- a quoted phrase on a JSON subpath must map whoosh slop and
 # -- ignore Multitoken exactly like a plain-field Phrase does, on both the
 # -- parse_query fallback branch and the (not-yet-shipped) term_query/
 # -- phrase_query "supported" branch. -----------------------------------

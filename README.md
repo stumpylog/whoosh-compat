@@ -121,6 +121,18 @@ differently. A future informational-only signal (for example, reporting
 that a zero-token term was silently dropped during analysis) would use a
 separate channel, never `ParseResult.diagnostics`.
 
+**Cap query length at the host boundary.** Parse time is quadratic in the
+length of a long run of word characters containing no `:` (the fieldname
+tagger's regex, `[\w.]+:`, scans toward end-of-input and fails at each
+successive position). Measured: a 40KB pathological query takes ~6
+seconds, 60KB ~14 seconds, ~4x per doubling. This is exact parity with
+real whoosh (byte-identical timings against the pinned oracle), inherited
+deliberately rather than fixed with a rewritten tagger regex whose subtle
+behavior differences would risk parity. The parser's own nesting-depth cap
+bounds recursion, not CPU time, so a host accepting untrusted query
+strings should enforce its own length limit (a few KB comfortably covers
+any human-written query) before calling `parse()`.
+
 ## Supported query syntax
 
 Parity target is **Whoosh's intended grammar**, not every Whoosh plugin.

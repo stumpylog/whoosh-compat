@@ -103,7 +103,7 @@ def test_notgroup() -> None:
 
 
 def test_empty_group_query_is_none() -> None:
-    # An empty group contributes nothing (issue #10): the caller drops it
+    # An empty group contributes nothing: the caller drops it
     # from an enclosing And/Or's subs exactly as if it had never been
     # typed, rather than building a live ast.Nothing() that would then
     # propagate through normalize()'s And/Not algebra.
@@ -581,7 +581,7 @@ def test_groupnode_node_after_last_element_returns_none() -> None:
 # --- BinaryGroup / Wrapper edge branches -----------------------------------
 #
 # A missing operand (both here via a stub, or in practice via an empty
-# group, issue #10) becomes an explicit ast.Nothing() rather than falling
+# group) becomes an explicit ast.Nothing() rather than falling
 # back to the other operand: ast.normalize() already implements each
 # node type's own real-whoosh null-operand rule (AndNot/AndMaybe: a null ->
 # Nothing, b null -> a; Require: either null -> Nothing), so query() builds

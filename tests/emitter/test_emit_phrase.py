@@ -147,7 +147,7 @@ def test_phrase_misses_across_index_time_position_gap(slop: int, expected: list[
 
 # -- DIVERGENCES.md entry 26: slop-1 transposition over-match ---------------
 #
-# Pins the boundary the issue #18 decision measured against the pinned
+# Pins the boundary the slop-mapping decision measured against the pinned
 # whoosh oracle: the reversed pair "two one" against query phrase
 # "one two". Real whoosh's SpanNear2 matcher is ordered=True and never
 # matches a reversed pair at any slop; tantivy's slop is an unordered total
@@ -194,7 +194,7 @@ def test_phrase_reversed_pair_slop_boundary(slop: int, expected: list[int]) -> N
     assert search_ids(index, q) == expected
 
 
-# -- issue #8: quoted (Phrase) values on non-TEXT/JSON fields need the same
+# -- quoted (Phrase) values on non-TEXT/JSON fields need the same
 # -- field-kind dispatch visit_term already has, so no raw ValueError from
 # -- tantivy-py's type-mismatched term_query/phrase_query escapes emit(). ---
 
@@ -216,7 +216,7 @@ def test_phrase_on_u64_field_bad_number_raises_query_emit_error(
         emit_ast(node, tindex, ereg)
 
 
-# -- issue #9 (reopened): parsed input can never carry an out-of-domain u64
+# -- u64 domain: parsed input can never carry an out-of-domain u64
 # -- value into a Phrase anymore (see tests/test_parser_fields.py), but a
 # -- hand-built ast.Phrase bypasses the parser entirely, so visit_phrase's
 # -- U64 branch needs its own domain check as a backstop, same as the
@@ -251,7 +251,7 @@ def test_phrase_on_u64_field_boundary_values_still_emit(
     assert isinstance(q, tantivy.Query)
 
 
-# issue #16: a quoted star on U64/BOOLEAN_EXISTS is an existence match. A
+# Quoted-star existence: a quoted star on U64/BOOLEAN_EXISTS is an existence match. A
 # *double*-quoted star stays an ast.Phrase at parse time (see
 # tests/test_parser_fields.py), so its equivalence to the unquoted form is
 # proven here, at emit/search-result level.
@@ -320,7 +320,7 @@ def test_phrase_on_bare_json_field_raises_query_emit_error(
 def test_date_kind_phrase_raises_unsupported_query_error(
     tindex: TIndex, ereg: FieldRegistry
 ) -> None:
-    # issue #24: same NotImplementedError -> UnsupportedQueryError fix as
+    # Same NotImplementedError -> UnsupportedQueryError fix as
     # visit_term's DATE/DATETIME fallback.
     node = ast.Phrase(field=FieldRef("created"), text="2020-01-01", slop=1)
     with pytest.raises(UnsupportedQueryError, match="DATE"):

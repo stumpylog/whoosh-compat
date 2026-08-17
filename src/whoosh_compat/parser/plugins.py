@@ -366,7 +366,7 @@ class GroupPlugin(Plugin):
         ``overflow_depth`` instead of pushing/popping ``stack``) and
         collapsed into a single diagnostic leaf instead of being
         materialized into real hierarchy that every later stage would have
-        to recurse through (issue #31).
+        to recurse through.
         """
 
         ob, cb = self.OpenBracket, self.CloseBracket
@@ -493,10 +493,10 @@ class FieldsPlugin(Plugin):
         recognized field prefix rather than being demoted to text.
 
         A plain registry hit (``node.fieldname in registry``) always
-        counts. Otherwise, a bare JSON field name (issue #11's demotion
+        counts. Otherwise, a bare JSON field name (the demotion
         target) gets one narrow carve-out: a lone, unquoted ``*``
         immediately after it is not a term/pattern to demote, it's the
-        existence-check special case (issue #16) that
+        existence-check special case that
         ``QueryParser.wildcard_query`` already turns into
         :class:`~whoosh_compat.ast.Every` for a *recognized* field
         (``text == "*"``, the same check ``WildcardPlugin`` and
@@ -600,11 +600,11 @@ class PhrasePlugin(Plugin):
             ):
                 # A double-quoted value on a U64 field still needs the same
                 # parse-time domain diagnosis the bare/single-quoted/range
-                # spellings get (issue #9, reopened): without this, a value
+                # spellings get: without this, a value
                 # that reaches here as a Phrase (raw text, never coerced)
                 # sailed through with zero diagnostics and only failed at
                 # emit time. ("*" is exempt: it is an existence-match
-                # special case handled entirely at emit time, see issue #16.)
+                # special case handled entirely at emit time.)
                 assert ref is not None  # resolve() only returns non-None for a resolved ref
                 _, err = parser._parse_u64(self.text, ref, self.startchar, self.endchar)
                 if err is not None:
