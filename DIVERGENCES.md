@@ -1162,11 +1162,13 @@ parse-then-emit pipeline).
     parser must agree with whatever the parser would have produced for the
     same text (a pre-existing invariant, not new here).
 
-    A quoted *empty* value (`has_tag:''`) is not part of this divergence:
-    stripping an empty string still yields an empty string, and an
-    empty-after-strip value is now explicitly treated as falsy on both
-    sides of whoosh-compat, which agrees with real whoosh's own
-    `bool("")` fallthrough (also False). Before this, whoosh-compat's rule
+    A quoted *literally empty* value (`has_tag:''`) is not part of this
+    divergence: whoosh's `bool("")` fallthrough is False, agreeing with
+    whoosh-compat's empty-after-strip falsy rule. A quoted
+    *whitespace-only* value (`has_tag:'  '`) IS part of it: whoosh never
+    strips, so its fallthrough sees `bool('  ')`, True, while
+    whoosh-compat strips down to the empty string, False; the allowlist
+    regexes (both layers) cover that spelling alongside the padded ones. Before this, whoosh-compat's rule
     read `has_tag:''` as True (empty string is `not in` the falses tuple),
     which was a genuine bug, not an intended divergence; it is now fixed
     and compared normally against the oracle rather than allowlisted.

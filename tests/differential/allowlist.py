@@ -183,6 +183,46 @@ TEXT_FIELDS_PATTERN = "|".join(
     )
 )
 
+# Every registered BOOLEAN_EXISTS field name (and alias): the entry-33
+# domain. Same no-drift derivation rationale as above (has_path was once
+# missing from a hand-written list of these).
+BOOL_EXISTS_FIELDS_PATTERN = "|".join(
+    re.escape(name)
+    for name in sorted(
+        (
+            name
+            for spec in ORACLE_REGISTRY
+            if spec.kind is FieldKind.BOOLEAN_EXISTS
+            for name in (spec.name, *spec.aliases)
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+
+# Every registered NON-JSON field name and alias, for the unknown-field
+# exclusion lookahead (a name in this set is KNOWN, so the unknown-field
+# demotion mechanism cannot apply to it). JSON-kind names are deliberately
+# NOT excluded: a bare JSON field name (attrs:foo) demotes to text exactly
+# like an unknown field on both sides, which is entry 15's documented
+# second trigger pathway and must stay claimable by this alternative.
+# is_shared is appended at the use site: it is deliberately unregistered
+# (entry 42) but has its own dedicated entry, which must claim it instead
+# of the unknown-field alternative.
+REGISTERED_FIELDS_PATTERN = "|".join(
+    re.escape(name)
+    for name in sorted(
+        (
+            name
+            for spec in ORACLE_REGISTRY
+            if spec.kind is not FieldKind.JSON
+            for name in (spec.name, *spec.aliases)
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+
 # Every registered KEYWORD field name (and alias), for excluding them from
 # zero-token-word entries: whoosh's KEYWORD analyzer only splits on commas,
 # with no stopword/minsize filtering, so a stopword-shaped KEYWORD value is
@@ -274,11 +314,23 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # (the strict-xfail still fires either way; the point is citing the
     # divergence the query actually exhibits).
     (
-        # The uppercase must belong to a bound, not the range's own "TO"
-        # separator: an uppercase letter neither preceded by another
-        # uppercase (the O of a standalone "TO") nor starting a standalone
-        # "TO" token (its T).
-        re.compile(r"\w+:[\[{][^\]}]*(?<![A-Z])(?!TO\b)[A-Z][^\]}]*[\]}]"),
+        # Requires a real separator token (a bracketed non-range token
+        # like title:[ABC] parses as an ordinary term on both sides and
+        # must not be claimed): a case-insensitive to-token, since whoosh
+        # recognizes to/To/tO as the separator too (measured), delimited
+        # by whitespace or a bracket on each side, since open-ended
+        # spellings put the separator against a bracket ([A TO], [to B]).
+        # Excludes date fields (their bracketed ranges parse to DateRange
+        # nodes on both sides and belong to entries 12/44), and hunts the
+        # uppercase in the text on either side of the separator, so a
+        # bound whose only uppercase is a TO-shaped run (bTO, aTO) is
+        # claimed too.
+        re.compile(
+            rf"\b(?!(?:{DATE_FIELDS_PATTERN}):)\w+:[\[{{]"
+            r"(?:[^\]}]*[A-Z][^\]}]*(?<=\s)(?i:TO)(?=[\s\]}])"
+            r"|[^\]}]*(?<=[\s\[{])(?i:TO)(?=[\s\]}])[^\]}]*[A-Z])"
+            r"[^\]}]*[\]}]"
+        ),
         (
             "DIVERGENCES.md entry 43: whoosh case-folds TermRange bounds into"
             " the AST (analyzer chain with tokenize=False per bound);"
@@ -288,7 +340,15 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         DivergenceKind.MISMATCH,
     ),
     (
-        re.compile(r"\b(?:\w+:)?(?=[^\s()\"']*[A-Z])(?=[^\s()\"']*[*?])[^\s()\"']+(?=[\s()]|$)"),
+        # Second alternative: a fielded pattern token directly abutting a
+        # quote (title:Foo*'x', merged into one Wildcard by both parsers).
+        # Anchored on the colon so quoted-phrase CONTENT (title:"Foo Bar?",
+        # where the colon is followed by the quote, not the token) still
+        # cannot match.
+        re.compile(
+            r"\b(?:\w+:)?(?=[^\s()\"']*[A-Z])(?=[^\s()\"']*[*?])[^\s()\"']+(?=[\s()]|$)"
+            r"|\b\w+:(?=[^\s()\"']*[A-Z])(?=[^\s()\"']*[*?])[^\s()\"']+(?=[\"'])"
+        ),
         (
             "DIVERGENCES.md entry 2: wildcard/prefix pattern case is folded into"
             " the AST by whoosh (LowercaseFilter runs even with tokenize=False)"
@@ -534,7 +594,7 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # trailing-star fold like "abc*" (neither of those has a "*" bounded by
     # whitespace/parens/start-end on both sides).
     (
-        re.compile(r"(?:^|(?<=[\s(:]))\*(?=$|[\s)])"),
+        re.compile(r"(?:^|(?<=[\s(:]))\*(?:\^[\d.]+)?(?=$|[\s)])"),
         (
             "DIVERGENCES.md entry 20: bare field:* (or unfielded *) simplifies to"
             " Every(field) in whoosh-compat vs a literal Wildcard('*') in whoosh"
@@ -566,7 +626,7 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         # root cause (real whoosh's SPECIAL_CHARS/fold-check omitting "[")
         # applies identically whether or not the pattern is fielded, and
         # verified directly against the oracle both ways.
-        re.compile(r"\b(?:\w+:)?[^\s()]*\[[^\]]*\]\*(?:\s|$|\))"),
+        re.compile(r"\b(?:\w+:)?[^\s()]*\[[^\]]*\]\*(?:\^[\d.]+)?(?:\s|$|\))"),
         "whoosh-bug (DIVERGENCES.md entry 13): Wildcard.normalize() bracket fold drops the character class on a trailing-star pattern",
         DivergenceKind.MISMATCH,
     ),
@@ -585,6 +645,12 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # as entry 23. Scoped to a NOT directly wrapping a single known-
     # zero-token-word value on any field (the ZERO_TOKEN_WORD fragment,
     # derived from whoosh's own STOP_WORDS set at the top of this module).
+    # The value may be a CHAIN of zero-token pieces joined by the
+    # characters StandardAnalyzer splits on (dash/comma/slash): every
+    # piece analyzes away, so the-of, the,x, and a-b are zero-token too
+    # (measured diverging), while a chain containing one surviving piece
+    # (the-invoice) is rescued by it and compares equal, which the
+    # per-piece boundary rejects via backtracking exhaustion.
     # The field name itself is left generic (any \w+) rather than
     # enumerated: the mechanism applies to every TEXT field in the
     # registry, and an earlier version of this entry that spelled out only
@@ -607,7 +673,7 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         re.compile(
             r"\bNOT\s*\(*\s*"
             rf"(?!(?:{KEYWORD_FIELDS_PATTERN}):)\w+:"
-            rf"{ZERO_TOKEN_WORD}(?=\W|$)"
+            rf"{ZERO_TOKEN_WORD}(?:[-,/]{ZERO_TOKEN_WORD})*[-,/]?(?![\w.,/-])"
         ),
         (
             "DIVERGENCES.md entry 23: NOT of a zero-token term/phrase reaches the"
@@ -724,9 +790,8 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # every BOOLEAN_EXISTS field, not something specific to has_tag.
     (
         re.compile(
-            r"\b(?:has_correspondent|has_tag|has_type|has_path|has_custom_fields|has_owner):"
-            r"'\s+\S.*'|\b(?:has_correspondent|has_tag|has_type|has_path|has_custom_fields"
-            r"|has_owner):'.*\S\s+'"
+            rf"\b(?:{BOOL_EXISTS_FIELDS_PATTERN}):"
+            r"(?:'\s+\S.*'|'.*\S\s+'|'\s+')"
         ),
         (
             "DIVERGENCES.md entry 33: a whitespace-padded quoted"
@@ -901,12 +966,7 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     (
         re.compile(
             r"(?:^|(?<=[\s(]))\w{2,}[-.]\w{2,}(?=[\s)]|$)"
-            r"|\b(?!(?:id|title|content|asn|correspondent_id|correspondent"
-            r"|has_correspondent|tag_id|tag|has_tag|type_id|type|has_type"
-            r"|created|modified|added|path_id|path|has_path|notes|num_notes"
-            r"|custom_fields_id|custom_fields|custom_field_count"
-            r"|has_custom_fields|owner_id|owner|has_owner|viewer_id|checksum"
-            r"|page_count|original_filename|release_date|is_shared)\b)"
+            rf"|\b(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared)\b)"
             r"\w{2,}:[^\s():]{2,}"
         ),
         (
@@ -967,7 +1027,7 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # both-sides-unknown multitoken class, whose regex above excludes
     # is_shared for exactly that reason.
     (
-        re.compile(r"\bis_shared\s*:"),
+        re.compile(r"\bis_shared:"),
         (
             "DIVERGENCES.md entry 42: is_shared is deliberately not a"
             " registered field (v2's BOOLEAN permission-bookkeeping column;"

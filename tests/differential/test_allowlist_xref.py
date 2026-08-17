@@ -221,3 +221,83 @@ def test_result_entry23_regex_covers_every_whoosh_stopword(word: str) -> None:
         reason = allowed_result_reason(f"NOT title:{spelling}")
         assert reason is not None, f"result entry-23 regex does not cover {spelling!r}"
         assert "entry 23" in reason, f"{spelling!r} matched a different entry: {reason!r}"
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_entry"),
+    [
+        # entry 43 (range-bound case folding): claimed spellings need a
+        # real separator token (case-insensitive to, whitespace- or
+        # bracket-delimited) and an uppercase belonging to a bound.
+        pytest.param("title:[A* TO B]", 43, id="e43-uppercase-left-bound"),
+        pytest.param("title:[a TO bTO]", 43, id="e43-TO-shaped-right-bound"),
+        pytest.param("title:[aTO TO b]", 43, id="e43-TO-shaped-left-bound"),
+        pytest.param("title:[ABC]", None, id="e43-non-range-bracket-unclaimed"),
+        pytest.param("added:[-1 WEEK TO NOW]", 12, id="e43-date-range-stays-entry-12"),
+        pytest.param("asn:[2000 TO 2024]", None, id="e43-separator-only-uppercase-unclaimed"),
+        pytest.param("title:[abc TO def]", None, id="e43-lowercase-range-unclaimed"),
+        # whoosh's separator is case-insensitive (measured), so lowercase
+        # 'to' spellings with an uppercase bound diverge identically.
+        pytest.param("title:[a to B]", 43, id="e43-lowercase-separator-uppercase-bound"),
+        pytest.param("title:[a To b]", None, id="e43-mixed-separator-lowercase-bounds"),
+        # Open-ended spellings put the separator against a bracket.
+        pytest.param("title:[A TO]", 43, id="e43-open-upper-bound"),
+        pytest.param("title:[to B]", 43, id="e43-open-lower-bound"),
+        pytest.param("title:[Xy to]", 43, id="e43-open-upper-lowercase-separator"),
+        # entry 2 (pattern case folding): quote-abutting fielded patterns
+        # are claimed; quoted-phrase content is not.
+        pytest.param("title:Foo*'x'", 2, id="e2-pattern-abutting-quote"),
+        pytest.param('title:"Foo Bar?"', None, id="e2-quoted-phrase-content-unclaimed"),
+        pytest.param("title:A*", 2, id="e2-plain-fielded-pattern"),
+        # entry 33 (BOOLEAN_EXISTS padding): whitespace-only counts, the
+        # literally empty value does not.
+        pytest.param("has_tag:'  '", 33, id="e33-whitespace-only"),
+        pytest.param("has_tag:'  false'", 33, id="e33-padded"),
+        pytest.param("has_tag:''", None, id="e33-empty-agrees-unclaimed"),
+        # entry 23 (zero-token NOT): a dashed value merely starting with a
+        # stopword is a real term, not a zero-token one.
+        pytest.param("NOT (title:the-invoice)", None, id="e23-stopword-prefix-unclaimed"),
+        pytest.param("NOT (title:the)", 23, id="e23-stopword"),
+        # Boundary characters that are NOT token continuations must stay
+        # claimed (both spellings measured diverging: oracle Nothing vs
+        # compat Every).
+        pytest.param("NOT title:the^2", 23, id="e23-boosted-stopword"),
+        pytest.param("NOT title:the'x'", 23, id="e23-stopword-abutting-quote"),
+        pytest.param("NOT title:the.invoice", None, id="e23-dotted-continuation-unclaimed"),
+        # A chain of zero-token pieces joined by analyzer-split characters
+        # is zero-token too (measured diverging); one surviving piece
+        # rescues the chain.
+        pytest.param("NOT (title:a-b)", 23, id="e23-zero-token-chain"),
+        pytest.param("NOT title:the-of", 23, id="e23-stopword-chain"),
+        pytest.param("NOT title:the-invoice", None, id="e23-rescued-chain-unclaimed"),
+        pytest.param("NOT title:the-", 23, id="e23-trailing-separator"),
+        # entries 20/13: a trailing boost must not defeat the anchors.
+        pytest.param("tag:*^2", 20, id="e20-boosted-bare-star"),
+        pytest.param("title:202[0-3]*^2", 13, id="e13-boosted-bracket-fold"),
+        # entry 42: fielded spelling only (the whitespace-colon spelling
+        # demotes identically on both sides and compares equal).
+        pytest.param("is_shared:true", 42, id="e42-fielded"),
+        pytest.param("is_shared :x", None, id="e42-nonfielded-unclaimed"),
+    ],
+)
+def test_allowlist_regex_scoping(query: str, expected_entry: int | None) -> None:
+    """Pins the overmatch/undermatch boundary of the precision-sensitive
+    allowlist regexes: each claimed spelling was verified by execution to
+    genuinely diverge (or, for the date-range row, to belong to the cited
+    entry's mechanism), and each unclaimed spelling to compare equal or
+    belong elsewhere. A regex edit that widens or narrows past these
+    boundaries fails here instead of surfacing as a spurious strict-xfail
+    or a silently absorbed regression.
+    """
+    reason = allowed_reason(query)
+    if expected_entry is None:
+        assert reason is None or "entry" not in reason, (
+            f"{query!r} unexpectedly claimed: {reason!r}"
+        )
+    else:
+        assert reason is not None, f"{query!r} is not claimed by any entry"
+        m = re.search(r"entry (\d+)", reason)
+        assert m is not None, f"{query!r} reason has no entry citation: {reason!r}"
+        assert int(m.group(1)) == expected_entry, (
+            f"{query!r} claimed by the wrong entry: {reason!r}"
+        )

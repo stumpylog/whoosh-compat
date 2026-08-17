@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import re
 
+from tests.differential.allowlist import BOOL_EXISTS_FIELDS_PATTERN
 from tests.differential.allowlist import DATE_FIELDS_PATTERN
 from tests.differential.allowlist import KEYWORD_FIELDS_PATTERN
 from tests.differential.allowlist import ZERO_TOKEN_WORD
@@ -182,9 +183,8 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
     # too, not just in the parsed tree.
     (
         re.compile(
-            r"\b(?:has_correspondent|has_tag|has_type|has_path|has_custom_fields|has_owner):"
-            r"'\s+\S.*'|\b(?:has_correspondent|has_tag|has_type|has_path|has_custom_fields"
-            r"|has_owner):'.*\S\s+'"
+            rf"\b(?:{BOOL_EXISTS_FIELDS_PATTERN}):"
+            r"(?:'\s+\S.*'|'.*\S\s+'|'\s+')"
         ),
         (
             "DIVERGENCES.md entry 33 (design, result-level extension): a"
