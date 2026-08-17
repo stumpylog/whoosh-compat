@@ -10,9 +10,11 @@ import fnmatch
 from collections.abc import Callable
 
 import pytest
+import tantivy
 
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import glob_to_regex
+from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
@@ -20,6 +22,7 @@ from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 
 from .conftest import TIndex
+from .conftest import emit_
 from .conftest import emit_ast
 from .conftest import search_ids
 
@@ -192,7 +195,7 @@ def test_every_field(
     assert search_ids(tindex[0], q) == expected
 
 
-# -- JSON subpath pattern backstop (issue #30) -------------------------------
+# -- JSON subpath pattern backstop -------------------------------
 
 
 @pytest.mark.parametrize(
@@ -226,7 +229,7 @@ def test_pattern_on_json_subpath_raises_at_emit(
     # A hand-built Prefix/Wildcard node bypasses the parser's parse-time
     # diagnostic entirely, so this is the backstop that catches it before
     # it can reach the silent-wrong-results regex query that used to be
-    # built here (issue #30): resolved.dotted_name is only ever read for
+    # built here: resolved.dotted_name is only ever read for
     # the error message, never handed to Query.regex_query.
     with pytest.raises(UnsupportedQueryError, match=match):
         emit_ast(node, tindex, ereg)
@@ -244,7 +247,7 @@ def test_pattern_on_plain_json_field_no_subpath_still_works(
     assert search_ids(tindex[0], q) == expected
 
 
-# -- BOOLEAN_EXISTS pattern backstop (issue #17, reopened) ------------------
+# -- BOOLEAN_EXISTS pattern backstop ------------------
 
 
 @pytest.mark.parametrize(
@@ -280,6 +283,109 @@ def test_pattern_on_boolean_exists_field_raises_at_emit(
     # it can reach tantivy's raw, backend-internal "Field ... is not
     # defined in the schema" ValueError (BOOLEAN_EXISTS has no schema
     # column of its own): same shape as the JSON-subpath backstop above.
+    with pytest.raises(UnsupportedQueryError, match=match):
+        emit_ast(node, tindex, ereg)
+
+
+def _raw_keyword_index() -> tantivy.Index:
+    # A raw-tokenizer field so punctuation-bearing terms ("a!b") survive
+    # indexing verbatim: the class-body characters under test would be
+    # stripped by the 'default' tokenizer of the shared tindex fixture.
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_text_field("kw", stored=True, tokenizer_name="raw")
+    index = tantivy.Index(sb.build())
+    w = index.writer()
+    doc = tantivy.Document()
+    doc.add_unsigned("id", 1)
+    doc.add_text("kw", "a!b")
+    w.add_document(doc)
+    w.commit()
+    index.reload()
+    return index
+
+
+def test_wildcard_class_containing_regex_metachars_still_matches() -> None:
+    # fnmatch ground truth: "a[(?!)]b" means "a, then one of ( ? ! ), then
+    # b", matching "a!b". The never-matches signal must be out-of-band
+    # (glob_to_regex returning None), never a substring scan of the
+    # finished regex, which this legitimate class body would false-positive
+    # into a silent match-nothing query.
+    assert fnmatch.fnmatchcase("a!b", "a[(?!)]b")
+    index = _raw_keyword_index()
+    reg = FieldRegistry([FieldSpec("kw", FieldKind.KEYWORD)])
+    q = emit_(ast.Wildcard(field=FieldRef("kw"), pattern="a[(?!)]b"), index=index, registry=reg)
+    assert search_ids(index, q) == [1]
+
+
+def test_wildcard_empty_class_still_matches_nothing() -> None:
+    # Control: a genuinely empty class (a reversed range removes itself,
+    # fnmatch semantics) must keep matching zero documents, now via the
+    # out-of-band None signal instead of the substring scan.
+    assert glob_to_regex("a[z-a]b", None) is None
+    index = _raw_keyword_index()
+    reg = FieldRegistry([FieldSpec("kw", FieldKind.KEYWORD)])
+    q = emit_(ast.Wildcard(field=FieldRef("kw"), pattern="a[z-a]b"), index=index, registry=reg)
+    assert search_ids(index, q) == []
+
+
+@pytest.mark.parametrize(
+    ("node", "match"),
+    [
+        pytest.param(
+            ast.Prefix(field=FieldRef("notes"), text="al"),
+            "must address a subpath",
+            id="prefix-bare-json",
+        ),
+        pytest.param(
+            ast.Wildcard(field=FieldRef("notes"), pattern="al*"),
+            "must address a subpath",
+            id="wildcard-bare-json",
+        ),
+    ],
+)
+def test_pattern_on_bare_json_field_raises_at_emit(
+    tindex: TIndex, ereg: FieldRegistry, node: ast.Node, match: str
+) -> None:
+    # The bare-JSON sibling of the subpath backstop above, mirroring
+    # visit_term/visit_phrase's identical cell: a hand-built pattern node
+    # addressing a JSON field with no subpath must raise, not fall through
+    # to Query.regex_query against the JSON column's path-prefixed encoded
+    # term bytes (which tantivy accepts and which silently matches nothing
+    # for values that exist).
+    with pytest.raises(QueryEmitError, match=match):
+        emit_ast(node, tindex, ereg)
+
+
+@pytest.mark.parametrize(
+    ("node", "match"),
+    [
+        pytest.param(ast.Prefix(field=FieldRef("asn"), text="10"), "U64", id="prefix-u64"),
+        pytest.param(ast.Wildcard(field=FieldRef("asn"), pattern="10*"), "U64", id="wildcard-u64"),
+        pytest.param(ast.Prefix(field=FieldRef("created"), text="20"), "DATE", id="prefix-date"),
+        pytest.param(
+            ast.Wildcard(field=FieldRef("created"), pattern="20*"), "DATE", id="wildcard-date"
+        ),
+        pytest.param(
+            ast.Prefix(field=FieldRef("added"), text="20"), "DATETIME", id="prefix-datetime"
+        ),
+        pytest.param(
+            ast.Wildcard(field=FieldRef("added"), pattern="20*"),
+            "DATETIME",
+            id="wildcard-datetime",
+        ),
+    ],
+)
+def test_pattern_on_non_text_kind_raises_at_emit(
+    tindex: TIndex, ereg: FieldRegistry, node: ast.Node, match: str
+) -> None:
+    # The remaining kind-axis siblings: tantivy accepts a regex query
+    # against a numeric or date column's encoded term bytes and silently
+    # matches nothing, so every non-TEXT/KEYWORD kind must end in a
+    # documented emit-time error instead. Query text can't reach these
+    # cells (the parser's UNSUPPORTED_PATTERN diagnostic fires first);
+    # only a hand-built node can, which is exactly why the emit-time
+    # dispatch has to be closed over the kind axis on its own.
     with pytest.raises(UnsupportedQueryError, match=match):
         emit_ast(node, tindex, ereg)
 

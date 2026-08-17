@@ -58,6 +58,16 @@ def _is_truthy(value: object) -> bool:
     return bool(value)
 
 
+# Identity sentinel for "this bracket class matches nothing" (an empty
+# class, e.g. after a reversed range removes itself). The VALUE is the
+# lookahead fragment CPython's fnmatch.translate emits for the same case,
+# but it must never reach tantivy (whose regex engine has no lookahead) and
+# must be recognized by IDENTITY, never by substring: a legitimate class
+# body can spell the same four characters ("a[(?!)]b" means "a, then one of
+# ( ? ! ), then b") and translates to the valid fragment "[(?!)]".
+_EMPTY_CLASS = "(?!)"
+
+
 def _translate_class(pattern: str, i: int, n: int) -> tuple[str | None, int]:
     """Translate the bracket expression starting just after a ``[`` at ``i-1``.
 
@@ -112,8 +122,10 @@ def _translate_class(pattern: str, i: int, n: int) -> tuple[str | None, int]:
         stuff = "-".join(s.replace("\\", r"\\").replace("-", r"\-") for s in chunks)
 
     if not stuff:
-        # "[]": an empty range never matches.
-        return "(?!)", j + 1
+        # "[]": an empty range never matches. Return the identity sentinel
+        # (see _EMPTY_CLASS above), which glob_to_regex turns into its own
+        # out-of-band None result.
+        return _EMPTY_CLASS, j + 1
     if stuff == "!":
         # "[!]": a negated empty range matches any single character.
         return ".", j + 1
@@ -130,8 +142,15 @@ def _translate_class(pattern: str, i: int, n: int) -> tuple[str | None, int]:
     return f"[{stuff}]", j + 1
 
 
-def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str:
-    """Translate an fnmatch-style glob into a tantivy regex.
+def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str | None:
+    """Translate an fnmatch-style glob into a tantivy regex, or ``None``
+    when the glob provably matches nothing (it contains an empty bracket
+    class, whose empty language poisons the whole concatenation). The
+    ``None`` signal is out-of-band on purpose: fnmatch's own spelling of
+    the same fact is a lookahead fragment tantivy's regex engine cannot
+    parse, and recognizing it inside the finished regex by substring would
+    false-positive on a legitimate class body spelling the same characters
+    (``a[(?!)]b``).
 
     Whoosh's ``query.Wildcard`` compiles its pattern with
     ``fnmatch.translate``, so fnmatch: not a naive split on ``*``/``?``:
@@ -178,6 +197,10 @@ def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str:
             if fragment is None:
                 # No closing "]": the "[" is an ordinary character.
                 literal.append(c)
+            elif fragment is _EMPTY_CLASS:
+                # Identity check, deliberately not a value/substring check
+                # (see _EMPTY_CLASS): the whole glob can never match.
+                return None
             else:
                 flush()
                 out.append(fragment)
@@ -450,7 +473,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         general contract, and honors ``resolved.json_path`` for the
         ``FAST_JSON_FIELD`` strategy: a subpath-carrying resolution checks
         only that subpath's fast column (``resolved.dotted_name``), not
-        "does any subpath of this field have a value" (issue #29). The
+        "does any subpath of this field have a value". The
         ``TERM_SCAN`` strategy and the final "no strategy" error both name
         ``resolved.dotted_name`` too, so a non-fast JSON subpath's error
         message names the dotted form the user actually typed rather than
@@ -471,7 +494,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # Whole-field existence: any subpath having a value counts.
             # A JSON fast field's subpath columns are only checked with
             # json_subpaths=True; without it, exists_query never finds a
-            # value (issue #7).
+            # value.
             return tantivy.Query.exists_query(spec.name, json_subpaths=True)
         if strategy is ExistsStrategy.TERM_SCAN:
             # Non-fast TEXT/KEYWORD fields: "has any term at all" via a
@@ -485,7 +508,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         # dotted form (spec.name for a plain field, "spec.name.json_path"
         # for a subpath) so the message matches what the user actually
         # typed rather than a bare field name that was never reachable
-        # syntax to begin with (issue #29's second symptom).
+        # syntax to begin with.
         raise UnsupportedQueryError(
             f"field {resolved.dotted_name!r} ({spec.kind.name}) has no way to"
             f" match 'exists' while non-fast: mark it fast=True to support"
@@ -500,7 +523,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # A BOOLEAN_EXISTS field has no physical column of its own to
             # check "exists" against; "existence" only ever means its
             # exists_target's, same redirect as visit_term/visit_phrase's
-            # BOOLEAN_EXISTS branches (issue #16).
+            # BOOLEAN_EXISTS branches.
             resolved = self._resolve(FieldRef(resolved.spec.exists_target))  # type: ignore[arg-type]
         return self._exists_query(resolved)
 
@@ -541,8 +564,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             return tantivy.Query.term_query(self.schema, spec.name, value)
 
         if spec.kind is FieldKind.BOOLEAN_EXISTS:
-            # exists_target is always a plain (non-JSON) canonical field
-            # name: FieldRegistry validates it at construction time.
+            # FieldRegistry's third pass validates exists_target only as
+            # far as: it is registered (by canonical name OR alias), it is
+            # not itself BOOLEAN_EXISTS, and it resolves to an
+            # ExistsStrategy. It may therefore be an alias, and it may be a
+            # fast JSON field (ExistsStrategy.FAST_JSON_FIELD); both shapes
+            # emit correctly through _exists_query's strategy dispatch, so
+            # nothing here may assume a plain non-JSON canonical name.
             target = self._resolve(FieldRef(spec.exists_target))  # type: ignore[arg-type]
             exists = self._exists_query(target)
             if _is_truthy(node.text):
@@ -579,9 +607,10 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # ast.analyze() has already tokenized this Phrase by the time it
             # reaches this visitor: node.words carries the surviving tokens
             # directly (a zero-token phrase was dropped to Nothing() before
-            # emission; a one-token phrase already collapsed to a Term, so
-            # len(words) >= 2 is guaranteed here in practice). This method
-            # does no tokenizing of its own.
+            # emission; a one-token phrase deliberately STAYS a Phrase,
+            # matching whoosh's PhrasePlugin, and is mapped to the exactly
+            # equivalent term query just below). This method does no
+            # tokenizing of its own.
             words = node.words if node.words is not None else (str(node.text),)
             if len(words) == 1:
                 # tantivy rejects a single-word phrase query; a term query is
@@ -596,7 +625,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         if spec.kind is FieldKind.U64:
             if node.text == "*":
                 # Matches whoosh's NUMERIC.parse_query "*" -> existence
-                # special case, same as a quoted term (issue #16).
+                # special case, same as a quoted term.
                 return self._exists_query(resolved)
             try:
                 value = int(node.text)
@@ -606,7 +635,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 ) from exc
             if not (0 <= value <= _U64_MAX):
                 # Parsed input can no longer carry an out-of-domain u64 value
-                # here (issue #9, reopened: the parse-time domain check now
+                # here (the parse-time domain check now
                 # also covers the double-quoted/Phrase spelling), but a
                 # hand-built ast.Phrase bypasses the parser entirely, so this
                 # is a backstop for that case, same rule as term/range.
@@ -614,8 +643,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             return tantivy.Query.term_query(self.schema, spec.name, value)
 
         if spec.kind is FieldKind.BOOLEAN_EXISTS:
-            # exists_target is always a plain (non-JSON) canonical field
-            # name: FieldRegistry validates it at construction time.
+            # FieldRegistry's third pass validates exists_target only as
+            # far as: it is registered (by canonical name OR alias), it is
+            # not itself BOOLEAN_EXISTS, and it resolves to an
+            # ExistsStrategy. It may therefore be an alias, and it may be a
+            # fast JSON field (ExistsStrategy.FAST_JSON_FIELD); both shapes
+            # emit correctly through _exists_query's strategy dispatch, so
+            # nothing here may assume a plain non-JSON canonical name.
             target = self._resolve(FieldRef(spec.exists_target))  # type: ignore[arg-type]
             exists = self._exists_query(target)
             if node.text == "*" or _is_truthy(node.text):
@@ -646,7 +680,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         self._reject_pattern_incompatible_kind(resolved)
         spec = resolved.spec
         regex = glob_to_regex(str(node.pattern), spec.pattern_normalizer)
-        if "(?!)" in regex:
+        if regex is None:
+            # The glob provably matches nothing (empty bracket class).
             return tantivy.Query.empty_query()
         return tantivy.Query.regex_query(self.schema, spec.name, regex)
 
@@ -657,9 +692,14 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         (DIVERGENCES.md entry 30 for the JSON-subpath case, entry 29 for
         the BOOLEAN_EXISTS case).
 
-        Two independent reasons, both raising ``UnsupportedQueryError``
-        with a message naming the field rather than letting tantivy-py's
-        raw ``ValueError`` leak through ``emit()``'s backstop:
+        The dispatch is closed over the kind axis: only TEXT and KEYWORD
+        (whose index terms are the analyzed strings a glob-derived regex
+        meaningfully runs against) fall through to ``Query.regex_query``;
+        every other cell raises with a message naming the field, rather
+        than letting the query reach tantivy, which either raises its own
+        backend-internal ``ValueError`` or, worse, *accepts* the regex
+        against a non-text column's encoded term bytes (numeric, date,
+        and JSON columns all do) and silently matches nothing.
 
         * A JSON subpath. tantivy stores JSON terms as path-prefixed
           encoded bytes, and there is no tantivy-py API on the pinned
@@ -677,16 +717,34 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
           ``ValueError``, a backend-internal message that also
           contradicts the field being queryable at all (``has_tag:true``
           works fine).
+        * A bare JSON field (no subpath). ``QueryEmitError``, mirroring
+          ``visit_term``/``visit_phrase``'s identical cell: the ref is
+          malformed addressing (a JSON field is only queryable through a
+          subpath), not a backend limitation.
+        * Any other kind (U64, DATE, DATETIME, and every future
+          ``FieldKind`` member until explicitly classified here).
+          Reachable only from a hand-built node: query text gets the
+          parse-time ``UNSUPPORTED_PATTERN`` diagnostic first.
         """
+        spec = resolved.spec
         if resolved.is_subpath:
             raise UnsupportedQueryError(
                 f"wildcard/prefix patterns are not supported on JSON subpath "
                 f"{resolved.dotted_name!r} (DIVERGENCES.md entry 30)"
             )
-        if resolved.spec.kind is FieldKind.BOOLEAN_EXISTS:
+        if spec.kind is FieldKind.BOOLEAN_EXISTS:
             raise UnsupportedQueryError(
                 f"wildcard/prefix patterns are not supported on boolean-exists "
-                f"field {resolved.spec.name!r} (DIVERGENCES.md entry 29)"
+                f"field {spec.name!r} (DIVERGENCES.md entry 29)"
+            )
+        if spec.kind is FieldKind.JSON:
+            raise QueryEmitError(
+                f"field {spec.name!r} is a JSON field; pattern queries must "
+                f"address a subpath (e.g. {spec.name}.<subpath>)"
+            )
+        if spec.kind is not FieldKind.TEXT and spec.kind is not FieldKind.KEYWORD:
+            raise UnsupportedQueryError(
+                f"pattern emission for field kind {spec.kind.name} is not implemented"
             )
 
     def visit_termrange(self, node: ast.TermRange) -> tantivy.Query:
