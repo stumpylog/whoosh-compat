@@ -682,7 +682,7 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # Known field names/aliases are excluded from the unknown-field
     # alternative so an explicitly, correctly fielded value (which only
     # diverges when nested inside a genuine user-written OR, a narrower,
-    # context-dependent case not covered by this entry) isn't wrongly
+    # context-dependent case covered by the next entry) isn't wrongly
     # swept in here.
     (
         re.compile(
@@ -702,6 +702,45 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
             " context in whoosh-compat, but against whoosh's fixed AND"
             " default in real whoosh, now confirmed reachable at the AST-"
             " comparison layer via analyze()"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
+    # design (DIVERGENCES.md entry 15, the correctly-fielded sibling of the
+    # previous entry): a KNOWN TEXT/KEYWORD field's multi-token value
+    # sitting inside a user-written OR resolves Multitoken.DEFAULT against
+    # that Or context in whoosh-compat but against whoosh's fixed AND
+    # default in real whoosh. A degenerate parenthesized wrapper does not
+    # shield the term: analyze() normalizes its input first (making it
+    # insensitive to whether the caller pre-normalized), so the singleton
+    # group "(title:00-000)" collapses and the term resolves against the
+    # enclosing OR, exactly as the production emitter always has (the
+    # emitter normalizes before analyzing; only the harness's raw-tree
+    # path used to see the un-collapsed wrapper and miss this shape).
+    # Scope: the query must contain an OR, and a known TEXT/KEYWORD field
+    # (the kinds whose analyzer can split a value) with a value containing
+    # an internal [-.,] separator between two word runs. The runs may be
+    # single characters: unlike StandardAnalyzer's minsize=2 (the previous
+    # entry's approximation for TEXT fields), the KEYWORD analyzers split
+    # on commas without a minimum token length, so a quoted "tag:'0,00'"
+    # genuinely yields two surviving tokens. This can overmatch a query
+    # whose fielded value sits in an AND context elsewhere in the same
+    # OR-bearing query, or a TEXT-field value whose 1-char half gets
+    # dropped by minsize; per the strict-xfail convention, corpus lines
+    # matching this entry must be chosen to genuinely diverge.
+    (
+        re.compile(
+            r"^(?=.*\bOR\b)"
+            r"(?=.*\b(?:title|content|correspondent|tag|type|path|notes"
+            r"|custom_fields|owner|original_filename|checksum)"
+            r":['\"]?\w+[-.,]\w+)"
+        ),
+        (
+            "DIVERGENCES.md entry 15: a known TEXT/KEYWORD field's"
+            " multi-token value inside a user-written OR resolves"
+            " Multitoken.DEFAULT against the enclosing Or context in"
+            " whoosh-compat, but against whoosh's fixed AND default in real"
+            " whoosh; a singleton paren wrapper does not shield the term,"
+            " since analyze() normalizes before resolving context"
         ),
         DivergenceKind.MISMATCH,
     ),

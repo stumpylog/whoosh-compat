@@ -351,6 +351,48 @@ def test_and_still_poisons_on_a_genuinely_pre_existing_nothing() -> None:
     assert result == Nothing()
 
 
+def test_group_wrapped_pre_existing_nothing_poisons_like_the_literal() -> None:
+    # The unnormalized sibling of the two literal-Nothing cases above: a
+    # pre-existing Nothing WRAPPED in a group (the shape normalize() would
+    # have collapsed) must classify identically, so the docstring's promise
+    # that a not-yet-normalized tree still analyzes correctly holds. The
+    # group collapses to a fresh Nothing during the analysis pass itself,
+    # which must not be mistaken for a newly-dropped zero-token child.
+    node = And(children=(Term(field=CONTENT, text="invoice"), And(children=(Nothing(),))))
+    assert analyze(node, REG) == Nothing()
+    assert analyze(node, REG) == analyze(normalize(node), REG)
+
+
+def test_andnot_group_wrapped_pre_existing_nothing_poisons_not_inverts() -> None:
+    # Same shape on AndNot's positive side: misclassifying the collapsed
+    # group as newly-dropped would apply the entry-23 survivor rule and
+    # promote the NEGATIVE side to stand alone, matching exactly the
+    # documents the query excluded.
+    node = AndNot(
+        positive=And(children=(Nothing(),)),
+        negative=Term(field=CONTENT, text="foo"),
+    )
+    assert analyze(node, REG) == Nothing()
+    assert analyze(node, REG) == analyze(normalize(node), REG)
+
+
+def test_aliased_node_context_follows_each_position() -> None:
+    # One frozen Term object legitimately reused at two tree positions
+    # (value semantics invite object sharing): each occurrence must
+    # resolve Multitoken.DEFAULT from its OWN enclosing combinator, not
+    # from whichever position a traversal happened to record last. The
+    # control tree is structurally identical but with distinct objects.
+    shared = Term(field=CONTENT, text="multi word")
+    aliased = And(children=(shared, Or(children=(shared, Term(field=CONTENT, text="x")))))
+    control = And(
+        children=(
+            Term(field=CONTENT, text="multi word"),
+            Or(children=(Term(field=CONTENT, text="multi word"), Term(field=CONTENT, text="x"))),
+        )
+    )
+    assert analyze(aliased, REG) == analyze(control, REG)
+
+
 def test_or_drops_a_newly_zero_token_child() -> None:
     node = Or(children=(Term(field=CONTENT, text="invoice"), Term(field=CONTENT, text="")))
     result = analyze(node, REG)

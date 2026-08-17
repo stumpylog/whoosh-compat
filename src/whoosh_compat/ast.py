@@ -117,11 +117,12 @@ class Phrase(Node):
     ``text`` is the raw, unanalyzed phrase text as ``parse()`` produced it
     (quotes stripped, nothing else done to it); every ``Phrase`` from
     ``parse()`` has ``words is None`` and ``analyzed is False``.
-    :func:`analyze` runs the field's analyzer over ``text`` and, for a
-    result with two or more surviving tokens, replaces ``words`` with that
-    explicit tuple and sets ``analyzed`` to ``True``, leaving ``text`` as
-    informational only from that point on (a one-token result becomes a
-    :class:`Term` instead, and a zero-token result is dropped, see
+    :func:`analyze` runs the field's analyzer over ``text`` and, for any
+    surviving result (including a single token: a one-word phrase stays a
+    ``Phrase``, matching whoosh's ``PhrasePlugin``, see
+    :func:`_analyze_phrase`), replaces ``words`` with that explicit tuple
+    and sets ``analyzed`` to ``True``, leaving ``text`` as informational
+    only from that point on (a zero-token result is dropped, see
     :func:`analyze`'s docstring). Carrying the tokens as an explicit tuple,
     rather than a re-joined string an emitter would have to split again, is
     what makes :func:`analyze` idempotent by construction (amendment 1 of
@@ -404,7 +405,7 @@ def normalize(node: Node) -> Node:
     here used to roughly halve the query nesting depth ``parse()`` could
     tolerate before ``RecursionError``, since every parenthesized level
     already cost frames in the parser itself before ever reaching this
-    function (issue #31). The actual per-node rules live in
+    function. The actual per-node rules live in
     :func:`_normalize_one`; this function only handles the postorder
     scheduling.
 
@@ -665,7 +666,9 @@ def analyze(
     stopwords, or shorter than the analyzer's minimum size) drops out of its
     enclosing group entirely, the same way an empty parenthesized group
     already does at parse time; a quoted ``Phrase`` is tokenized the same
-    way, collapsing to a plain ``Term`` when only one token survives. Fields
+    way, staying a ``Phrase`` for any surviving token count including one
+    (matching real whoosh's ``PhrasePlugin``, which never self-collapses a
+    one-word phrase; see :func:`_analyze_phrase`'s docstring). Fields
     outside the TEXT/KEYWORD/JSON-subpath kinds (U64, DATE, DATETIME,
     BOOLEAN_EXISTS, a bare JSON field) are never analyzed or dropped,
     matching the closed kind-dispatch matrix ARCHITECTURE.md documents.
@@ -711,7 +714,13 @@ def analyze(
         node: The AST node to analyze. Normally already normalized (the
             pipeline calls this as ``analyze(normalize(node), ...)``); a
             not-yet-normalized tree still analyzes correctly, since this
-            function ends by normalizing its own result.
+            function begins by normalizing its input (making that promise
+            true by construction: a pre-existing ``Nothing`` wrapped in a
+            group is collapsed to a literal ``Nothing`` *before* the
+            analysis pass, so the newly-dropped-vs-pre-existing
+            distinction the entry-23/entry-27 rules turn on never sees a
+            group collapse of its own making) and ends by normalizing its
+            own result.
         registry: Describes the known fields, their kinds, and their
             analyzers/``multitoken`` policy.
         default_mode: The ``Multitoken`` mode a ``Multitoken.DEFAULT``-
@@ -723,51 +732,44 @@ def analyze(
         TEXT/KEYWORD leaf's analysis fully resolved.
     """
 
-    # Phase 1 (top-down): the Multitoken context (AND/OR) applicable to a
-    # DEFAULT-configured term's position in the tree, keyed by id(node) so a
-    # node can be looked up again once phase 2 visits it. And/Or set their
+    # Normalize first: see the Args docstring above for why this is
+    # load-bearing (the entry-23/entry-27 distinction), not just tidiness.
+    node = normalize(node)
+
+    # Single bottom-up pass, mirroring normalize()'s own memoized
+    # work-stack traversal, except the per-node combine step is
+    # _analyze_combine (leaf rewriting plus interleaved normalization)
+    # instead of _normalize_one alone. The Multitoken context (AND/OR)
+    # applicable to a DEFAULT-configured term's position travels WITH each
+    # work item rather than living in a separate id-keyed side table: a
+    # frozen node object legitimately aliased at two tree positions with
+    # different enclosing combinators (value semantics invite object
+    # reuse) then gets one analysis per (object, context) pair instead of
+    # whichever context a traversal recorded last. And/Or set their
     # children's context to their own combinator; every other combinator
     # (Not/AndNot/AndMaybe/Require/Boosted) passes its own context through
-    # unchanged, since none of them are themselves a combining group a term
-    # could inherit AND/OR-ness from.
-    context: dict[int, Multitoken] = {id(node): default_mode}
-    stack: list[Node] = [node]
-    while stack:
-        current = stack.pop()
-        ctx = context[id(current)]
-        if isinstance(current, And):
-            for child in current.children:
-                context[id(child)] = Multitoken.AND
-                stack.append(child)
-        elif isinstance(current, Or):
-            for child in current.children:
-                context[id(child)] = Multitoken.OR
-                stack.append(child)
-        else:
-            for child in _child_nodes(current):
-                context[id(child)] = ctx
-                stack.append(child)
-
-    # Phase 2 (bottom-up): mirrors normalize()'s own memoized work-stack
-    # traversal exactly, except the per-node combine step is
-    # _analyze_combine (leaf rewriting plus interleaved normalization)
-    # instead of _normalize_one alone.
-    memo: dict[int, Node] = {}
-    work: list[tuple[Node, bool]] = [(node, False)]
+    # unchanged, since none of them are themselves a combining group a
+    # term could inherit AND/OR-ness from.
+    memo: dict[tuple[int, Multitoken], Node] = {}
+    work: list[tuple[Node, Multitoken, bool]] = [(node, default_mode, False)]
     while work:
-        current, children_ready = work.pop()
+        current, ctx, children_ready = work.pop()
         kids = _child_nodes(current)
-        if children_ready or not kids:
-            analyzed_kids = tuple(memo[id(k)] for k in kids)
-            memo[id(current)] = _analyze_combine(
-                current, analyzed_kids, registry, context[id(current)]
-            )
+        if isinstance(current, And):
+            child_ctx = Multitoken.AND
+        elif isinstance(current, Or):
+            child_ctx = Multitoken.OR
         else:
-            work.append((current, True))
+            child_ctx = ctx
+        if children_ready or not kids:
+            analyzed_kids = tuple(memo[(id(k), child_ctx)] for k in kids)
+            memo[(id(current), ctx)] = _analyze_combine(current, analyzed_kids, registry, ctx)
+        else:
+            work.append((current, ctx, True))
             for k in kids:
-                work.append((k, False))
+                work.append((k, child_ctx, False))
 
-    return normalize(memo[id(node)])
+    return normalize(memo[(id(node), default_mode)])
 
 
 class Visitor(Generic[T]):

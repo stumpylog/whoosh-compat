@@ -61,10 +61,24 @@ query = st.builds(lambda parts: " ".join(parts), st.lists(clause, min_size=1, ma
 
 @given(query)
 @settings(max_examples=300, deadline=None)
+@example("created:0001")
 def test_fuzz_matches_oracle(q: str) -> None:
     if allowed(q):
         return
-    expected = to_ast(oracle_parse(q, BASE, BERLIN), ORACLE_REGISTRY)
+    try:
+        oracle_query = oracle_parse(q, BASE, BERLIN)
+    except Exception:  # noqa: BLE001 - the oracle's own failure modes are not enumerable
+        # Same skip as _grammar_fuzz_matches_oracle below (see its comment
+        # for the full rationale): the oracle makes no never-raises promise,
+        # and this strategy can reach shapes that crash it, e.g.
+        # "created:0001" (the fields sample includes "created:" and the
+        # words alphabet includes decimal digits), whose year-1 date
+        # underflows datetime.min in LocalDateParser's tz-reversal
+        # arithmetic. The @example above pins that shape deterministically.
+        # whoosh-compat itself handles these without raising; there is
+        # simply no oracle result to compare against.
+        return
+    expected = to_ast(oracle_query, ORACLE_REGISTRY)
     if expected is None:
         return
     raw_ast, diagnostics = compat_raw_parse(q, ORACLE_REGISTRY, V2_FIELDS, BERLIN, BASE)
@@ -235,6 +249,20 @@ def test_normalize_is_total_and_idempotent(q: str) -> None:
     once = normalize(raw_ast)
     twice = normalize(once)
     assert once == twice, f"normalize() not idempotent for query: {q!r}"
+
+
+@given(query_text(max_leaves=6))
+@settings(max_examples=300, deadline=None)
+def test_analyze_is_normalization_insensitive(q: str) -> None:
+    # analyze()'s documented contract: a not-yet-normalized tree analyzes
+    # to the same result as its normalized form (the docstring's "a
+    # not-yet-normalized tree still analyzes correctly"). This pins the
+    # whole property, not just the group-wrapped-Nothing shape covered by
+    # the direct unit tests in tests/test_analyze.py.
+    raw_ast, _diagnostics = compat_raw_parse(q, ORACLE_REGISTRY, V2_FIELDS, BERLIN, BASE)
+    assert analyze(raw_ast, ORACLE_REGISTRY) == analyze(normalize(raw_ast), ORACLE_REGISTRY), (
+        f"query: {q!r}"
+    )
 
 
 @given(st.text(max_size=80))

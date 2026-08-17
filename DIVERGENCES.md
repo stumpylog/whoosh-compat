@@ -216,6 +216,24 @@ parse-then-emit pipeline).
     textual pathways (a bare dashed/dotted word, and an unknown-field-colon
     demotion) that reach it in the current corpus/fuzzer vocabulary.
 
+    The *correctly-fielded* pathway (a known TEXT/KEYWORD field's
+    multi-token value written inside an explicit user-typed `OR`, the
+    "narrower, context-dependent case" the paragraph above predicts) is
+    also confirmed at the AST-comparison layer and has its own adjacent
+    allowlist entry. One nuance worth stating: a degenerate parenthesized
+    wrapper does not shield the term from the enclosing `OR`. `analyze()`
+    normalizes its input before resolving `Multitoken` context (which is
+    also what makes it insensitive to whether a caller pre-normalized), so
+    in `(0) OR (title:00-000)` the singleton group around the fielded term
+    collapses first and the term resolves `DEFAULT` against the `Or`,
+    exactly as the production emitter always has (it normalizes before
+    analyzing). The differential harness's raw-tree path used to see the
+    un-collapsed singleton `And` wrapper and resolve AND context,
+    coincidentally agreeing with whoosh for this one spelling while
+    production did not; the harness now sees what production sees.
+    Corpus lines: `content:foo OR title:multi-word` and
+    `(0) OR (title:00-000)` (`tests/differential/corpus_paperless.txt`).
+
     The acceptance-layer result property (`tests/emitter/test_acceptance_property.py`)
     later found the predicted shape occurring for real, and confirmed it
     reaches the result level, not just a parsed-tree difference: an
