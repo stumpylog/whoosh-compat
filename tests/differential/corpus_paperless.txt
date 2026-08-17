@@ -135,6 +135,20 @@ created:[2020-01-01 TO 2020-12-31]
 # consumption of each bound (matching text_to_node's existing ToEnd usage)
 # and does not reproduce the collapse.
 created:[2020-06-15 TO 2020-06-20]
+# Joint disambiguation of a bracketed range's two bounds
+# (timespan.disambiguated's range heuristics): a backward-reading month
+# range borrows the previous year, day-precision bounds crossing a year
+# boundary copy the end's year, an overnight time range pushes the end
+# past midnight, and backward years swap. Each bound must stay ambiguous
+# until the combine step; disambiguating them independently against the
+# basedate produces inverted lo > hi ranges that match nothing.
+added:[dec to feb]
+added:[dec 25 to jan 5]
+added:[noon to 3am]
+added:[3pm to 10am]
+added:[feb to may]
+added:[2021 to 2020]
+created:[dec to feb]
 created:[2020 to]
 created:[to 2020]
 title:x,created:[2020 TO 2021]

@@ -94,6 +94,7 @@ from whoosh_compat.parser.text import rcompile
 from whoosh_compat.parser.times import TimeError
 from whoosh_compat.parser.times import adatetime
 from whoosh_compat.parser.times import fill_in
+from whoosh_compat.parser.times import is_ambiguous
 from whoosh_compat.parser.times import is_void
 from whoosh_compat.parser.times import relative_days
 from whoosh_compat.parser.times import timespan
@@ -1043,33 +1044,56 @@ class DateParserPlugin(Plugin):
     def _range_to_node(self, node: syntax.RangeNode, spec: FieldSpec) -> syntax.SyntaxNode:
         local_now = self._local_now()
 
-        # Use the dateparser's own date_from (which wraps the grammar in
-        # ToEnd, requiring the bound text to match in full), not the bare
-        # grammar object's date_from: the latter accepts whatever prefix the
-        # first successful Choice alternative happened to consume (e.g. just
-        # the year out of "2020-06-15"), silently discarding the rest of the
-        # bound instead of diagnosing it. See text_to_node, which already
-        # goes through this same wrapped date_from for single (non-range)
-        # values.
+        # Wrap the bare grammar in ToEnd (requiring each bound's text to
+        # match in full), but do NOT go through the dateparser's own
+        # date_from wrapper. The wrapper bundles two things: the same ToEnd
+        # full-match requirement (wanted, because the bare grammar accepts
+        # whatever prefix the first successful Choice alternative happened
+        # to consume, e.g. just the year out of "2020-06-15", silently
+        # discarding the rest of the bound instead of diagnosing it), and
+        # per-bound disambiguation against basedate (NOT wanted here). A
+        # bracketed range's bounds must stay ambiguous until the combine
+        # step below, where timespan.disambiguated()'s joint range
+        # heuristics read them together, exactly as whoosh's own
+        # range_to_dt does: copy the end's year onto a year-less start,
+        # borrow end.year - 1 when the range reads backwards across a year
+        # boundary, push the end past midnight for an overnight time
+        # range. Disambiguating each bound independently first (as the
+        # wrapper does) resolves "[dec to feb]" to December and February
+        # of the SAME basedate year, an inverted lo > hi range that
+        # matches nothing. See text_to_node, which parses single
+        # (non-range) values through the wrapper, where the eager
+        # per-value disambiguation is correct.
+        bound_parser = ToEnd(self.dateparser.get_parser())
         raw_start: Any = None
         raw_end: Any = None
         if node.start:
             try:
-                raw_start = self.dateparser.date_from(node.start, local_now)
+                raw_start = bound_parser.date_from(node.start, local_now)
             except (ValueError, OverflowError):
                 return self._error(node, node.start, spec.name)
             if raw_start is None:
                 return self._error(node, node.start, spec.name)
         if node.end:
             try:
-                raw_end = self.dateparser.date_from(node.end, local_now)
+                raw_end = bound_parser.date_from(node.end, local_now)
             except (ValueError, OverflowError):
                 return self._error(node, node.end, spec.name)
             if raw_end is None:
                 return self._error(node, node.end, spec.name)
 
-        start_exact = isinstance(raw_start, datetime)
-        end_exact = isinstance(raw_end, datetime)
+        # "Exact" means the bound needs no disambiguation at all (a
+        # concrete datetime from the grammar, e.g. "now", or a
+        # fully-specified adatetime): such a bound names an instant, so it
+        # keeps the bracket inclusivity the user typed and skips the
+        # half-open +1-microsecond ceiling below. A timespan bound is
+        # never exact (it names a period).
+        start_exact = isinstance(raw_start, datetime) or (
+            isinstance(raw_start, adatetime) and not is_ambiguous(raw_start)
+        )
+        end_exact = isinstance(raw_end, datetime) or (
+            isinstance(raw_end, adatetime) and not is_ambiguous(raw_end)
+        )
 
         lo_naive: datetime | None = None
         hi_naive: datetime | None = None
@@ -1082,7 +1106,21 @@ class DateParserPlugin(Plugin):
                        and not isinstance(raw_start, timespan)
                        and not isinstance(raw_end, timespan))
         if can_combine:
-            ts = timespan(raw_start, raw_end).disambiguated(local_now)
+            try:
+                ts = timespan(raw_start, raw_end).disambiguated(local_now)
+            except (ValueError, OverflowError):
+                # The joint step sees both bounds at once, so a failure
+                # (e.g. a year-0 bound with no datetime representation)
+                # must be re-attributed: the bound that also fails on its
+                # own is the culprit; if each is individually fine, name
+                # the end bound (matching range_to_node's fallback
+                # preference).
+                try:
+                    if isinstance(raw_start, (adatetime, timespan)):
+                        raw_start.disambiguated(local_now)
+                except (ValueError, OverflowError):
+                    return self._error(node, node.start, spec.name)
+                return self._error(node, node.end, spec.name)
             lo_naive, hi_naive = cast(datetime, ts.start), cast(datetime, ts.end)
         else:
             if raw_start is not None:

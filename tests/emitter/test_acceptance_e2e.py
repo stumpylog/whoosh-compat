@@ -211,6 +211,18 @@ SCENARIOS_EQUAL = [
         # so it belongs in the has_tag:false result alongside doc 3.
     ),
     pytest.param("created:[2020 to]", [1, 4], id="lowercase-to-open-range"),
+    pytest.param(
+        "created:[jun to mar]",
+        [1, 2],
+        id="backward-month-range-joint-disambiguation",
+        # basedate is 2020-04-15 (BASE): the bounds are read jointly
+        # (June 2019 through March 2020, borrowing the previous year for
+        # the backward-reading start), catching doc 2 (2019-06-01) and
+        # doc 1 (2020-03-15) but not doc 5 (2019-03-01, before the
+        # borrowed start). Read independently against the basedate
+        # instead, both bounds would land in 2020, an inverted lo > hi
+        # range matching nothing.
+    ),
     pytest.param("added:[now-7d TO now]", [], id="basedate-relative-bracket-range"),
     pytest.param('added:"-1 week"', [], id="basedate-relative-quoted-keyword"),
     pytest.param("title:*", [1, 2, 3, 4, 5], id="bare-star-every-doc-with-title"),

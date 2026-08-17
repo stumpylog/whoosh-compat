@@ -8,8 +8,10 @@ import whoosh_compat as wc
 from whoosh_compat import ast
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
+from whoosh_compat.fields import FieldSpec
 from whoosh_compat.parser import dateparse as dp
 from whoosh_compat.parser import syntax
 from whoosh_compat.parser.dateparse import DateErrorNode
@@ -459,6 +461,73 @@ def test_range_open_lower(reg: FieldRegistry) -> None:
     assert r.hi is not None
 
 
+@pytest.mark.parametrize(
+    ("query", "expected_lo", "expected_hi"),
+    [
+        # BASE is 2026-08-04. Whoosh reads a bracketed range's two bounds
+        # jointly (timespan.disambiguated's range heuristics), so a
+        # backward-reading range spans the boundary instead of inverting.
+        pytest.param(
+            "added:[dec to feb]",
+            datetime(2025, 12, 1, tzinfo=BERLIN),
+            datetime(2026, 3, 1, tzinfo=BERLIN),
+            id="backward-months-borrow-previous-year",
+        ),
+        pytest.param(
+            "added:[dec 25 to jan 5]",
+            datetime(2025, 12, 25, tzinfo=BERLIN),
+            datetime(2026, 1, 6, tzinfo=BERLIN),
+            id="year-boundary-crossing-days",
+        ),
+        pytest.param(
+            "added:[noon to 3am]",
+            datetime(2026, 8, 4, 12, 0, tzinfo=BERLIN),
+            datetime(2026, 8, 5, 4, 0, tzinfo=BERLIN),
+            id="overnight-time-range-pushes-end-to-next-day",
+        ),
+        pytest.param(
+            "added:[3pm to 10am]",
+            datetime(2026, 8, 4, 15, 0, tzinfo=BERLIN),
+            datetime(2026, 8, 5, 11, 0, tzinfo=BERLIN),
+            id="overnight-pm-to-am",
+        ),
+        pytest.param(
+            "added:[feb to may]",
+            datetime(2026, 2, 1, tzinfo=BERLIN),
+            datetime(2026, 6, 1, tzinfo=BERLIN),
+            id="forward-months-both-basedate-year",
+        ),
+        pytest.param(
+            "added:[2021 to 2020]",
+            datetime(2020, 1, 1, tzinfo=BERLIN),
+            datetime(2022, 1, 1, tzinfo=BERLIN),
+            id="backward-years-swap-to-cover-both",
+        ),
+    ],
+)
+def test_range_joint_disambiguation(
+    reg: FieldRegistry, query: str, expected_lo: datetime, expected_hi: datetime
+) -> None:
+    # Expected bounds measured directly against the pinned whoosh oracle
+    # (whoosh's inclusive last-microsecond ceiling, expressed here in this
+    # library's half-open exclusive-upper form).
+    r = dparse(query, reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == expected_lo.astimezone(UTC)
+    assert r.hi == expected_hi.astimezone(UTC)
+    assert r.incl_lo
+    assert not r.incl_hi
+
+
+def test_range_joint_disambiguation_date_only_field(reg: FieldRegistry) -> None:
+    # The date_only sibling cell: "created" collapses to UTC calendar days,
+    # but the joint reading of the two bounds must happen first.
+    r = dparse("created:[dec to feb]", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2025, 12, 1, tzinfo=UTC)
+    assert r.hi == datetime(2026, 3, 1, tzinfo=UTC)
+
+
 def test_range_both_sides_are_periods_cannot_combine(reg: FieldRegistry) -> None:
     # Both sides resolve to an already-disambiguated timespan ("previous
     # week"/"previous month"), which can't be nested inside another
@@ -718,6 +787,19 @@ def test_naive_basedate_rejected_via_parse(reg: FieldRegistry) -> None:
         wc.parse(
             "created:today", registry=reg, default_fields=["content"], tz=BERLIN, basedate=naive
         )
+
+
+def test_naive_basedate_rejected_even_without_date_fields() -> None:
+    # The rejection is parse()'s own contract, not a side effect of
+    # DateParserPlugin construction: a registry with no DATE/DATETIME
+    # fields (where the plugin is never attached) must reject the same
+    # host misconfiguration instead of silently accepting and ignoring
+    # it, so whether bad config raises cannot depend on unrelated
+    # registry contents.
+    text_only = FieldRegistry([FieldSpec("content", FieldKind.TEXT)])
+    naive = datetime(2026, 8, 4, 10, 30)  # no tzinfo
+    with pytest.raises(ValueError, match="aware"):
+        wc.parse("foo", registry=text_only, default_fields=["content"], basedate=naive)
 
 
 def test_aware_basedate_with_same_wall_clock_still_works(reg: FieldRegistry) -> None:
