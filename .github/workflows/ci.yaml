@@ -88,8 +88,23 @@ jobs:
       - name: Pin tantivy to paperless-ngx's version
         run: uv pip install "tantivy~=0.26.0"
 
+      - name: Verify the pin took effect
+        # Guards the step above staying meaningful: uv run re-syncs to
+        # uv.lock by default, silently reverting the pip-installed pin, so
+        # both run steps below need --no-sync. This check fails
+        # the job outright if the imported tantivy does not satisfy the
+        # pin, rather than letting the job silently test the lockfile's
+        # version while claiming to test paperless-ngx's.
+        run: |
+          uv run --no-sync python -c "
+          from importlib.metadata import version
+          v = version('tantivy')
+          assert v.startswith('0.26.'), f'pin did not take effect: tantivy {v}'
+          print(f'testing against tantivy {v}')
+          "
+
       - name: Test emitter against the pinned tantivy
-        run: uv run pytest tests/emitter
+        run: uv run --no-sync pytest tests/emitter
 
   publish:
     name: Publish to PyPI
