@@ -3,12 +3,21 @@
 from __future__ import annotations
 
 import dataclasses
+import re
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
 from dataclasses import dataclass
+from dataclasses import field
 from enum import Enum
 from enum import auto
+from types import MappingProxyType
+
+# The character class of the fieldname tagger's expression
+# (parser/plugins.py's FieldsPlugin.expr, r"(?P<text>[\w.]+|[*]):"): the
+# alphabet a registered JSON subpath must stay inside to be addressable
+# from query text at all. See FieldRegistry.__init__'s subpath validation.
+_TAGGER_REACHABLE_SUBPATH = re.compile(r"[\w.]+")
 
 
 class FieldKind(Enum):
@@ -51,7 +60,7 @@ class ExistsStrategy(Enum):
     """Like ``FAST_FIELD``, but for a fast JSON field: tantivy's
     ``exists_query`` only checks a JSON field's subpath columns when passed
     ``json_subpaths=True``; without it, nothing is ever found to exist
-    (issue #7). A JSON field's "fastness" only ever means its subpaths are
+   . A JSON field's "fastness" only ever means its subpaths are
     fast columns, so this is the resolved strategy for every fast JSON
     field, never plain ``FAST_FIELD``.
     """
@@ -136,18 +145,30 @@ class SubpathSpec:
 class FieldSpec:
     """Specification for a single field in the schema.
 
-    ``analyzer``/``pattern_normalizer``/``multitoken``/``comma_values`` are
-    only consulted for kinds that use them (TEXT/KEYWORD, plus JSON for
-    ``analyzer``); setting one on a kind that ignores it is permitted, not
+    ``analyzer``/``pattern_normalizer``/``multitoken`` are only consulted
+    for kinds that use them (TEXT/KEYWORD, plus JSON for ``analyzer``);
+    setting one of those three on a kind that ignores it is permitted, not
     validated against, since a host may reasonably share one ``FieldSpec``
     factory across kinds rather than branch on kind to omit them.
+    ``comma_values`` is the exception: ``FieldRegistry.__init__`` raises
+    ``ValueError`` for ``comma_values=True`` on any kind other than
+    KEYWORD, U64, or TEXT (a comma in a date or boolean value is a parse
+    problem, not a list), so a shared factory must branch on kind for this
+    one flag.
 
     ``subpaths`` accepts either its canonical form, a
     ``Mapping[str, SubpathSpec]``, or a ``tuple[str, ...]`` as sugar for "all
     of these subpaths, with the trivial default ``SubpathSpec``";
-    ``__post_init__`` normalizes a tuple into the mapping form, so the value
-    actually stored on a constructed instance is always the mapping, never
-    the tuple a caller may have passed in.
+    ``__post_init__`` normalizes either input into the stored form: a
+    read-only *snapshot* (``MappingProxyType`` over a private copy), never
+    the tuple or the caller's own mapping object. The copy is what keeps
+    the "registry validates eagerly" contract honest: a host that retains
+    a reference to the mapping it passed in cannot mutate subpaths into
+    the spec after ``FieldRegistry`` construction has validated them, and
+    the proxy rejects direct ``spec.subpaths[...] = ...`` assignment too.
+    ``subpaths`` is excluded from the generated ``__hash__`` (mappings are
+    unhashable) but still participates in ``__eq__``; equal specs hash
+    equal, so the frozen spec is usable as a set member or dict key.
     """
 
     name: str
@@ -158,7 +179,7 @@ class FieldSpec:
     pattern_normalizer: Callable[[str], str] | None = None
     multitoken: Multitoken = Multitoken.DEFAULT
     exists_target: str | None = None
-    subpaths: Mapping[str, SubpathSpec] | tuple[str, ...] = ()
+    subpaths: Mapping[str, SubpathSpec] | tuple[str, ...] = field(default=(), hash=False)
     date_only: bool = False
     fast: bool = False
 
@@ -177,11 +198,17 @@ class FieldSpec:
                         f"subpaths tuple; remove the duplicate"
                     )
                 seen.add(path)
-            # Frozen dataclass: normalize through object.__setattr__ rather
-            # than plain assignment. This is the one place a tuple form of
-            # subpaths survives past construction; every reader elsewhere
-            # sees only the normalized mapping.
-            object.__setattr__(self, "subpaths", {path: SubpathSpec() for path in self.subpaths})
+            normalized = {path: SubpathSpec() for path in self.subpaths}
+        else:
+            # Copy, don't alias: the caller may retain (and later mutate)
+            # the mapping object it passed in, and validation has to bind
+            # to what was true at construction time.
+            normalized = dict(self.subpaths)
+        # Frozen dataclass: normalize through object.__setattr__ rather
+        # than plain assignment. Every reader elsewhere sees only this
+        # read-only snapshot, never the tuple sugar or the caller's own
+        # mapping object.
+        object.__setattr__(self, "subpaths", MappingProxyType(normalized))
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,13 +289,19 @@ class FieldRegistry:
             # addressable through the fieldname tagger. An empty subpath
             # constructs and resolves (make_ref("attrs.") -> FieldRef("attrs",
             # json_path="")) but no query text can ever type it, so a Term
-            # built against it silently matches nothing. A subpath containing
-            # whitespace, ':', or '"' has the same problem: the fieldname
-            # tagger's expression (FieldsPlugin.expr, r"(?P<text>[\w.]+|[*]):")
-            # only ever captures word characters and dots, so such a subpath
-            # is likewise unreachable from any query text, and a hand-built
-            # FieldRef carrying one would feed it unescaped into the JSON
-            # parse_query fallback string.
+            # built against it silently matches nothing. Any character
+            # outside the fieldname tagger's own alphabet has the same
+            # problem: the tagger's expression (FieldsPlugin.expr,
+            # r"(?P<text>[\w.]+|[*]):") only ever captures word characters
+            # and dots, so a subpath containing anything else (whitespace,
+            # ':', '"', '-', '/', ...) is unreachable from any query text
+            # and every query addressing it silently degrades to
+            # default-field text noise. Validation is a whitelist over that
+            # same character class rather than an enumerated blacklist, so
+            # it cannot drift out of sync with the tagger regex. A
+            # hand-built FieldRef carrying an unreachable subpath would
+            # also feed it unescaped into the JSON parse_query fallback
+            # string.
             if spec.kind == FieldKind.JSON:
                 for subpath in spec.subpaths:
                     if subpath == "":
@@ -276,11 +309,12 @@ class FieldRegistry:
                             f"Field '{spec.name}': a JSON field's subpath must not be "
                             f"empty (no query text can ever address it)"
                         )
-                    if any(ch.isspace() for ch in subpath) or ":" in subpath or '"' in subpath:
+                    if not _TAGGER_REACHABLE_SUBPATH.fullmatch(subpath):
                         raise ValueError(
                             f"Field '{spec.name}': subpath '{subpath}' contains a "
                             f"character the fieldname tagger can never produce "
-                            f"(whitespace, ':', or '\"'); remove it from the subpath"
+                            f"(only word characters and '.' are addressable from "
+                            f"query text); remove it from the subpath"
                         )
 
             # Validate: comma_values only on KEYWORD, U64, TEXT
@@ -321,7 +355,7 @@ class FieldRegistry:
             # tests/emitter/test_emit_terms.py's dotted-plain-field tests).
             # A dotted *JSON* name is different: make_ref's exact-match
             # branch explicitly excludes JSON kind (a bare JSON reference
-            # has no subpath and can't emit, see issue #11's demotion fix),
+            # has no subpath and can't emit, see FieldsPlugin's demotion),
             # so it falls through to dotted-name splitting instead, which
             # looks up the text *before* the first dot as a field name; for
             # a JSON field whose own canonical name contains a dot, that
@@ -419,7 +453,10 @@ class FieldRegistry:
 
         # Fourth pass: reject a registered canonical name or alias that
         # exactly matches "<jsonfield>.<subpath>" for any registered JSON
-        # field's subpath. This is the mirror image of the dotted-JSON-name
+        # field's subpath, where <jsonfield> is the JSON field's canonical
+        # name OR any of its aliases (an alias makes "<alias>.<subpath>:" a
+        # supported query route too: make_ref resolves the subpath through
+        # the alias). This is the mirror image of the dotted-JSON-name
         # rejection above: make_ref resolves an exact match before ever
         # attempting a dotted-subpath split, so a plain field or alias
         # spelled exactly like a registered subpath's dotted form would
@@ -432,22 +469,24 @@ class FieldRegistry:
             if spec.kind is not FieldKind.JSON:
                 continue
             for subpath in spec.subpaths:
-                dotted = f"{spec.name}.{subpath}"
-                colliding = self._by_name.get(dotted)
-                if colliding is None:
-                    continue
-                collision_desc = (
-                    f"canonical name '{dotted}'"
-                    if colliding.name == dotted
-                    else f"alias '{dotted}'"
-                )
-                raise ValueError(
-                    f"Field '{spec.name}': subpath '{subpath}' is shadowed by field "
-                    f"'{colliding.name}''s {collision_desc} (make_ref resolves an "
-                    f"exact match before ever trying a dotted-subpath split, so "
-                    f"'{dotted}:' would always resolve to '{colliding.name}', never "
-                    f"this subpath); rename '{colliding.name}' or its colliding name"
-                )
+                for route_name in (spec.name, *spec.aliases):
+                    dotted = f"{route_name}.{subpath}"
+                    colliding = self._by_name.get(dotted)
+                    if colliding is None:
+                        continue
+                    collision_desc = (
+                        f"canonical name '{dotted}'"
+                        if colliding.name == dotted
+                        else f"alias '{dotted}'"
+                    )
+                    raise ValueError(
+                        f"Field '{spec.name}': subpath '{subpath}' is shadowed by "
+                        f"field '{colliding.name}''s {collision_desc} (make_ref "
+                        f"resolves an exact match before ever trying a "
+                        f"dotted-subpath split, so '{dotted}:' would always resolve "
+                        f"to '{colliding.name}', never this subpath); rename "
+                        f"'{colliding.name}' or its colliding name"
+                    )
 
     def resolve(self, ref: FieldRef) -> ResolvedField | None:
         """Resolve a :class:`FieldRef` to a :class:`ResolvedField`.
@@ -539,11 +578,11 @@ class FieldRegistry:
         to a JSON-kind spec, addressed without a subpath.
 
         A narrower, separate query from :meth:`make_ref`: ``make_ref``
-        deliberately returns ``None`` for this exact shape (issue #11), so a
+        deliberately returns ``None`` for this exact shape, so a
         bare JSON field name demotes to a text search when addressed with a
         real term or pattern. But one bare-JSON shape is not a term or
         pattern at all: a lone ``*`` is the existence-check special case
-        (issue #16, mirrored for U64/BOOLEAN_EXISTS in
+        (mirrored for U64/BOOLEAN_EXISTS in
         ``QueryParser.term_query``, DIVERGENCES.md entries 20 and 29), and
         the emitter still fully supports it for a bare JSON field
         (``visit_every`` needs no subpath). ``FieldsPlugin.do_fieldnames``

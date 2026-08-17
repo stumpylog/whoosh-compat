@@ -230,7 +230,7 @@ def test_make_ref_dotted_name_on_non_json_spec_returns_none() -> None:
 
 def test_make_ref_json_field_bare_name_is_unrecognized() -> None:
     """make_ref() on a JSON field's bare name (no dot, no subpath) returns
-    None rather than a plain ref (issue #11): a JSON field addressed
+    None rather than a plain ref: a JSON field addressed
     without a subpath has no way to emit, so treating it as known here
     would let e.g. "notes:foo" parse cleanly and then raise at emit time.
     """
@@ -241,7 +241,7 @@ def test_make_ref_json_field_bare_name_is_unrecognized() -> None:
 
 def test_is_bare_json_field_true_for_json_bare_name_or_alias() -> None:
     """is_bare_json_field() is the narrow query FieldsPlugin.do_fieldnames
-    uses (issue #11, reopened) to detect the one shape a bare JSON field
+    uses to detect the one shape a bare JSON field
     name is still allowed to reach as a recognized field prefix: a lone
     "*" existence check. It must say True for the canonical name and any
     alias, independent of make_ref()'s own (deliberately stricter) answer.
@@ -381,7 +381,8 @@ def test_validation_duplicate_aliases() -> None:
 
 
 def test_validation_duplicate_canonical_name_message_names_alias_collision() -> None:
-    """issue #21: when a later spec's canonical name collides with an
+    """Registry construction validation: when a later spec's canonical name
+    collides with an
     *earlier* spec's alias (not its canonical name), the message must say
     so, not claim "duplicate canonical name" (which is what actually
     collided is an alias, a different, more confusing conflict to debug).
@@ -397,7 +398,7 @@ def test_validation_duplicate_canonical_name_message_names_alias_collision() -> 
 
 
 def test_validation_rejects_empty_canonical_name() -> None:
-    """issue #21: an empty field name can never be typed in a query."""
+    """An empty field name can never be typed in a query."""
     with pytest.raises(ValueError, match="empty"):
         FieldRegistry([FieldSpec(name="", kind=FieldKind.TEXT)])
 
@@ -408,7 +409,7 @@ def test_validation_rejects_empty_alias() -> None:
 
 
 def test_validation_rejects_duplicate_aliases_within_one_spec() -> None:
-    """issue #21: two identical aliases on the *same* spec (as opposed to
+    """Two identical aliases on the *same* spec (as opposed to
     test_validation_duplicate_aliases's cross-spec case) previously slipped
     past the collision check entirely, since that check only compares
     against specs already registered, not a spec's own aliases tuple.
@@ -420,10 +421,10 @@ def test_validation_rejects_duplicate_aliases_within_one_spec() -> None:
 
 
 def test_validation_rejects_dotted_json_canonical_name() -> None:
-    """issue #21 (narrowed by the follow-up status-update comment): a
+    """A deliberately narrowed validation: a
     dotted canonical name is only actually unreachable for a JSON-kind
     field. make_ref's exact-match branch excludes JSON specifically (a
-    bare JSON reference has no subpath and can't emit, issue #11), so a
+    bare JSON reference has no subpath and can't emit), so a
     dotted JSON name falls through to dotted-name splitting, which looks
     up the text *before* the first dot as the field name -- never this
     field's own name -- so it (and every one of its subpaths) can never
@@ -454,7 +455,7 @@ def test_validation_dotted_plain_canonical_name_is_permitted() -> None:
     supported, tested shape (tests/emitter/test_emit_terms.py's
     dotted-plain-field tests): make_ref's exact-match lookup finds it
     directly, so unlike the JSON case it is genuinely reachable. The
-    follow-up status-update comment on issue #21 corrects the original,
+    narrowing decision corrects the original,
     broader "reject all dotted canonical names" decision to this narrower
     JSON-only scope after confirming the plain-field case actually works.
     """
@@ -470,7 +471,7 @@ def test_validation_dotted_plain_alias_is_permitted() -> None:
 
 
 def test_validation_boolean_exists_target_boolean_exists_kind_rejected() -> None:
-    """issue #21: a BOOLEAN_EXISTS exists_target can never work, since a
+    """A BOOLEAN_EXISTS exists_target can never work, since a
     BOOLEAN_EXISTS field has no physical index column of its own to check
     "exists" against, no matter its fast/kind-resolved strategy. Previously
     only the *non-fast* case was rejected: a fast=True BOOLEAN_EXISTS
@@ -527,7 +528,7 @@ def test_validation_boolean_exists_fast_self_reference_rejected() -> None:
 
 
 def test_analyzer_on_kind_that_ignores_it_is_permitted() -> None:
-    """issue #21, documented as permitted (not a validation gap): a host
+    """Documented as permitted (not a validation gap): a host
     may reasonably share one FieldSpec factory across kinds, passing an
     analyzer that a non-TEXT/KEYWORD/JSON kind simply never calls.
     """
@@ -739,19 +740,48 @@ def test_validation_rejects_duplicate_subpath_in_tuple_sugar() -> None:
         pytest.param("has space", id="whitespace"),
         pytest.param("has:colon", id="colon"),
         pytest.param('has"quote', id="double-quote"),
+        pytest.param("has-hyphen", id="hyphen"),
+        pytest.param("has/slash", id="slash"),
+        pytest.param("has#hash", id="hash"),
+        pytest.param("has'quote", id="single-quote"),
+        pytest.param("has(paren", id="paren"),
     ],
 )
 def test_validation_rejects_subpath_with_unreachable_character(subpath: str) -> None:
     """The fieldname tagger's expression
     (``FieldsPlugin.expr``, ``r"(?P<text>[\\w.]+|[*]):"``) only ever captures
-    word characters and dots, so a subpath containing whitespace, ':', or '"'
-    can never be typed in any query text. A hand-built FieldRef carrying one
-    would also feed it unescaped into the JSON parse_query fallback string.
+    word characters and dots, so a subpath containing ANY other character
+    can never be typed in any query text: a query addressing it silently
+    degrades to default-field text noise with no diagnostic. Validation is
+    a whitelist over the tagger's own alphabet, not an enumerated
+    blacklist, so it cannot drift out of sync with the tagger regex.
+    A hand-built FieldRef carrying an unreachable subpath would also feed
+    it unescaped into the JSON parse_query fallback string.
     """
     with pytest.raises(ValueError, match="attrs"):
         FieldRegistry(
             [FieldSpec(name="attrs", kind=FieldKind.JSON, subpaths=(subpath,), fast=True)]
         )
+
+
+@pytest.mark.parametrize(
+    "subpath",
+    [
+        pytest.param("plain", id="plain-word"),
+        pytest.param("with_underscore", id="underscore"),
+        pytest.param("digits123", id="digits"),
+        pytest.param("dotted.inner", id="dotted"),
+    ],
+)
+def test_validation_accepts_tagger_reachable_subpaths(subpath: str) -> None:
+    # Controls for the whitelist above: every character class the tagger
+    # CAN capture (word characters and dots) must keep constructing.
+    reg = FieldRegistry(
+        [FieldSpec(name="attrs", kind=FieldKind.JSON, subpaths=(subpath,), fast=True)]
+    )
+    ref = reg.make_ref(f"attrs.{subpath}")
+    assert ref is not None
+    assert ref.json_path == subpath
 
 
 @pytest.mark.parametrize(
@@ -797,6 +827,88 @@ def test_validation_rejects_alias_shadowing_subpath() -> None:
     with pytest.raises(ValueError, match="attrs") as excinfo:
         FieldRegistry([spec1, spec2])
     assert "other" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "collider",
+    [
+        pytest.param(FieldSpec(name="meta.user", kind=FieldKind.TEXT), id="canonical-name"),
+        pytest.param(
+            FieldSpec(name="other", kind=FieldKind.TEXT, aliases=("meta.user",)),
+            id="alias",
+        ),
+    ],
+)
+def test_validation_rejects_shadowing_of_alias_dotted_subpath_route(
+    collider: FieldSpec,
+) -> None:
+    """The alias sibling of the two checks above, on the JSON field's OWN
+    side this time: a JSON field's alias makes "<alias>.<subpath>" a
+    supported query route too (make_ref resolves the subpath through the
+    alias), so a plain field or alias spelled exactly like the
+    alias-dotted form steals that route just as surely as the
+    canonical-dotted form, and must be rejected the same way.
+    """
+    json_spec = FieldSpec(
+        name="attrs", kind=FieldKind.JSON, subpaths=("user",), aliases=("meta",), fast=True
+    )
+    with pytest.raises(ValueError, match="attrs") as excinfo:
+        FieldRegistry([json_spec, collider])
+    assert "user" in str(excinfo.value)
+
+
+def test_subpaths_mapping_is_snapshotted_and_read_only() -> None:
+    """The stored subpaths must be a defensive, read-only snapshot: a host
+    that keeps a reference to the mapping it passed in must not be able to
+    smuggle in, after construction, subpaths that eager registry
+    validation would have rejected (the "registry raises eagerly"
+    invariant would otherwise be bypassable with no error anywhere).
+    """
+    mine = {"user": SubpathSpec()}
+    spec = FieldSpec(name="attrs", kind=FieldKind.JSON, subpaths=mine, fast=True)
+    reg = FieldRegistry([spec])
+    mine[""] = SubpathSpec()  # construction rejects an empty subpath
+    assert "" not in spec.subpaths
+    assert reg.make_ref("attrs.") is None
+    with pytest.raises(TypeError):
+        spec.subpaths[""] = SubpathSpec()  # type: ignore[index]
+
+
+def test_subpaths_tuple_sugar_is_read_only_too() -> None:
+    spec = FieldSpec(name="attrs", kind=FieldKind.JSON, subpaths=("user",))
+    with pytest.raises(TypeError):
+        spec.subpaths["extra"] = SubpathSpec()  # type: ignore[index]
+
+
+def test_fieldspec_is_hashable() -> None:
+    # frozen=True advertises value semantics; a frozen spec that blows up
+    # in hash() the moment it carries subpaths is a trap for any future
+    # set/dict-key use. Equal specs must hash equal.
+    a = FieldSpec(name="attrs", kind=FieldKind.JSON, subpaths=("user",))
+    b = FieldSpec(name="attrs", kind=FieldKind.JSON, subpaths=("user",))
+    assert a == b
+    assert hash(a) == hash(b)
+    assert len({a, b}) == 1
+
+
+def test_alias_dotted_subpath_route_resolves_without_collider() -> None:
+    # Control for the rejection above: the alias-dotted route itself is
+    # legitimate and must keep resolving to the subpath.
+    reg = FieldRegistry(
+        [
+            FieldSpec(
+                name="attrs",
+                kind=FieldKind.JSON,
+                subpaths=("user",),
+                aliases=("meta",),
+                fast=True,
+            )
+        ]
+    )
+    ref = reg.make_ref("meta.user")
+    assert ref is not None
+    assert ref.name == "attrs"
+    assert ref.json_path == "user"
 
 
 def test_validation_multi_dot_subpath_still_constructs() -> None:
