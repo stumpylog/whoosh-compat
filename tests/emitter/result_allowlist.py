@@ -42,6 +42,9 @@ from __future__ import annotations
 
 import re
 
+from tests.differential.allowlist import KEYWORD_FIELDS_PATTERN
+from tests.differential.allowlist import ZERO_TOKEN_WORD
+
 # (pattern, DIVERGENCES.md reference + short reason)
 RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
     # DIVERGENCES.md entries 14/37 (design, extended to the result level):
@@ -151,8 +154,8 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
         re.compile(
             r"(?=.*(?:\bNOT\b|\bANDNOT\b|\bANDMAYBE\b|\bREQUIRE\b"
             r"|(?:^|[\s(:])\*(?:$|[\s)])))"
-            r".*(?!(?:tag|tag_id|custom_fields_id|viewer_id):)\b\w+:"
-            r"(?:the|a|an|of|to|and|in|is|it|by|\w)\b"
+            rf".*(?!(?:{KEYWORD_FIELDS_PATTERN}):)\b\w+:"
+            rf"{ZERO_TOKEN_WORD}\b"
         ),
         (
             "DIVERGENCES.md entry 23 (design, result-level extension,"

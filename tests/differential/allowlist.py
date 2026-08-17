@@ -82,6 +82,8 @@ from __future__ import annotations
 import enum
 import re
 
+from whoosh.analysis import STOP_WORDS
+
 from tests.differential.oracle import ORACLE_REGISTRY
 from whoosh_compat.fields import FieldKind
 
@@ -102,6 +104,44 @@ _ANALYZER_SPLIT_FIELDS = "|".join(
             name
             for spec in ORACLE_REGISTRY
             if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD)
+            for name in (spec.name, *spec.aliases)
+        ),
+        key=len,
+        reverse=True,
+    )
+)
+
+# A single word StandardAnalyzer analyzes to zero tokens: any of whoosh's
+# own STOP_WORDS (case-insensitively, since LowercaseFilter runs before the
+# stop filter) or any single word character (minsize=2 drops it). Derived
+# from whoosh's live STOP_WORDS set, never hand-enumerated: an earlier
+# hand-written ten-word list here silently covered less than a third of the
+# real set, and the fuzzer word alphabets can draw any of them (a latent
+# flake until the first unlucky draw). Longest-first so a named stopword
+# matches itself rather than a shorter prefix; each use site appends its
+# own boundary lookahead so a real word merely STARTING with a stopword
+# ("thermal", "20th") is not mistaken for one. Shared with
+# tests/emitter/result_allowlist.py's entry-23 result-level regex.
+# test_allowlist_xref.py pins the coverage word by word.
+ZERO_TOKEN_WORD = (
+    "(?i:"
+    + "|".join(re.escape(w) for w in sorted(STOP_WORDS, key=lambda w: (-len(w), w)))
+    + r"|\w)"
+)
+
+# Every registered KEYWORD field name (and alias), for excluding them from
+# zero-token-word entries: whoosh's KEYWORD analyzer only splits on commas,
+# with no stopword/minsize filtering, so a stopword-shaped KEYWORD value is
+# NOT zero-token. Derived from the registry for the same no-drift reason
+# as _ANALYZER_SPLIT_FIELDS above. Shared with
+# tests/emitter/result_allowlist.py.
+KEYWORD_FIELDS_PATTERN = "|".join(
+    re.escape(name)
+    for name in sorted(
+        (
+            name
+            for spec in ORACLE_REGISTRY
+            if spec.kind is FieldKind.KEYWORD
             for name in (spec.name, *spec.aliases)
         ),
         key=len,
@@ -451,9 +491,8 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # comparison tree becomes "matches everything", while real whoosh's
     # Not(NullQuery).normalize() stays NullQuery ("matches nothing"), same
     # as entry 23. Scoped to a NOT directly wrapping a single known-
-    # zero-token-word value on any field (see strategies.ZERO_TOKEN_WORDS;
-    # kept as a literal list here rather than importing strategies.py, so
-    # this module doesn't depend on the fuzzer that discovered the case).
+    # zero-token-word value on any field (the ZERO_TOKEN_WORD fragment,
+    # derived from whoosh's own STOP_WORDS set at the top of this module).
     # The field name itself is left generic (any \w+) rather than
     # enumerated: the mechanism applies to every TEXT field in the
     # registry, and an earlier version of this entry that spelled out only
@@ -474,8 +513,9 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # is a real comparison, not this divergence.
     (
         re.compile(
-            r"\bNOT\s*\(*\s*(?!(?:tag|tag_id|custom_fields_id|viewer_id):)\w+:"
-            r"(?:the|a|an|of|to|and|in|is|it|by|\w)(?=\W|$)"
+            r"\bNOT\s*\(*\s*"
+            rf"(?!(?:{KEYWORD_FIELDS_PATTERN}):)\w+:"
+            rf"{ZERO_TOKEN_WORD}(?=\W|$)"
         ),
         (
             "DIVERGENCES.md entry 23: NOT of a zero-token term/phrase reaches the"
@@ -495,8 +535,8 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # correctly drops the whole phrase (mirrors what TantivyEmitter would
     # do), collapsing the enclosing group to Nothing() instead. Scoped to a
     # double-quoted phrase whose entire content is one or more known
-    # zero-token words (see strategies.ZERO_TOKEN_WORDS; kept as a literal
-    # list here, same rationale as the entry-23 allowlist entry above). The
+    # zero-token words (the shared ZERO_TOKEN_WORD fragment, same
+    # derivation as the entry-23 allowlist entry above). The
     # field name is left generic for the same reason entry 23's was
     # broadened above. Each word is either a named stopword or a bare
     # single character (any single char is zero-token too, StandardAnalyzer's
@@ -508,8 +548,8 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     (
         re.compile(
             r"\b\w+:"
-            r'"(?:the|a|an|of|to|and|in|is|it|by|\w)(?=[\s"])'
-            r'(?:\s+(?:the|a|an|of|to|and|in|is|it|by|\w)(?=[\s"]))*"'
+            rf'"{ZERO_TOKEN_WORD}(?=[\s"])'
+            rf'(?:\s+{ZERO_TOKEN_WORD}(?=[\s"]))*"'
         ),
         (
             "DIVERGENCES.md entry 24: an all-zero-token quoted phrase parses to"

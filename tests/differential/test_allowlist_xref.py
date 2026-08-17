@@ -34,6 +34,7 @@ import pathlib
 import re
 
 import pytest
+from whoosh.analysis import STOP_WORDS
 
 from tests.differential.allowlist import ALLOW
 from tests.differential.allowlist import allowed_reason
@@ -180,3 +181,43 @@ def test_entry15_fielded_regex_covers_every_analyzer_splitting_field(field: str)
     reason = allowed_reason(f"asn:1 OR {field}:'a,b'")
     assert reason is not None, f"entry-15 fielded regex does not cover {field!r}"
     assert "entry 15" in reason, f"{field!r} matched a different entry: {reason!r}"
+
+
+_STOPWORD_PARAMS = [pytest.param(word, id=word) for word in sorted(STOP_WORDS)]
+
+
+@pytest.mark.parametrize("word", _STOPWORD_PARAMS)
+def test_entry23_regex_covers_every_whoosh_stopword(word: str) -> None:
+    """The entry-23 zero-token-word alternation must cover whoosh's whole
+    STOP_WORDS set, both cases: StandardAnalyzer lowercases before the
+    stop filter, so an uppercase spelling is zero-token too, and the
+    fuzzers' word alphabets include uppercase letters. Derived from
+    whoosh's own list so it cannot drift.
+    """
+    for spelling in (word, word.upper()):
+        reason = allowed_reason(f"NOT (title:{spelling})")
+        assert reason is not None, f"entry-23 regex does not cover {spelling!r}"
+        assert "entry 23" in reason, f"{spelling!r} matched a different entry: {reason!r}"
+
+
+@pytest.mark.parametrize("word", _STOPWORD_PARAMS)
+def test_entry24_regex_covers_every_whoosh_stopword(word: str) -> None:
+    # Both the single-word and multi-word phrase cells, both cases.
+    for spelling in (word, word.upper()):
+        for phrase in (f'title:"{spelling}"', f'title:"{spelling} {spelling}"'):
+            reason = allowed_reason(phrase)
+            assert reason is not None, f"entry-24 regex does not cover {phrase!r}"
+            assert "entry 24" in reason, f"{phrase!r} matched a different entry: {reason!r}"
+
+
+@pytest.mark.parametrize("word", _STOPWORD_PARAMS)
+def test_result_entry23_regex_covers_every_whoosh_stopword(word: str) -> None:
+    # The result-level sibling (tests/emitter/result_allowlist.py) shares
+    # the derived ZERO_TOKEN_WORD fragment; this pins that the sharing
+    # actually holds at its own entry point, word by word, both cases.
+    from tests.emitter.result_allowlist import allowed_result_reason
+
+    for spelling in (word, word.upper()):
+        reason = allowed_result_reason(f"NOT title:{spelling}")
+        assert reason is not None, f"result entry-23 regex does not cover {spelling!r}"
+        assert "entry 23" in reason, f"{spelling!r} matched a different entry: {reason!r}"
