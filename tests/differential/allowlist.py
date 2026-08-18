@@ -521,6 +521,27 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         ),
         DivergenceKind.MISMATCH,
     ),
+    # design (DIVERGENCES.md entry 49): the BARE unquoted sibling of the
+    # entry-48 spelling. Colon tokenization splits the value before any
+    # date grammar runs, and both sides then truncate the T-bearing chunk
+    # to the same month-precision period with the same surviving leftover
+    # tokens; the remaining structural divergence is a composite of two
+    # documented mechanisms (whoosh's naive NumericRange vs whoosh-compat's
+    # tz-aware DateRange, entry 12's defect family, and entry 15's
+    # multitoken AND-vs-OR over the leftover time tokens). Ordered BEFORE
+    # the entry-18 bare-ISO entry, whose fully-parses-numerically-correct
+    # prose does not describe the truncation. No quote after the colon:
+    # the quoted spellings belong to entries 48 (single) and 45 (double).
+    (
+        re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):\d{{4}}-\d\d-\d\d[Tt]"),
+        (
+            "design (DIVERGENCES.md entry 49): a bare unquoted T-separated"
+            " datetime value truncates to the same month period on both"
+            " sides; the trees differ only via the documented naive-vs-tz"
+            " range shape and multitoken AND-vs-OR leftover mechanisms"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
     # design (DIVERGENCES.md entry 18): a bare (non-bracketed) separated-ISO
     # date value on a date field ("created:2020-01-01", "created:2020-01")
     # is numerically correct on both sides but structurally different: real

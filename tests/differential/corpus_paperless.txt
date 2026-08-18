@@ -154,6 +154,12 @@ created:'2020.01.01'
 # trailing Z as the UTC designator.
 added:'2026-08-04T10:30:00'
 added:'2026-08-04T10:30:00Z'
+# DIVERGENCES.md entry 49: the bare unquoted sibling. Colon tokenization
+# truncates the value to the same month period on both sides; the trees
+# differ only via the documented naive-vs-tz range shape and the
+# multitoken AND-vs-OR handling of the leftover time tokens.
+added:2026-08-04T10:30:00
+added:2026-08-04T10:30:00Z
 # DIVERGENCES.md entry 45: the double-quoted sibling. whoosh's ErrorNode
 # fallback wraps a PhraseNode here, yielding a Phrase that crashes at
 # search time; whoosh-compat parses the correct day-period DateRange.

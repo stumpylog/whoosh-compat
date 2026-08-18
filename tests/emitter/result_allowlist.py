@@ -274,6 +274,24 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
             " whoosh but a correct DateRange in whoosh-compat"
         ),
     ),
+    # design (DIVERGENCES.md entry 49, value-dependent): the BARE unquoted
+    # sibling. Both sides truncate to the same month period and AND it
+    # with the stray time tokens, so both usually return nothing; when a
+    # document inside the window contains one (but not all) of the stray
+    # tokens, whoosh-compat's OR over them matches where real whoosh's
+    # per-field AND does not. Ordered before the entry-15 dashed-token
+    # pattern, whose TEXT-multitoken framing does not describe the date
+    # truncation face.
+    (
+        re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):\d{{4}}-\d\d-\d\d[Tt]"),
+        (
+            "design (DIVERGENCES.md entry 49, value-dependent): a bare"
+            " unquoted T-separated datetime value truncates to the same"
+            " month period on both sides; results differ only when a"
+            " document contains some but not all of the leftover time"
+            " tokens (whoosh-compat ORs them, real whoosh ANDs them)"
+        ),
+    ),
     # whoosh-bug (DIVERGENCES.md entry 45): a double-quoted separated-ISO
     # date value. whoosh parses it to a Phrase that RAISES QueryError at
     # search time (a DATETIME field has no positions), so there is no

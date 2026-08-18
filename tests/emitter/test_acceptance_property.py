@@ -496,6 +496,74 @@ def test_quoted_rfc3339_value_is_a_result_level_divergence(
     assert tantivy_search_ids_prop(tindex_prop, q_utc) == [1]
 
 
+def test_bare_rfc3339_value_is_a_result_level_divergence() -> None:
+    """DIVERGENCES.md entry 49: the bare unquoted T-separated spelling
+    truncates to the same month period on both sides, ANDed with the
+    stray time tokens, so both sides normally return nothing and the
+    shared DOCS_PROP fixture (no bare-number tokens anywhere) can never
+    exhibit the divergence. This test builds its own one-document dual
+    index (the same dedicated-corpus convention as
+    test_acceptance_e2e.py's issue-13568 scenario) whose content
+    contains exactly one of the stray tokens ("30"): whoosh-compat's OR
+    over the leftover tokens matches it, real whoosh's per-field AND
+    (needing "30" and "00" both) does not.
+    """
+
+    added = datetime(2020, 6, 15, 14, 0, tzinfo=BERLIN)
+    naive = datetime(2020, 6, 15, 12, 0)
+    assert _to_naive_utc(added) == naive
+
+    wix = RamStorage().create_index(oracle_schema())
+    writer = wix.writer()
+    writer.add_document(
+        id=7,
+        title="Meeting Notes",
+        content="meeting agenda item 30 review",
+        added=naive,
+        created=naive,
+        modified=naive,
+        has_correspondent=False,
+        has_tag=False,
+        has_type=False,
+        has_path=False,
+        has_custom_fields=False,
+        has_owner=False,
+    )
+    writer.commit()
+
+    schema = _build_tantivy_schema(_PROP_REGISTRY)
+    tix = tantivy.Index(schema)
+    tw = tix.writer()
+    doc = tantivy.Document()
+    doc.add_unsigned("id", 7)
+    doc.add_text("title", "Meeting Notes")
+    doc.add_text("content", "meeting agenda item 30 review")
+    for date_field in ("added", "created", "modified"):
+        doc.add_date(date_field, naive)
+    tw.add_document(doc)
+    tw.commit()
+    tix.reload()
+
+    def tantivy_ids(q: str) -> list[int]:
+        result = wc_parse(
+            q, registry=_PROP_REGISTRY, default_fields=V2_FIELDS, basedate=BASE, tz=BERLIN
+        )
+        assert not result.diagnostics
+        return search_ids(tix, emit_(result.ast, index=tix, registry=_PROP_REGISTRY))
+
+    for q in ("added:2020-06-15T10:30:00", "added:2020-06-15T10:30:00Z"):
+        assert allowed_result_reason(q) is not None
+        assert whoosh_search_ids(wix, q, BASE, BERLIN) == []
+        assert tantivy_ids(q) == [7]
+
+    # Control: a time whose stray tokens ("45", "00") appear in NO
+    # document agrees empty on both sides, isolating the OR-vs-AND
+    # leftover handling as the only divergence axis above.
+    q_control = "added:2020-06-15T10:45:00"
+    assert whoosh_search_ids(wix, q_control, BASE, BERLIN) == []
+    assert tantivy_ids(q_control) == []
+
+
 def test_not_under_andnot_is_a_result_level_divergence(
     windex_prop: WhooshIndex, tindex_prop: TIndex
 ) -> None:

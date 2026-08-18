@@ -1779,7 +1779,7 @@ parse-then-emit pipeline).
     45's double-quoted crash sibling. This entry covers the single-quoted
     spelling only: the bare unquoted spelling colon-tokenizes differently
     in whoosh (a partial numeric range plus leftover terms, not
-    `_NullQuery`) and is not claimed here.
+    `_NullQuery`) and is claimed by entry 49 instead.
 
     The bracketed-range face of the same extension needs no entry of its
     own: whoosh partially parses a `T`-bearing bound down to its leading
@@ -1796,3 +1796,48 @@ parse-then-emit pipeline).
     `added:'2026-08-04T10:30:00'` and `added:'2026-08-04T10:30:00Z'`
     lines; `tests/emitter/test_acceptance_property.py`'s
     `test_quoted_rfc3339_value_is_a_result_level_divergence`.
+
+49. **A bare unquoted `T`-separated datetime value truncates to a
+    month-precision date on BOTH sides; the remaining structural
+    divergence is a composite of already-documented mechanisms
+    (design).** The unquoted sibling of entry 48's single-quoted
+    spelling: the query tokenizer splits `added:2026-08-04T10:30:00` at
+    its colons before any date grammar runs, so the date parser on each
+    side sees only `2026-08-04T10` (or `2026-08-04t10`) plus stray
+    trailing words (`30`, `00`). Measured against the pinned oracle:
+    both parsers then consume the same `2026-08-` prefix, resolve it to
+    the same August-2026 month period, and keep the same surviving
+    leftover tokens (the `04T10` chunk is dropped or retained
+    identically on both sides depending on the spelling), so the two
+    sides AGREE on interpretation. What still differs structurally is
+    exactly two known mechanisms: real whoosh renders the month period
+    as a timezone-naive `NumericRange` (its `datetime_to_long`
+    conversion never applies the query timezone, the same defect family
+    entry 12 documents for range bounds; whoosh-compat deliberately does
+    not reproduce it and emits a tz-aware `DateRange`), and the leftover
+    time tokens combine per entry 15's multitoken split (real whoosh
+    ANDs the analyzed tokens per field, whoosh-compat ORs them).
+
+    Result level, value-dependent: for realistic document sets both
+    sides return NOTHING for this spelling (the query is an `And` of the
+    month window with the leftover time tokens, and documents rarely
+    contain bare `30`/`00` text tokens), so the truncation is invisible
+    as a results difference. When a document does contain one (but not
+    all) of the stray tokens inside the month window, whoosh-compat's OR
+    matches it while real whoosh's AND does not, a genuine result-level
+    divergence (proven on a dedicated two-backend index). Users wanting
+    the RFC3339 value actually honored should use the quoted (entry 48)
+    or bracketed-range spellings, which is what paperless-ngx generates.
+
+    Test references: `tests/differential/allowlist.py`'s bare
+    T-separated-value entry (ordered before the entry-18 bare-ISO entry,
+    whose fully-parses-numerically-correct prose does not describe the
+    truncation, and requiring no quote, complementing entry 48's
+    quote-required entry); `tests/emitter/result_allowlist.py`'s
+    matching entry (ordered before the entry-15 dashed-token pattern);
+    `tests/differential/corpus_paperless.txt`'s
+    `added:2026-08-04T10:30:00` and `added:2026-08-04T10:30:00Z` lines;
+    `tests/test_parser_dates.py`'s
+    `test_bare_unquoted_t_value_truncates_to_month_with_leftover_terms`;
+    `tests/emitter/test_acceptance_property.py`'s
+    `test_bare_rfc3339_value_is_a_result_level_divergence`.

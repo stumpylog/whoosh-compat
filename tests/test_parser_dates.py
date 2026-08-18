@@ -383,6 +383,31 @@ def test_rfc3339_lowercase_t_and_z(reg: FieldRegistry) -> None:
     assert r.lo == datetime(2026, 8, 4, 10, 30, tzinfo=UTC)
 
 
+def test_bare_unquoted_t_value_truncates_to_month_with_leftover_terms(
+    reg: FieldRegistry,
+) -> None:
+    # DIVERGENCES.md entry 49: without quotes, the tokenizer splits the
+    # value at its colons before the date grammar runs, so the grammar
+    # sees only "2026-08-04T10" and prefix-matches "2026-08-" to a
+    # month-precision period, with the stray "30:00" surviving as an
+    # ordinary term. Real whoosh truncates to the SAME month with the
+    # same leftover (measured); keeping that truncation is deliberate
+    # parity, not a missed parse. The quoted spelling (entry 48) and the
+    # bracketed-range spelling are the ones that honor the full value.
+    r = dparse("added:2026-08-04T10:30:00", reg).ast
+    assert isinstance(r, ast.And)
+    dr, leftover = r.children
+    assert isinstance(dr, ast.DateRange)
+    assert dr.lo == datetime(2026, 8, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert dr.hi == datetime(2026, 9, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert dr.incl_lo
+    assert not dr.incl_hi
+    assert isinstance(leftover, ast.Term)
+    assert leftover.field is not None
+    assert leftover.field.name == "content"
+    assert leftover.text == "30:00"
+
+
 def test_rfc3339_range_bounds_with_z(reg: FieldRegistry) -> None:
     # The motivating case (paperless-ngx issue/PR #13010): a bracketed range
     # of RFC3339 "Z" datetimes, unquoted -- no colon-tokenizing ambiguity
