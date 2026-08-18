@@ -73,12 +73,13 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full `FieldSpec`/
 
 ## API Stability
 
-Before 0.1.0, we're declaring the public API boundary explicitly.
+The public API boundary, as of 0.1.0:
 
 **Stable API** (guaranteed across minor and patch releases):
 
 - `whoosh_compat.parse()` and `whoosh_compat.ParseResult`
-- `whoosh_compat.ast` module (the backend-neutral query tree)
+- `whoosh_compat.ast` module (the backend-neutral query tree), including
+  `whoosh_compat.free_text_tokens()` (also exported at top level)
 - `whoosh_compat.fields` module (`FieldSpec`, `FieldRegistry`, `FieldKind`, etc.)
 - `whoosh_compat.errors` module (exception types)
 - `whoosh_compat.emitters.tantivy_.emit()` function and the `Emitter` protocol in `whoosh_compat.emitters.base`
@@ -103,16 +104,27 @@ example) needs to check for **two** independent failure modes, not one:
    field-kind-specific problem becomes a `Diagnostic` plus an `ErrorLeaf` in
    the tree instead. Calling `emit()` on a tree containing an `ErrorLeaf`
    raises `QueryEmitError`.
-2. **`emit()` raises `UnsupportedQueryError`.** This can happen even when
-   `diagnostics` is empty: some query shapes parse cleanly but have no way
-   to execute against tantivy today. The canonical example is a text-field
-   range, `title:[a TO b]`: whoosh supported this, but tantivy-py has no
-   programmatic text-range API (`DIVERGENCES.md` entry 5), so the query
-   parses with `diagnostics == ()` and only fails once `emit()` is called.
+2. **`emit()` raises `UnsupportedQueryError` or `QueryEmitError`.** This
+   can happen even when `diagnostics` is empty: some query shapes parse
+   cleanly but have no way to execute against tantivy today. The canonical
+   example is a text-field range, `title:[a TO b]`: whoosh supported this,
+   but tantivy-py has no programmatic text-range API (`DIVERGENCES.md`
+   entry 5), so the query parses with `diagnostics == ()` and only fails
+   once `emit()` is called. Catch **both** exception types: they are
+   siblings under `WhooshCompatError`, not parent and child, and both mean
+   "this query cannot run", which for an HTTP host is a 400.
 
 **An empty `diagnostics` tuple does not, by itself, mean emitting is safe.**
 Both checks matter; a host that only looks at `diagnostics` will still see
 an uncaught `UnsupportedQueryError` bubble up for shapes like the one above.
+
+**Error messages are written for the host, not the end user.** Both
+`Diagnostic.message` and the emit-time exception messages may reference
+this library's own documentation (`DIVERGENCES.md` entries) or give
+registry-configuration advice (e.g. "mark it fast=True"). A host showing
+errors to end users should rephrase or filter them; the paperless-ngx
+integration strips the documentation references and rewrites the
+configuration-advice messages, for example.
 
 A `Diagnostic`'s severity is fatal-only, and always will be: there is no
 `severity` field, and none is planned. Any diagnostics present means the
@@ -120,6 +132,22 @@ query cannot be emitted, full stop; there is no "warning" tier to weigh
 differently. A future informational-only signal (for example, reporting
 that a zero-token term was silently dropped during analysis) would use a
 separate channel, never `ParseResult.diagnostics`.
+
+### Free-text tokens for secondary clauses
+
+`whoosh_compat.free_text_tokens(node, registry=..., fields=...)` answers
+"which plain words does this query search for?" for hosts that blend a
+secondary text clause alongside the emitted query: the motivating case is
+paperless-ngx's fuzzy-matching blend, which re-parses a word string
+through tantivy's own query parser and must never receive whoosh grammar.
+It returns the analyzed `Term`/`Phrase` tokens on the requested
+TEXT/KEYWORD fields, deduplicated in first-appearance order, with the
+subtle rules handled here rather than in each host: negated subtrees
+(`NOT x`, `ANDNOT`'s negative side) contribute nothing, patterns and
+ranges contribute nothing, and a word the multifield expansion copied
+onto several default fields counts once. Tokens are the field analyzer's
+output verbatim, never re-split; see the function's docstring for the
+full contract.
 
 **Cap query length at the host boundary.** Parse time is quadratic in the
 length of a long run of word characters containing no `:` (the fieldname
@@ -155,6 +183,7 @@ behavior intentionally differs from real Whoosh.
 | Comma value lists | `tag:foo,bar` → `tag:foo AND tag:bar` | per-field opt-in (`FieldSpec.comma_values`); `tag:'foo,bar'` quoting keeps it a single literal |
 | Every / exists | `*`, `*:*`, `title:*` | |
 | Dates | `created:2020`, `created:today`, `created:'previous month'`, `created:now-7d` | full grammar: ISO/compact forms, natural-language keywords, relative offsets (`now-7d`, `-1 week`); multi-word keywords need quoting, see `DIVERGENCES.md` entry 19 |
+| RFC3339 datetimes | `created:[2020-01-01T00:00:00Z TO 2020-06-01T00:00:00Z]`, `created:'2020-01-01T00:00:00Z'` | `T` joins the separator class and a trailing `Z` is honored as the UTC designator (an absolute instant, not local time); an extension over Whoosh, which cannot parse these correctly (quoted `T`/`Z` values parse to nothing; range bounds collapse to their leading year), see `DIVERGENCES.md` entries 12 and 48-50 |
 | JSON subpaths | `notes.user:alice` | an extension with no equivalent in Whoosh itself (registered per-field via `FieldSpec.subpaths`) |
 
 Not carried over from Whoosh (not currently implemented, kept cheap to add

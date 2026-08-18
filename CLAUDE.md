@@ -87,8 +87,9 @@ improvising:
   pass, and every non-fix classification needs all three of: allowlist entry,
   `DIVERGENCES.md` entry, retained corpus line.
 - `carve-out-retirement`: any tantivy/tantivy-py version bump or removal of a
-  compatibility workaround. The three carve-outs (JSON `parse_query` fallback,
-  `_to_naive_utc`, all-MustNot padding) have independent retirement conditions.
+  compatibility workaround. The four carve-outs (JSON `parse_query` fallback,
+  `_to_naive_utc`, all-MustNot padding, the date-window clamp) have
+  independent retirement conditions.
 
 The real `whoosh` package is a **test-only** dependency, git-ref pinned in the
 `dev` group (the fork carries parser fixes absent from PyPI 2.7.4). It must
