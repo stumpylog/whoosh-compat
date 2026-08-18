@@ -546,6 +546,26 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         ),
         DivergenceKind.MISMATCH,
     ),
+    # whoosh-bug (DIVERGENCES.md entry 50): a NO-separator T-fused value
+    # ("2026T10", bare or single-quoted, optionally with a colon-split
+    # day token as in "2026T10:30"). whoosh's grammar cannot read it at
+    # all and bottoms out in _NullQuery; whoosh-compat's T-separator
+    # grammar reads year-T-month (joining a colon-split trailing token
+    # into a day). T directly after the year keeps this disjoint from
+    # entries 48/49 (which require dashes); the double-quoted spelling
+    # belongs to entry 45's crash cell. Ordered before the entry-15
+    # unknown-field-demotion pattern, which would otherwise mis-claim
+    # the inner-colon spelling by reading "2026T10" as an unknown FIELD
+    # named 2026T10 with value 30.
+    (
+        re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):'?\d{{4}}[Tt]\d"),
+        (
+            "whoosh-bug (DIVERGENCES.md entry 50): a no-separator T-fused"
+            " datetime value parses to _NullQuery (matches nothing) in"
+            " whoosh but a year-T-month DateRange in whoosh-compat"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
     # design (DIVERGENCES.md entry 18): a bare (non-bracketed) separated-ISO
     # date value on a date field ("created:2020-01-01", "created:2020-01")
     # is numerically correct on both sides but structurally different: real
@@ -582,7 +602,7 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # day/month-period DateRange. Both sides parse cleanly, so the AST
     # comparison is an ordinary MISMATCH (Phrase vs DateRange).
     (
-        re.compile(rf'\b(?:{DATE_FIELDS_PATTERN}):"\d{{4}}[-. /]\d[^"]*"'),
+        re.compile(rf'\b(?:{DATE_FIELDS_PATTERN}):"\d{{4}}(?:[-. /]|[Tt])\d[^"]*"'),
         (
             "whoosh-bug (DIVERGENCES.md entry 45): double-quoted"
             " separated-ISO date parses to a search-time-crashing Phrase in"

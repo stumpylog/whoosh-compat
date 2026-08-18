@@ -161,6 +161,14 @@ added:'2026-08-04T10:30:00Z'
 added:2026-08-04T10:30:00
 added:2026-08-04T10:30:00Z
 added:2026-08T10:30
+# DIVERGENCES.md entry 50: no-separator T-fused values. whoosh's grammar
+# cannot read them at all (_NullQuery, matches nothing); whoosh-compat
+# reads year-T-month, joining a colon-split trailing token into a day.
+# The double-quoted spelling is entry 45's search-time crash cell.
+created:2026T10
+added:2026T10:30
+added:'2026T10'
+added:"2026T10"
 # DIVERGENCES.md entry 45: the double-quoted sibling. whoosh's ErrorNode
 # fallback wraps a PhraseNode here, yielding a Phrase that crashes at
 # search time; whoosh-compat parses the correct day-period DateRange.

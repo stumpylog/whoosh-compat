@@ -496,6 +496,21 @@ def test_quoted_rfc3339_value_is_a_result_level_divergence(
     assert tantivy_search_ids_prop(tindex_prop, q_utc) == [1]
 
 
+def test_no_separator_t_value_is_a_result_level_divergence(
+    windex_prop: WhooshIndex, tindex_prop: TIndex
+) -> None:
+    """DIVERGENCES.md entry 50: a no-separator T-fused value is
+    unreadable by whoosh's grammar (_NullQuery, matches nothing) while
+    whoosh-compat reads year-T-month and returns every document in that
+    window: docs 1 and 2 both carry June-2020 "added" instants.
+    """
+
+    for q in ("added:2020T06", "added:'2020T06'"):
+        assert allowed_result_reason(q) is not None
+        assert whoosh_search_ids_prop(windex_prop, q) == []
+        assert tantivy_search_ids_prop(tindex_prop, q) == [1, 2]
+
+
 def test_bare_rfc3339_value_is_a_result_level_divergence() -> None:
     """DIVERGENCES.md entry 49: the bare unquoted T-separated spelling
     truncates to the same month period on both sides, ANDed with the

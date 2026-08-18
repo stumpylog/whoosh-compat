@@ -1677,12 +1677,20 @@ parse-then-emit pipeline).
     into the day- or month-period `DateRange` (matching the precision the
     user typed) and returns the documents the user meant.
 
+    The no-separator `T`-fused spelling (`added:"2026T10"`, entry 50's
+    double-quoted sibling cell) takes exactly the same path: whoosh
+    wraps it in a `PhraseNode` whose fallback `Phrase` raises the same
+    no-positions `QueryError` at search time (measured), while
+    whoosh-compat's `T`-separator grammar parses it into the
+    month-period `DateRange`. The allowlist regexes accept `T` directly
+    after the year for this reason.
+
     Test references: `tests/differential/allowlist.py`'s
     double-quoted-date entry; `tests/emitter/result_allowlist.py`'s
     matching entry (ordered before the dashed-token entry-15 pattern so
     the spelling cites this divergence, not the multitoken one);
     `tests/differential/corpus_paperless.txt`'s `created:"2020-01-01"`
-    line; `tests/emitter/test_acceptance_e2e.py`'s
+    and `added:"2026T10"` lines; `tests/emitter/test_acceptance_e2e.py`'s
     `test_double_quoted_iso_date_is_a_documented_divergence` (executed:
     whoosh raises QueryError at search time, tantivy returns the matching
     document).
@@ -1847,3 +1855,44 @@ parse-then-emit pipeline).
     `test_bare_unquoted_t_value_truncates_with_leftover_terms`;
     `tests/emitter/test_acceptance_property.py`'s
     `test_bare_rfc3339_value_is_a_result_level_divergence`.
+
+50. **A no-separator `T`-fused datetime value (`added:2026T10`, bare or
+    single-quoted, with or without a colon-split day token) parses to a
+    working `DateRange`; real whoosh parses it to `_NullQuery`, matching
+    nothing (whoosh-bug, not reproduced).** The dash-less corner of the
+    RFC3339 `T` extension, a divergence face that exists only because
+    whoosh-compat's grammar accepts `T` as a separator at all: whoosh's
+    grammar cannot read `2026T10` in any way (no `T`, and its field
+    self-parse also fails on the embedded letter), so its fallback chain
+    bottoms out in `_NullQuery` (measured for the bare, lowercase-`t`
+    and single-quoted spellings alike), while whoosh-compat reads
+    year-`T`-month and returns the month the user plausibly meant. For
+    the inner-colon spelling (`added:2026T10:30`) the tokenizer splits
+    at the colon and whoosh-compat's date parser joins the adjacent
+    tokens into a single day-precision `2026-10-30` reading, still
+    against whoosh's `_NullQuery`. Unlike entry 49's dashed spellings
+    there is no truncation parity to preserve here: whoosh produces
+    nothing at all, the same compat-favorable shape as entry 48.
+
+    Sibling cells, each already ending in a documented outcome: the
+    double-quoted spelling is entry 45's search-time Phrase crash (that
+    entry's regexes now accept the `T`-fused form); a value whose tail
+    survives tokenization but fails the date grammar
+    (`added:2026T10:30:00Z`, `created:9999T13`) becomes a parse-time
+    BAD_DATE diagnostic, entry 6's uniform rule. The allowlist entries
+    are ordered before the entry-15 unknown-field-demotion pattern,
+    which would otherwise mis-claim the inner-colon spelling by reading
+    `2026T10` as an unknown field named `2026T10` with value `30`.
+    The colon-less spelling matters beyond theory: the differential
+    fuzzer's word alphabet can generate it (`\w`-only, no colon
+    needed), so before this entry it was an unclaimed divergence
+    waiting to fail loudly.
+
+    Test references: `tests/differential/allowlist.py`'s
+    no-separator-T entry; `tests/emitter/result_allowlist.py`'s
+    matching entry; `tests/differential/corpus_paperless.txt`'s
+    `created:2026T10`, `added:2026T10:30`, `added:'2026T10'` and
+    `added:"2026T10"` lines; `tests/test_parser_dates.py`'s
+    `test_no_separator_t_value_parses_as_year_t_month`;
+    `tests/emitter/test_acceptance_property.py`'s
+    `test_no_separator_t_value_is_a_result_level_divergence`.

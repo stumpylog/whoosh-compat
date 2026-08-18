@@ -294,6 +294,21 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
             " tokens (whoosh-compat ORs them, real whoosh ANDs them)"
         ),
     ),
+    # whoosh-bug (DIVERGENCES.md entry 50): a no-separator T-fused value
+    # ("2026T10", bare or single-quoted, optionally colon-extended).
+    # whoosh parses it to _NullQuery and returns nothing; whoosh-compat
+    # reads year-T-month and returns every document in that window.
+    # T directly after the year keeps this disjoint from entries 48/49;
+    # ordered before the entry-15 patterns for the same
+    # unknown-field-demotion mis-claim reason as the AST layer.
+    (
+        re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):'?\d{{4}}[Tt]\d"),
+        (
+            "whoosh-bug (DIVERGENCES.md entry 50): a no-separator T-fused"
+            " datetime value parses to _NullQuery (matches nothing) in"
+            " whoosh but a year-T-month DateRange in whoosh-compat"
+        ),
+    ),
     # whoosh-bug (DIVERGENCES.md entry 45): a double-quoted separated-ISO
     # date value. whoosh parses it to a Phrase that RAISES QueryError at
     # search time (a DATETIME field has no positions), so there is no
@@ -303,7 +318,7 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
     # \w+-\w+ alternative matches the digits inside the quotes) under
     # the wrong divergence.
     (
-        re.compile(rf'\b(?:{DATE_FIELDS_PATTERN}):"\d{{4}}[-. /]\d[^"]*"'),
+        re.compile(rf'\b(?:{DATE_FIELDS_PATTERN}):"\d{{4}}(?:[-. /]|[Tt])\d[^"]*"'),
         (
             "whoosh-bug (DIVERGENCES.md entry 45): double-quoted"
             " separated-ISO date parses to a search-time-crashing Phrase in"

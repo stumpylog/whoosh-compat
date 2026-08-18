@@ -432,6 +432,46 @@ def test_bare_unquoted_t_value_truncates_with_leftover_terms(
     assert leftover.text == expected_leftover
 
 
+@pytest.mark.parametrize(
+    ("query", "expected_lo", "expected_hi"),
+    [
+        pytest.param(
+            "added:2026T10",
+            datetime(2026, 10, 1, tzinfo=BERLIN),
+            datetime(2026, 11, 1, tzinfo=BERLIN),
+            id="bare-year-t-month",
+        ),
+        pytest.param(
+            "added:'2026T10'",
+            datetime(2026, 10, 1, tzinfo=BERLIN),
+            datetime(2026, 11, 1, tzinfo=BERLIN),
+            id="quoted-year-t-month",
+        ),
+        pytest.param(
+            "added:2026T10:30",
+            datetime(2026, 10, 30, tzinfo=BERLIN),
+            datetime(2026, 10, 31, tzinfo=BERLIN),
+            id="colon-split-day-joins-year-t-month",
+        ),
+    ],
+)
+def test_no_separator_t_value_parses_as_year_t_month(
+    reg: FieldRegistry, query: str, expected_lo: datetime, expected_hi: datetime
+) -> None:
+    # DIVERGENCES.md entry 50: with T in the separator class, a dash-less
+    # "2026T10" reads as year-T-month; a colon-split trailing token
+    # ("2026T10:30") is joined by the date parser into a day-precision
+    # reading. Real whoosh cannot read these at all (_NullQuery, matches
+    # nothing), so whoosh-compat's reading is the compat-favorable side
+    # of a documented divergence, not parity.
+    r = dparse(query, reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == expected_lo.astimezone(UTC)
+    assert r.hi == expected_hi.astimezone(UTC)
+    assert r.incl_lo
+    assert not r.incl_hi
+
+
 def test_rfc3339_range_bounds_with_z(reg: FieldRegistry) -> None:
     # The motivating case (paperless-ngx issue/PR #13010): a bracketed range
     # of RFC3339 "Z" datetimes, unquoted -- no colon-tokenizing ambiguity
