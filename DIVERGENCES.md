@@ -1809,9 +1809,14 @@ parse-then-emit pipeline).
     the same August-2026 month period, and keep the same surviving
     leftover tokens (the `04T10` chunk is dropped or retained
     identically on both sides depending on the spelling), so the two
-    sides AGREE on interpretation. What still differs structurally is
-    exactly two known mechanisms: real whoosh renders the month period
-    as a timezone-naive `NumericRange` (its `datetime_to_long`
+    sides AGREE on interpretation. The no-day spelling
+    (`added:2026-08T10:30`) truncates one unit further by the same
+    mechanism: the `T`-fused `08T10` chunk falls off the date parse, and
+    both sides resolve the surviving `2026-` prefix to the same
+    year-precision window with the same `08t10`/`30` leftover tokens
+    (measured). What still differs structurally is
+    exactly two known mechanisms: real whoosh renders the truncated
+    period as a timezone-naive `NumericRange` (its `datetime_to_long`
     conversion never applies the query timezone, the same defect family
     entry 12 documents for range bounds; whoosh-compat deliberately does
     not reproduce it and emits a tz-aware `DateRange`), and the leftover
@@ -1836,8 +1841,9 @@ parse-then-emit pipeline).
     quote-required entry); `tests/emitter/result_allowlist.py`'s
     matching entry (ordered before the entry-15 dashed-token pattern);
     `tests/differential/corpus_paperless.txt`'s
-    `added:2026-08-04T10:30:00` and `added:2026-08-04T10:30:00Z` lines;
+    `added:2026-08-04T10:30:00`, `added:2026-08-04T10:30:00Z` and
+    `added:2026-08T10:30` lines;
     `tests/test_parser_dates.py`'s
-    `test_bare_unquoted_t_value_truncates_to_month_with_leftover_terms`;
+    `test_bare_unquoted_t_value_truncates_with_leftover_terms`;
     `tests/emitter/test_acceptance_property.py`'s
     `test_bare_rfc3339_value_is_a_result_level_divergence`.

@@ -160,6 +160,7 @@ added:'2026-08-04T10:30:00Z'
 # multitoken AND-vs-OR handling of the leftover time tokens.
 added:2026-08-04T10:30:00
 added:2026-08-04T10:30:00Z
+added:2026-08T10:30
 # DIVERGENCES.md entry 45: the double-quoted sibling. whoosh's ErrorNode
 # fallback wraps a PhraseNode here, yielding a Phrase that crashes at
 # search time; whoosh-compat parses the correct day-period DateRange.

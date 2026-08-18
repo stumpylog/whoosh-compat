@@ -281,9 +281,11 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
     # tokens, whoosh-compat's OR over them matches where real whoosh's
     # per-field AND does not. Ordered before the entry-15 dashed-token
     # pattern, whose TEXT-multitoken framing does not describe the date
-    # truncation face.
+    # truncation face. The optional day group admits the no-day spelling
+    # ("2026-06T10:30"), which truncates to the year window by the same
+    # mechanism.
     (
-        re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):\d{{4}}-\d\d-\d\d[Tt]"),
+        re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):\d{{4}}-\d\d(?:-\d\d)?[Tt]"),
         (
             "design (DIVERGENCES.md entry 49, value-dependent): a bare"
             " unquoted T-separated datetime value truncates to the same"

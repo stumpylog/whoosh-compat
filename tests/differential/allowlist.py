@@ -532,8 +532,12 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # the entry-18 bare-ISO entry, whose fully-parses-numerically-correct
     # prose does not describe the truncation. No quote after the colon:
     # the quoted spellings belong to entries 48 (single) and 45 (double).
+    # The day group is optional: the no-day spelling ("2026-08T10:30")
+    # truncates to the YEAR window by the same mechanism (the T-fused
+    # unit and everything after it fall off), measured identical-window
+    # on both sides just like the full spelling's month window.
     (
-        re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):\d{{4}}-\d\d-\d\d[Tt]"),
+        re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):\d{{4}}-\d\d(?:-\d\d)?[Tt]"),
         (
             "design (DIVERGENCES.md entry 49): a bare unquoted T-separated"
             " datetime value truncates to the same month period on both"

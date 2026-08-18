@@ -551,17 +551,25 @@ def test_bare_rfc3339_value_is_a_result_level_divergence() -> None:
         assert not result.diagnostics
         return search_ids(tix, emit_(result.ast, index=tix, registry=_PROP_REGISTRY))
 
-    for q in ("added:2020-06-15T10:30:00", "added:2020-06-15T10:30:00Z"):
+    # The no-day spelling exercises the year-window truncation face of
+    # the same entry: the document sits inside 2020 just as it sits
+    # inside June, and its leftover tokens ("06t10", "30") again include
+    # exactly one match.
+    for q in (
+        "added:2020-06-15T10:30:00",
+        "added:2020-06-15T10:30:00Z",
+        "added:2020-06T10:30",
+    ):
         assert allowed_result_reason(q) is not None
         assert whoosh_search_ids(wix, q, BASE, BERLIN) == []
         assert tantivy_ids(q) == [7]
 
-    # Control: a time whose stray tokens ("45", "00") appear in NO
-    # document agrees empty on both sides, isolating the OR-vs-AND
-    # leftover handling as the only divergence axis above.
-    q_control = "added:2020-06-15T10:45:00"
-    assert whoosh_search_ids(wix, q_control, BASE, BERLIN) == []
-    assert tantivy_ids(q_control) == []
+    # Controls: times whose stray tokens appear in NO document agree
+    # empty on both sides, isolating the OR-vs-AND leftover handling as
+    # the only divergence axis above.
+    for q_control in ("added:2020-06-15T10:45:00", "added:2020-06T10:45"):
+        assert whoosh_search_ids(wix, q_control, BASE, BERLIN) == []
+        assert tantivy_ids(q_control) == []
 
 
 def test_not_under_andnot_is_a_result_level_divergence(
