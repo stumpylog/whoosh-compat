@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import datetime
@@ -825,3 +826,125 @@ class Visitor(Generic[T]):
             NotImplementedError: Always raised to indicate the node type is not handled.
         """
         raise NotImplementedError(f"No visitor method for {type(node).__name__}")
+
+
+def free_text_tokens(
+    node: Node,
+    *,
+    registry: FieldRegistry,
+    fields: Sequence[str],
+) -> tuple[str, ...]:
+    """Collect the free-text word tokens of ``node``, in first-appearance
+    order, deduplicated.
+
+    Answers "which plain words does this query search for?" for consumers
+    building a secondary text clause from an already-parsed query (the
+    motivating case: a fuzzy-matching blend that re-parses a word string
+    through a backend's own query parser and must never receive query
+    grammar). Only ``Term``/``Phrase`` leaves on the requested ``fields``
+    contribute, and what they contribute is the field analyzer's output,
+    verbatim (the tree is passed through :func:`normalize` and
+    :func:`analyze` first, both no-ops on already-processed trees). No
+    query GRAMMAR survives into the result: no field prefixes, ranges,
+    brackets, quotes or patterns. Token text itself is whatever the
+    analyzer emits, never re-split here (an analyzer whose tokens contain
+    spaces, e.g. shingle-style or the identity default, passes them
+    through intact; re-splitting would corrupt exactly the analyzers the
+    ``analyze()`` docstring warns about).
+
+    Structural rules, chosen so the tokens reflect what the query asks FOR
+    rather than everything it mentions:
+
+    * ``Not`` subtrees and ``AndNot`` negative sides contribute nothing: a
+      term the user excluded must not resurface in a matching clause.
+    * ``AndMaybe`` and ``Require`` contribute both sides (both express
+      positive intent, whether or not they score).
+    * ``Boosted`` is transparent; ``And``/``Or`` recurse.
+    * Pattern leaves (``Prefix``/``Wildcard``) contribute nothing even on a
+      requested field: a pattern is not a word, and analysis never ran on
+      it (the analyzer/pattern_normalizer seam).
+    * Range/``Every``/``Nothing``/``ErrorLeaf`` leaves and JSON-subpath
+      terms contribute nothing.
+    * A word the multifield expansion copied onto several default fields
+      counts once (dedupe is by token text).
+
+    Args:
+        node: the AST to collect from (typically ``ParseResult.ast``).
+        registry: resolves field names and provides analyzers.
+        fields: the field names (aliases allowed) whose leaves count as
+            free text. Must be non-empty, and every name must resolve to a
+            plain (non-subpath) TEXT or KEYWORD field; anything else is a
+            host configuration error.
+
+    Raises:
+        ValueError: ``fields`` is empty, names an unknown field or subpath,
+            or names a field whose kind is not TEXT/KEYWORD. Host
+            configuration mistakes raise eagerly, same as ``parse()``.
+    """
+
+    if not fields:
+        raise ValueError("fields must not be empty")
+    wanted: set[str] = set()
+    for name in fields:
+        ref = registry.make_ref(name)
+        if ref is None:
+            if registry.is_bare_json_field(name):
+                # Known JSON field, but only its subpaths are addressable,
+                # and those are not free-text fields either; distinguish it
+                # from a genuinely unknown name.
+                raise ValueError(
+                    f"fields names {name!r}, a JSON field, which is not a"
+                    " free-text (TEXT/KEYWORD) field"
+                )
+            raise ValueError(f"fields names unknown field {name!r}")
+        if ref.json_path is not None:
+            raise ValueError(
+                f"fields names JSON subpath {name!r}, which is not a free-text (TEXT/KEYWORD) field"
+            )
+        resolved = registry.resolve(ref)
+        if resolved is None or resolved.spec.kind not in (FieldKind.TEXT, FieldKind.KEYWORD):
+            raise ValueError(
+                f"fields names {name!r}, which is not a free-text (TEXT/KEYWORD) field"
+            )
+        wanted.add(ref.name)
+
+    def is_wanted(ref: FieldRef | None) -> bool:
+        return ref is not None and ref.json_path is None and ref.name in wanted
+
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(text: str) -> None:
+        if text not in seen:
+            seen.add(text)
+            out.append(text)
+
+    # Iterative left-to-right preorder (matching normalize()'s heap-not-
+    # stack-frames rationale for pathologically deep trees): children are
+    # pushed reversed so pops keep textual order.
+    stack: list[Node] = [analyze(normalize(node), registry)]
+    while stack:
+        current = stack.pop()
+        if isinstance(current, (And, Or)):
+            stack.extend(reversed(current.children))
+        elif isinstance(current, Boosted):
+            stack.append(current.child)
+        elif isinstance(current, AndNot):
+            stack.append(current.positive)
+        elif isinstance(current, AndMaybe):
+            stack.append(current.optional)
+            stack.append(current.required)
+        elif isinstance(current, Require):
+            stack.append(current.filter_only)
+            stack.append(current.scored)
+        elif isinstance(current, Term):
+            # A non-str text (a numeric or boolean term value) is never
+            # free text, whatever field it sits on.
+            if is_wanted(current.field) and isinstance(current.text, str):
+                add(current.text)
+        elif isinstance(current, Phrase) and is_wanted(current.field) and current.words:
+            for word in current.words:
+                add(word)
+        # Not, Prefix/Wildcard, ranges, Every, Nothing, ErrorLeaf:
+        # contribute nothing, deliberately (see the docstring's rules).
+    return tuple(out)

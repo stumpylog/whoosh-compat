@@ -23,6 +23,7 @@ from datetime import tzinfo
 
 from whoosh_compat import ast
 from whoosh_compat.ast import analyze
+from whoosh_compat.ast import free_text_tokens
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryEmitError
@@ -56,6 +57,7 @@ __all__ = [
     "WhooshCompatError",
     "analyze",
     "ast",
+    "free_text_tokens",
     "parse",
 ]
 
