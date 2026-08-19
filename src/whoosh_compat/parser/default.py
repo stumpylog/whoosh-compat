@@ -451,6 +451,7 @@ class QueryParser:
                 startchar=startchar,
                 endchar=endchar,
                 field=ref,
+                field_kind=FieldKind.U64,
                 raw_value=text,
             )
             self.report(d)
@@ -561,12 +562,15 @@ class QueryParser:
             return None
         if resolved.spec.kind is FieldKind.U64:
             kind = DiagnosticKind.PATTERN_ON_NUMERIC
+            divergence = 29
             message = f"wildcard patterns are not supported on numeric field {ref}"
         elif resolved.is_subpath:
             kind = DiagnosticKind.PATTERN_ON_SUBPATH
+            divergence = 30
             message = f"wildcard patterns are not supported on a JSON subpath ({ref})"
         elif resolved.spec.kind is FieldKind.BOOLEAN_EXISTS:
             kind = DiagnosticKind.PATTERN_ON_BOOLEAN_EXISTS
+            divergence = 29
             message = f"wildcard patterns are not supported on boolean-exists field {ref}"
         else:
             return None
@@ -577,7 +581,9 @@ class QueryParser:
             startchar=startchar,
             endchar=endchar,
             field=ref,
+            field_kind=resolved.spec.kind,
             raw_value=text,
+            divergence=divergence,
         )
         self.report(d)
         return ast.ErrorLeaf(diagnostic=d)

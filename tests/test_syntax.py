@@ -290,7 +290,7 @@ def test_wordnode_passes_tokenize_and_removestops_flags() -> None:
 def test_errornode_reports_diagnostic_and_returns_errorleaf() -> None:
     inner = syntax.WordNode("a")
     inner.set_range(2, 3)
-    err = syntax.ErrorNode("bad thing", inner)
+    err = syntax.ErrorNode("bad thing", DiagnosticKind.TOO_DEEP, inner)
     parser = StubParser()
 
     q = err.query(parser)
@@ -298,7 +298,7 @@ def test_errornode_reports_diagnostic_and_returns_errorleaf() -> None:
     assert len(parser.reports) == 1
     diagnostic = parser.reports[0]
     assert diagnostic.message == "bad thing"
-    assert diagnostic.kind == DiagnosticKind.PATTERN_ON_SUBPATH
+    assert diagnostic.kind == DiagnosticKind.TOO_DEEP
     assert isinstance(q, ast.ErrorLeaf)
     assert q.diagnostic == diagnostic
 
@@ -648,7 +648,7 @@ def test_wrapper_returns_none_when_it_has_no_child() -> None:
 
 
 def test_errornode_startchar_endchar_without_node() -> None:
-    err = syntax.ErrorNode("bad thing")
+    err = syntax.ErrorNode("bad thing", DiagnosticKind.TOO_DEEP)
     assert err.startchar is None
     assert err.endchar is None
 
@@ -771,7 +771,7 @@ def test_groupnode_set_fieldname_propagates_to_children() -> None:
 
 def test_errornode_r() -> None:
     inner = syntax.WordNode("a")
-    err = syntax.ErrorNode("bad thing", inner)
+    err = syntax.ErrorNode("bad thing", DiagnosticKind.TOO_DEEP, inner)
     assert err.r() == f"ERR {inner!r} 'bad thing'"
 
 

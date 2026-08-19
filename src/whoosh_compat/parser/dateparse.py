@@ -981,7 +981,7 @@ class DateParserPlugin(Plugin):
             return m.group("body"), True
         return text, False
 
-    def _error(self, node: syntax.SyntaxNode, text: str, field: str) -> DateErrorNode:
+    def _error(self, node: syntax.SyntaxNode, text: str, spec: FieldSpec) -> DateErrorNode:
         diagnostic = Diagnostic(
             message=f"{text!r} is not a recognizable date",
             kind=DiagnosticKind.BAD_DATE,
@@ -992,7 +992,8 @@ class DateParserPlugin(Plugin):
             # date_only/comma_values combinations outside those kinds), so
             # this is always a plain field reference; spec.name is already
             # canonical (aliases resolved by the time a spec is in hand).
-            field=FieldRef(field),
+            field=FieldRef(spec.name),
+            field_kind=spec.kind,
             raw_value=text,
         )
         return DateErrorNode(diagnostic)
@@ -1041,7 +1042,7 @@ class DateParserPlugin(Plugin):
             # fail in the arithmetic rather than in the grammar. Parsing
             # reports bad input through diagnostics, so treat these as an
             # unrecognizable date like any other.
-            return self._error(node, text, spec.name)
+            return self._error(node, text, spec)
 
     def _text_to_node(
         self, node: syntax.SyntaxNode, spec: FieldSpec, text: str
@@ -1050,7 +1051,7 @@ class DateParserPlugin(Plugin):
         parse_text, force_utc = self._split_rfc3339_utc(text)
         result = self.dateparser.date_from(parse_text, local_now)
         if result is None:
-            return self._error(node, text, spec.name)
+            return self._error(node, text, spec)
         value_tz = UTC if force_utc else self.tz
 
         if isinstance(result, timespan) and result.start != result.end:
@@ -1101,7 +1102,7 @@ class DateParserPlugin(Plugin):
             # disambiguation failure most commonly comes from the exclusive-
             # ceiling arithmetic on the end side (see the +1 microsecond
             # step just below _range_to_node's combine branch).
-            return self._error(node, node.end or node.start or "", spec.name)
+            return self._error(node, node.end or node.start or "", spec)
 
     def _range_to_node(self, node: syntax.RangeNode, spec: FieldSpec) -> syntax.SyntaxNode:
         local_now = self._local_now()
@@ -1142,9 +1143,9 @@ class DateParserPlugin(Plugin):
             try:
                 raw_start = bound_parser.date_from(start_text, local_now)
             except (ValueError, OverflowError):
-                return self._error(node, node.start, spec.name)
+                return self._error(node, node.start, spec)
             if raw_start is None:
-                return self._error(node, node.start, spec.name)
+                return self._error(node, node.start, spec)
         if node.end:
             end_text, end_utc = self._split_rfc3339_utc(node.end)
             if end_utc:
@@ -1152,9 +1153,9 @@ class DateParserPlugin(Plugin):
             try:
                 raw_end = bound_parser.date_from(end_text, local_now)
             except (ValueError, OverflowError):
-                return self._error(node, node.end, spec.name)
+                return self._error(node, node.end, spec)
             if raw_end is None:
-                return self._error(node, node.end, spec.name)
+                return self._error(node, node.end, spec)
 
         # "Exact" means the bound needs no disambiguation at all (a
         # concrete datetime from the grammar, e.g. "now", or a
@@ -1193,8 +1194,8 @@ class DateParserPlugin(Plugin):
                     if isinstance(raw_start, (adatetime, timespan)):
                         raw_start.disambiguated(local_now)
                 except (ValueError, OverflowError):
-                    return self._error(node, node.start, spec.name)
-                return self._error(node, node.end, spec.name)
+                    return self._error(node, node.start, spec)
+                return self._error(node, node.end, spec)
             lo_naive, hi_naive = cast(datetime, ts.start), cast(datetime, ts.end)
             # A mixed-tz range (one RFC3339 "Z" bound, one local): each
             # bound's tz must follow its VALUE through the joint step's
@@ -1290,7 +1291,7 @@ class DateParserPlugin(Plugin):
                 # microsecond plus one lands past datetime.max) happens at
                 # the hi side, but after a joint swap the hi VALUE may have
                 # come from the start bound's text: blame() decides.
-                return self._error(node, blame("hi", node.end) or "", spec.name)
+                return self._error(node, blame("hi", node.end) or "", spec)
             incl_hi = False
         if lo_naive is not None and not start_exact:
             incl_lo = True
@@ -1306,7 +1307,7 @@ class DateParserPlugin(Plugin):
                 else None
             )
         except (ValueError, OverflowError):
-            return self._error(node, blame("lo", node.start) or "", spec.name)
+            return self._error(node, blame("lo", node.start) or "", spec)
         try:
             hi = (
                 self._to_utc(hi_naive, spec.date_only, ceil=not incl_hi, tz=end_tz)
@@ -1314,7 +1315,7 @@ class DateParserPlugin(Plugin):
                 else None
             )
         except (ValueError, OverflowError):
-            return self._error(node, blame("hi", node.end) or "", spec.name)
+            return self._error(node, blame("hi", node.end) or "", spec)
         # An exclusivity flag is meaningless for a bound that isn't there at
         # all (there's nothing to exclude): normalize it to True/inclusive
         # rather than preserving whatever bracket character the user

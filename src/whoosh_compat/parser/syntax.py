@@ -466,8 +466,8 @@ class ErrorNode(SyntaxNode):
     def __init__(
         self,
         message: str,
+        kind: DiagnosticKind,
         node: SyntaxNode | None = None,
-        kind: DiagnosticKind = DiagnosticKind.PATTERN_ON_SUBPATH,
     ) -> None:
         self.message = message
         self.node = node
