@@ -13,8 +13,8 @@ Every cell must resolve to exactly one of three legal outcomes (see
 ARCHITECTURE.md's "closed matrix" invariant):
 
 1. a parse-time ``Diagnostic`` plus ``ast.ErrorLeaf`` (:class:`Diag`),
-2. a documented emit-time raise, ``QueryEmitError``/``UnsupportedQueryError``
-   (:class:`Raises`), or
+2. a documented emit-time raise, ``QueryError`` carrying a specific
+   ``DiagnosticKind`` (:class:`Raises`), or
 3. a real search executed against a live tantivy index that demonstrably
    honors the field's kind and JSON subpath, asserted as a doc-id set
    (:class:`Search`).
@@ -68,8 +68,8 @@ from _pytest.mark import ParameterSet
 from whoosh_compat import ast
 from whoosh_compat import parse as _parse
 from whoosh_compat.emitters.tantivy_ import emit as emit_
-from whoosh_compat.errors import QueryEmitError
-from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.errors import QueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -86,18 +86,17 @@ from .conftest import TIndex
 @dataclasses.dataclass(frozen=True)
 class Diag:
     """Outcome 1: a parse-time Diagnostic plus an ErrorLeaf somewhere in the
-    tree, and emit() raising QueryEmitError for it.
+    tree, and emit() raising QueryError for it.
     """
 
 
 @dataclasses.dataclass(frozen=True)
 class Raises:
     """Outcome 2: a clean parse (no diagnostics) followed by a documented
-    emit-time raise.
+    emit-time raise, carrying the specific DiagnosticKind expected.
     """
 
-    exc: type[Exception]
-    match: str
+    kind: DiagnosticKind
 
 
 @dataclasses.dataclass(frozen=True)
@@ -135,7 +134,7 @@ def _run(qs: str, ereg: FieldRegistry, tindex: TIndex, outcome: object) -> None:
     if isinstance(outcome, Diag):
         assert r.diagnostics, f"expected a parse-time diagnostic for {qs!r}, got none"
         assert _contains_errorleaf(r.ast), f"expected an ErrorLeaf in the tree for {qs!r}"
-        with pytest.raises(QueryEmitError):
+        with pytest.raises(QueryError):
             emit_(r.ast, index=tindex[0], registry=ereg)
         return
 
@@ -144,8 +143,11 @@ def _run(qs: str, ereg: FieldRegistry, tindex: TIndex, outcome: object) -> None:
             f"expected a clean parse for {qs!r} (diagnostic deferred to emit), "
             f"got {r.diagnostics!r}"
         )
-        with pytest.raises(outcome.exc, match=outcome.match):
+        with pytest.raises(QueryError) as exc:
             emit_(r.ast, index=tindex[0], registry=ereg)
+        assert exc.value.diagnostic.kind is outcome.kind, (
+            f"{qs!r}: expected {outcome.kind}, got {exc.value.diagnostic.kind}"
+        )
         return
 
     if isinstance(outcome, Search):
@@ -279,7 +281,7 @@ CELLS: list[ParameterSet] = [
         "text",
         "bracket-range",
         "content:[invoice TO invoice]",
-        Raises(UnsupportedQueryError, "text ranges"),
+        Raises(DiagnosticKind.TEXT_RANGE),
     ),
     _param("text", "comma-list", "content:invoice,invoice", Search([1])),
     _param("text", "boosted", "content:invoice^2.0", Search([1])),
@@ -295,7 +297,7 @@ CELLS: list[ParameterSet] = [
         "keyword",
         "bracket-range",
         "tag:[urgent TO urgent]",
-        Raises(UnsupportedQueryError, "text ranges"),
+        Raises(DiagnosticKind.TEXT_RANGE),
     ),
     _param("keyword", "comma-list", "tag:billing,urgent", Search([1])),
     _param("keyword", "boosted", "tag:urgent^2.0", Search([1])),
@@ -399,7 +401,7 @@ CELLS: list[ParameterSet] = [
         "boolean-exists-fast",
         "bracket-range",
         "has_tag:[true TO true]",
-        Raises(UnsupportedQueryError, "text ranges"),
+        Raises(DiagnosticKind.TEXT_RANGE),
     ),
     _param("boolean-exists-fast", "boosted", "has_tag:true^2.0", Search([1, 2, 4])),
     # -- BOOLEAN_EXISTS, non-fast target (has_tag_kw -> tag, TERM_SCAN) -----
@@ -414,7 +416,7 @@ CELLS: list[ParameterSet] = [
         "boolean-exists-nonfast",
         "bracket-range",
         "has_tag_kw:[true TO true]",
-        Raises(UnsupportedQueryError, "text ranges"),
+        Raises(DiagnosticKind.TEXT_RANGE),
     ),
     _param("boolean-exists-nonfast", "boosted", "has_tag_kw:true^2.0", Search([1, 2, 4])),
     # -- JSON, non-fast subpath (notes.user / notes.note) -------------------
@@ -428,13 +430,13 @@ CELLS: list[ParameterSet] = [
         "json-nonfast",
         "bare-star",
         "notes.user:*",
-        Raises(UnsupportedQueryError, r"notes\.user:\*"),
+        Raises(DiagnosticKind.EXISTS_REQUIRES_FAST),
     ),
     _param(
         "json-nonfast",
         "bracket-range",
         "notes.user:[alice TO alice]",
-        Raises(UnsupportedQueryError, "text ranges"),
+        Raises(DiagnosticKind.TEXT_RANGE),
     ),
     _param("json-nonfast", "boosted", "notes.user:alice^2.0", Search([1])),
     # -- JSON, fast subpath (attrs.user / attrs.note) ------------------------
@@ -457,7 +459,7 @@ CELLS: list[ParameterSet] = [
         "json-fast",
         "bracket-range",
         "attrs.user:[alice TO alice]",
-        Raises(UnsupportedQueryError, "text ranges"),
+        Raises(DiagnosticKind.TEXT_RANGE),
     ),
     _param("json-fast", "boosted", "attrs.user:alice^2.0", Search([1])),
 ]
@@ -717,7 +719,7 @@ def test_boolean_exists_phrase_in_group_is_not_dropped() -> None:
         pytest.param("attrs:foo", Search([]), id="json-bare-fast-real-term-still-demotes"),
         pytest.param(
             "notes:*",
-            Raises(UnsupportedQueryError, r"'notes' \(JSON\) has no way to match 'exists'"),
+            Raises(DiagnosticKind.EXISTS_REQUIRES_FAST),
             id="json-bare-nonfast-bare-star-still-raises",
         ),
         pytest.param(
@@ -732,7 +734,7 @@ def test_json_bare_field_bare_star_existence(
     real term (attrs:foo) must not also demote the bare-star existence
     special case (attrs:*), which the emitter still fully supports and
     which worked end to end before the original demotion fix. "notes" (the
-    non-fast JSON field) still raises the documented UnsupportedQueryError
+    non-fast JSON field) still raises the documented QueryError
     for the same shape (the subpath-unsupported message), and "attrs.user:*" (an actual
     subpath existence check) is unaffected, pinning the boundary this fix's
     dispatch logic sits next to.

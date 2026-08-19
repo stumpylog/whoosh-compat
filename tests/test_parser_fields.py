@@ -315,7 +315,7 @@ def test_json_unregistered_subpath_demotes(reg: FieldRegistry) -> None:
 def test_json_bare_field_name_demotes(reg: FieldRegistry) -> None:
     # Bare-JSON demotion: notes:foo (a JSON field addressed with no subpath) used to
     # parse cleanly to Term(field='notes', text='foo') and then raise
-    # QueryEmitError at emit(), violating "parsing clean means emitting is
+    # QueryError at emit(), violating "parsing clean means emitting is
     # safe". Demoted the same way an unknown field is: no diagnostic, no
     # field='notes' anywhere in the result.
     t = parse("notes:foo", reg)

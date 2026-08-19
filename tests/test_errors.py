@@ -5,16 +5,12 @@ from whoosh_compat.errors import PARSE_KINDS
 from whoosh_compat.errors import Cause
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
-from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.errors import QueryError
-from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.errors import WhooshCompatError
 from whoosh_compat.errors import cause_for
 
 
 def test_hierarchy() -> None:
-    assert issubclass(UnsupportedQueryError, WhooshCompatError)
-    assert issubclass(QueryEmitError, WhooshCompatError)
     assert issubclass(QueryError, WhooshCompatError)
 
 
@@ -27,7 +23,7 @@ def test_diagnostic_frozen() -> None:
         endchar=9,
     )
     assert d.startchar == 5
-    e = QueryEmitError("cannot emit", diagnostic=d)
+    e = QueryError(d)
     assert e.diagnostic is d
 
 
