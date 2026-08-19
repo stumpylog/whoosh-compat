@@ -753,16 +753,15 @@ Work the site-to-kind table above top to bottom. Two representative conversions:
 ```
 
 ```python
-        # was: raise UnsupportedQueryError(f"... (DIVERGENCES.md entry 30)")
-        self._fail(
-            DiagnosticKind.AST_PATTERN_ON_KIND,
-            message=(
-                f"wildcard/prefix patterns are not supported on JSON subpath "
-                f"{resolved.dotted_name!r}"
-            ),
-            resolved=resolved,
-            divergence=30,
-        )
+# was: raise UnsupportedQueryError(f"... (DIVERGENCES.md entry 30)")
+self._fail(
+    DiagnosticKind.AST_PATTERN_ON_KIND,
+    message=(
+        f"wildcard/prefix patterns are not supported on JSON subpath {resolved.dotted_name!r}"
+    ),
+    resolved=resolved,
+    divergence=30,
+)
 ```
 
 Strip every `(DIVERGENCES.md entry N)` from message text and pass `divergence=N` instead. Strip the `fast=True` advice from `:534` and pass `resolved=resolved`; `cause=MISCONFIGURED` is what tells a host to check the registry. Pass `node=` wherever a node is in scope.
@@ -934,7 +933,9 @@ git commit -m "feat: separate oversized patterns and AST defects from backend re
         pytest.param("has_tag:[a TO b]", FieldKind.BOOLEAN_EXISTS, None, id="boolean-exists"),
     ],
 )
-def test_text_range_divergence_varies_by_field_kind(ereg, tindex, parse, query, field_kind, divergence):
+def test_text_range_divergence_varies_by_field_kind(
+    ereg, tindex, parse, query, field_kind, divergence
+):
     """Entry 5 is scoped to text ranges that worked in whoosh. A range on a
     synthetic boolean-exists field never did, and a subpath range is entry
     30's territory, so stamping 5 on all of them ships a wrong reference.
@@ -1175,19 +1176,18 @@ class Raises:
 Replace `:142-148`:
 
 ```python
-    if isinstance(outcome, Raises):
-        assert not r.diagnostics, (
-            f"expected a clean parse for {qs!r} (diagnostic deferred to emit), "
-            f"got {r.diagnostics!r}"
-        )
-        with pytest.raises(QueryError) as exc:
-            emit_(r.ast, index=tindex[0], registry=ereg)
-        d = exc.value.diagnostic
-        assert d.kind is outcome.kind, qs
-        assert d.cause is outcome.cause, qs
-        if outcome.field_kind is not None:
-            assert d.field_kind is outcome.field_kind, qs
-        return
+if isinstance(outcome, Raises):
+    assert not r.diagnostics, (
+        f"expected a clean parse for {qs!r} (diagnostic deferred to emit), got {r.diagnostics!r}"
+    )
+    with pytest.raises(QueryError) as exc:
+        emit_(r.ast, index=tindex[0], registry=ereg)
+    d = exc.value.diagnostic
+    assert d.kind is outcome.kind, qs
+    assert d.cause is outcome.cause, qs
+    if outcome.field_kind is not None:
+        assert d.field_kind is outcome.field_kind, qs
+    return
 ```
 
 Also update the `Diag` branch at `:139` from `pytest.raises(QueryEmitError)` to `pytest.raises(QueryError)`.

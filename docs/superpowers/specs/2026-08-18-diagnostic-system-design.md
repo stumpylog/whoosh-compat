@@ -140,10 +140,10 @@ emit-side surface is far smaller than it appears from counting raise sites.
 
 ```python
 class Cause(Enum):
-    INVALID_INPUT = auto()   # the query text is wrong; the user must change it
-    UNSUPPORTED = auto()     # the query is well-formed; this backend cannot run it
-    MISCONFIGURED = auto()   # the registry/schema, not the query, is the obstacle
-    INTERNAL = auto()        # a defect in this library or in a caller-built AST
+    INVALID_INPUT = auto()  # the query text is wrong; the user must change it
+    UNSUPPORTED = auto()  # the query is well-formed; this backend cannot run it
+    MISCONFIGURED = auto()  # the registry/schema, not the query, is the obstacle
+    INTERNAL = auto()  # a defect in this library or in a caller-built AST
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
@@ -344,10 +344,10 @@ Emit gets one helper, so cause selection stops being hand-picked per site:
 # errors.py, NOT the emitter: parse-side sites need it too (see below)
 _CAUSE: Mapping[DiagnosticKind, Cause] = {...}
 
-def _fail(kind, *, node=None, resolved=None, raw_value=None,
-          divergence=None, message) -> NoReturn:
+
+def _fail(kind, *, node=None, resolved=None, raw_value=None, divergence=None, message) -> NoReturn:
     ...  # cause from _CAUSE, startchar/endchar from node,
-         # field/field_kind from resolved, divergence passed explicitly
+    # field/field_kind from resolved, divergence passed explicitly
 ```
 
 **`divergence` is a `_fail` argument, not a table lookup.** A
