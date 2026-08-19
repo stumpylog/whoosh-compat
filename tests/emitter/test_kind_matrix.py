@@ -68,6 +68,7 @@ from _pytest.mark import ParameterSet
 from whoosh_compat import ast
 from whoosh_compat import parse as _parse
 from whoosh_compat.emitters.tantivy_ import emit as emit_
+from whoosh_compat.errors import Cause
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryError
 from whoosh_compat.fields import FieldKind
@@ -93,10 +94,21 @@ class Diag:
 @dataclasses.dataclass(frozen=True)
 class Raises:
     """Outcome 2: a clean parse (no diagnostics) followed by a documented
-    emit-time raise, carrying the specific DiagnosticKind expected.
+    emit-time raise.
+
+    Asserts on the structured diagnostic, never on message text: messages
+    are log output with no stability guarantee. ``field_kind`` is carried
+    separately from ``kind`` because several kinds (``TEXT_RANGE`` above
+    all) are reachable from more than one field kind, and asserting only
+    ``kind`` would stop those cells discriminating which row they came
+    from. It is optional only for cells whose failure happens before a
+    field is resolved, where the diagnostic has no ``field_kind`` to
+    assert.
     """
 
     kind: DiagnosticKind
+    cause: Cause
+    field_kind: FieldKind | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -145,9 +157,13 @@ def _run(qs: str, ereg: FieldRegistry, tindex: TIndex, outcome: object) -> None:
         )
         with pytest.raises(QueryError) as exc:
             emit_(r.ast, index=tindex[0], registry=ereg)
-        assert exc.value.diagnostic.kind is outcome.kind, (
-            f"{qs!r}: expected {outcome.kind}, got {exc.value.diagnostic.kind}"
-        )
+        d = exc.value.diagnostic
+        assert d.kind is outcome.kind, f"{qs!r}: expected {outcome.kind}, got {d.kind}"
+        assert d.cause is outcome.cause, f"{qs!r}: expected {outcome.cause}, got {d.cause}"
+        if outcome.field_kind is not None:
+            assert d.field_kind is outcome.field_kind, (
+                f"{qs!r}: expected {outcome.field_kind}, got {d.field_kind}"
+            )
         return
 
     if isinstance(outcome, Search):
@@ -281,7 +297,7 @@ CELLS: list[ParameterSet] = [
         "text",
         "bracket-range",
         "content:[invoice TO invoice]",
-        Raises(DiagnosticKind.TEXT_RANGE),
+        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.TEXT),
     ),
     _param("text", "comma-list", "content:invoice,invoice", Search([1])),
     _param("text", "boosted", "content:invoice^2.0", Search([1])),
@@ -297,7 +313,7 @@ CELLS: list[ParameterSet] = [
         "keyword",
         "bracket-range",
         "tag:[urgent TO urgent]",
-        Raises(DiagnosticKind.TEXT_RANGE),
+        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.KEYWORD),
     ),
     _param("keyword", "comma-list", "tag:billing,urgent", Search([1])),
     _param("keyword", "boosted", "tag:urgent^2.0", Search([1])),
@@ -401,7 +417,7 @@ CELLS: list[ParameterSet] = [
         "boolean-exists-fast",
         "bracket-range",
         "has_tag:[true TO true]",
-        Raises(DiagnosticKind.TEXT_RANGE),
+        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.BOOLEAN_EXISTS),
     ),
     _param("boolean-exists-fast", "boosted", "has_tag:true^2.0", Search([1, 2, 4])),
     # -- BOOLEAN_EXISTS, non-fast target (has_tag_kw -> tag, TERM_SCAN) -----
@@ -416,7 +432,7 @@ CELLS: list[ParameterSet] = [
         "boolean-exists-nonfast",
         "bracket-range",
         "has_tag_kw:[true TO true]",
-        Raises(DiagnosticKind.TEXT_RANGE),
+        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.BOOLEAN_EXISTS),
     ),
     _param("boolean-exists-nonfast", "boosted", "has_tag_kw:true^2.0", Search([1, 2, 4])),
     # -- JSON, non-fast subpath (notes.user / notes.note) -------------------
@@ -430,13 +446,13 @@ CELLS: list[ParameterSet] = [
         "json-nonfast",
         "bare-star",
         "notes.user:*",
-        Raises(DiagnosticKind.EXISTS_REQUIRES_FAST),
+        Raises(DiagnosticKind.EXISTS_REQUIRES_FAST, Cause.MISCONFIGURED, FieldKind.JSON),
     ),
     _param(
         "json-nonfast",
         "bracket-range",
         "notes.user:[alice TO alice]",
-        Raises(DiagnosticKind.TEXT_RANGE),
+        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.JSON),
     ),
     _param("json-nonfast", "boosted", "notes.user:alice^2.0", Search([1])),
     # -- JSON, fast subpath (attrs.user / attrs.note) ------------------------
@@ -459,7 +475,7 @@ CELLS: list[ParameterSet] = [
         "json-fast",
         "bracket-range",
         "attrs.user:[alice TO alice]",
-        Raises(DiagnosticKind.TEXT_RANGE),
+        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.JSON),
     ),
     _param("json-fast", "boosted", "attrs.user:alice^2.0", Search([1])),
 ]
@@ -719,7 +735,7 @@ def test_boolean_exists_phrase_in_group_is_not_dropped() -> None:
         pytest.param("attrs:foo", Search([]), id="json-bare-fast-real-term-still-demotes"),
         pytest.param(
             "notes:*",
-            Raises(DiagnosticKind.EXISTS_REQUIRES_FAST),
+            Raises(DiagnosticKind.EXISTS_REQUIRES_FAST, Cause.MISCONFIGURED, FieldKind.JSON),
             id="json-bare-nonfast-bare-star-still-raises",
         ),
         pytest.param(
