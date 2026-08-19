@@ -40,11 +40,40 @@ def test_every_kind_has_a_cause() -> None:
 def test_parse_and_emit_kind_sets_are_disjoint_and_total() -> None:
     """Disjointness is what makes a `phase` field unnecessary: `kind` alone
     identifies which phase produced a Diagnostic.
+
+    The two memberships are spelled out here rather than derived from the
+    module's own sets. Deriving them would make this guard vacuous:
+    `EMIT_KINDS` is defined as `frozenset(DiagnosticKind) - PARSE_KINDS`,
+    so disjointness and totality hold by construction no matter what the
+    enum contains. Written as literals, a new `DiagnosticKind` member fails
+    here until someone decides which phase produces it.
     """
-    overlap = PARSE_KINDS & EMIT_KINDS
-    union = PARSE_KINDS | EMIT_KINDS
-    assert overlap == frozenset()
-    assert union == frozenset(DiagnosticKind)
+    parse_kinds = {
+        DiagnosticKind.BAD_DATE,
+        DiagnosticKind.BAD_NUMBER,
+        DiagnosticKind.TOO_DEEP,
+        DiagnosticKind.PATTERN_ON_NUMERIC,
+        DiagnosticKind.PATTERN_ON_BOOLEAN_EXISTS,
+        DiagnosticKind.PATTERN_ON_SUBPATH,
+    }
+    emit_kinds = {
+        DiagnosticKind.EXISTS_REQUIRES_FAST,
+        DiagnosticKind.TEXT_RANGE,
+        DiagnosticKind.PATTERN_TOO_COMPLEX,
+        DiagnosticKind.AST_UNFIELDED_TERM,
+        DiagnosticKind.AST_UNKNOWN_FIELD,
+        DiagnosticKind.AST_JSON_NEEDS_SUBPATH,
+        DiagnosticKind.AST_BAD_NUMBER,
+        DiagnosticKind.AST_BAD_DATE,
+        DiagnosticKind.AST_PATTERN_ON_KIND,
+        DiagnosticKind.AST_KIND_NOT_IMPLEMENTED,
+        DiagnosticKind.AST_INVALID_SHAPE,
+        DiagnosticKind.BACKEND_REJECTED,
+    }
+    assert parse_kinds & emit_kinds == set()
+    assert parse_kinds | emit_kinds == set(DiagnosticKind)
+    assert parse_kinds == PARSE_KINDS
+    assert emit_kinds == EMIT_KINDS
 
 
 def test_diagnostic_is_keyword_only() -> None:

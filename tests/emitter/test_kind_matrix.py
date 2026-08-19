@@ -104,11 +104,17 @@ class Raises:
     from. It is optional only for cells whose failure happens before a
     field is resolved, where the diagnostic has no ``field_kind`` to
     assert.
+
+    ``field`` discriminates the remaining collisions, where two cells share
+    a kind, a cause *and* a field kind and differ only in which field (or
+    which JSON subpath) they name: without it those cells assert the same
+    three things and stop proving they came from different rows.
     """
 
     kind: DiagnosticKind
     cause: Cause
     field_kind: FieldKind | None = None
+    field: FieldRef | None = None
 
 
 @dataclasses.dataclass(frozen=True)
@@ -163,6 +169,10 @@ def _run(qs: str, ereg: FieldRegistry, tindex: TIndex, outcome: object) -> None:
         if outcome.field_kind is not None:
             assert d.field_kind is outcome.field_kind, (
                 f"{qs!r}: expected {outcome.field_kind}, got {d.field_kind}"
+            )
+        if outcome.field is not None:
+            assert d.field == outcome.field, (
+                f"{qs!r}: expected {outcome.field!r}, got {d.field!r}"
             )
         return
 
@@ -297,7 +307,7 @@ CELLS: list[ParameterSet] = [
         "text",
         "bracket-range",
         "content:[invoice TO invoice]",
-        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.TEXT),
+        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.TEXT, FieldRef("content")),
     ),
     _param("text", "comma-list", "content:invoice,invoice", Search([1])),
     _param("text", "boosted", "content:invoice^2.0", Search([1])),
@@ -313,7 +323,7 @@ CELLS: list[ParameterSet] = [
         "keyword",
         "bracket-range",
         "tag:[urgent TO urgent]",
-        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.KEYWORD),
+        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.KEYWORD, FieldRef("tag")),
     ),
     _param("keyword", "comma-list", "tag:billing,urgent", Search([1])),
     _param("keyword", "boosted", "tag:urgent^2.0", Search([1])),
@@ -417,7 +427,12 @@ CELLS: list[ParameterSet] = [
         "boolean-exists-fast",
         "bracket-range",
         "has_tag:[true TO true]",
-        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.BOOLEAN_EXISTS),
+        Raises(
+            DiagnosticKind.TEXT_RANGE,
+            Cause.UNSUPPORTED,
+            FieldKind.BOOLEAN_EXISTS,
+            FieldRef("has_tag"),
+        ),
     ),
     _param("boolean-exists-fast", "boosted", "has_tag:true^2.0", Search([1, 2, 4])),
     # -- BOOLEAN_EXISTS, non-fast target (has_tag_kw -> tag, TERM_SCAN) -----
@@ -432,7 +447,12 @@ CELLS: list[ParameterSet] = [
         "boolean-exists-nonfast",
         "bracket-range",
         "has_tag_kw:[true TO true]",
-        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.BOOLEAN_EXISTS),
+        Raises(
+            DiagnosticKind.TEXT_RANGE,
+            Cause.UNSUPPORTED,
+            FieldKind.BOOLEAN_EXISTS,
+            FieldRef("has_tag_kw"),
+        ),
     ),
     _param("boolean-exists-nonfast", "boosted", "has_tag_kw:true^2.0", Search([1, 2, 4])),
     # -- JSON, non-fast subpath (notes.user / notes.note) -------------------
@@ -446,13 +466,23 @@ CELLS: list[ParameterSet] = [
         "json-nonfast",
         "bare-star",
         "notes.user:*",
-        Raises(DiagnosticKind.EXISTS_REQUIRES_FAST, Cause.MISCONFIGURED, FieldKind.JSON),
+        Raises(
+            DiagnosticKind.EXISTS_REQUIRES_FAST,
+            Cause.MISCONFIGURED,
+            FieldKind.JSON,
+            FieldRef("notes", "user"),
+        ),
     ),
     _param(
         "json-nonfast",
         "bracket-range",
         "notes.user:[alice TO alice]",
-        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.JSON),
+        Raises(
+            DiagnosticKind.TEXT_RANGE,
+            Cause.UNSUPPORTED,
+            FieldKind.JSON,
+            FieldRef("notes", "user"),
+        ),
     ),
     _param("json-nonfast", "boosted", "notes.user:alice^2.0", Search([1])),
     # -- JSON, fast subpath (attrs.user / attrs.note) ------------------------
@@ -475,7 +505,12 @@ CELLS: list[ParameterSet] = [
         "json-fast",
         "bracket-range",
         "attrs.user:[alice TO alice]",
-        Raises(DiagnosticKind.TEXT_RANGE, Cause.UNSUPPORTED, FieldKind.JSON),
+        Raises(
+            DiagnosticKind.TEXT_RANGE,
+            Cause.UNSUPPORTED,
+            FieldKind.JSON,
+            FieldRef("attrs", "user"),
+        ),
     ),
     _param("json-fast", "boosted", "attrs.user:alice^2.0", Search([1])),
 ]
@@ -735,7 +770,12 @@ def test_boolean_exists_phrase_in_group_is_not_dropped() -> None:
         pytest.param("attrs:foo", Search([]), id="json-bare-fast-real-term-still-demotes"),
         pytest.param(
             "notes:*",
-            Raises(DiagnosticKind.EXISTS_REQUIRES_FAST, Cause.MISCONFIGURED, FieldKind.JSON),
+            Raises(
+                DiagnosticKind.EXISTS_REQUIRES_FAST,
+                Cause.MISCONFIGURED,
+                FieldKind.JSON,
+                FieldRef("notes"),
+            ),
             id="json-bare-nonfast-bare-star-still-raises",
         ),
         pytest.param(
