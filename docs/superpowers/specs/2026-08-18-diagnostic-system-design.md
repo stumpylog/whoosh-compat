@@ -1,7 +1,7 @@
 # Structured diagnostics across parse and emit
 
 Date: 2026-08-18
-Status: approved for planning
+Status: revised after adversarial review; approved for planning
 
 ## Problem
 
@@ -12,11 +12,9 @@ input, it accumulates `Diagnostic` records into `ParseResult.diagnostics`,
 each carrying a machine-stable `kind`, the offending `FieldRef`, the raw
 value, and an exact source span.
 
-Emit failures are bare exceptions: `QueryEmitError` and
-`UnsupportedQueryError` carry a prose message and nothing else.
-`UnsupportedQueryError` has no structured payload at all, and
-`QueryEmitError.diagnostic` is optional and populated at exactly one of its
-raise sites.
+Emit failures are bare exceptions. `UnsupportedQueryError` carries no
+structured payload at all, and `QueryEmitError.diagnostic` is optional and
+populated at exactly 1 of its 12 raise sites (`emitters/tantivy_.py:553`).
 
 The README tells hosts that both mean the same thing (an HTTP 400) and that
 both must be caught. So a host gets an enum for a malformed date and a
@@ -25,7 +23,7 @@ string for a text-field range, for outcomes it will render identically.
 Three specific consequences:
 
 1. **The `kind` enum is coarser than the messages it carries.**
-   `parser/default.py:558-566` selects between three distinct causes for
+   `parser/default.py:557-567` selects between three distinct causes for
    `DiagnosticKind.UNSUPPORTED_PATTERN` (numeric field, JSON subpath,
    boolean-exists) and collapses all three onto one member. A host that
    wants to distinguish them must either match on prose or re-resolve
@@ -34,8 +32,7 @@ Three specific consequences:
 
 2. **Emit-time failures carry no position.** Every AST node carries
    `startchar`/`endchar` (`ast.py:32-33`), preserved through `normalize()`,
-   but no emit-time raise reads them. A host can underline the offending
-   token for a bad date and cannot for an unknown field.
+   but no emit-time raise reads them.
 
 3. **Library documentation is encoded as English inside messages.** Three
    user-reachable messages embed `DIVERGENCES.md` references
@@ -44,8 +41,39 @@ Three specific consequences:
    and rewrite these, which in practice means a regex over exception text
    the library explicitly refuses to keep stable.
 
+The class selection between the two exception types is also arbitrary:
+`:763` raises `QueryEmitError` for a JSON field needing a subpath while
+`:753`, three lines away in the same helper, raises `UnsupportedQueryError`
+for a pattern on a subpath. No principle separates them.
+
 The parse/emit distinction itself is sound and is preserved. What is wrong
 is that the two phases use different *payload types* for the same event.
+
+## Measured reachability
+
+An earlier draft of this spec assigned emit-time behavior to conditions
+that cannot occur. The kind table below is now grounded in a probe that
+ran every candidate spelling through `parse()` then `emit()`. Results:
+
+| Query | Outcome |
+|---|---|
+| `notes:*`, `notes.user:*` | **emit**: exists-requires-fast |
+| `title:[a TO b]` | **emit**: text range |
+| `nosuch:foo`, `notes.bogus:foo`, `notes:foo`, `notes:"a b"`, `notes:fo*` | no error: absorbed into the default field as free text |
+| `asn:notanumber`, `asn:"not a number"`, `asn:[abc TO def]` | parse: `BAD_NUMBER` |
+| `created:notadate`, `created:[zzz TO yyy]` | parse: `BAD_DATE` |
+| `asn:1*`, `notes.user:fo*`, `has_tag:t*` | parse: `UNSUPPORTED_PATTERN` |
+
+**Only two emit-time conditions are reachable from query text.** Every
+other emit raise site is a backstop for a hand-built AST that bypassed the
+parser, which the code already documents as such (`:710-712`: "Backstop for
+a hand-built `Prefix`/`Wildcard` node"; `:748-750`: "Reachable only from a
+hand-built node"; `:658-660`: "a hand-built `ast.Phrase` bypasses the
+parser entirely"). `fields.py:575-579` deliberately makes bare JSON field
+names unresolvable so they cannot reach emit at all.
+
+This is the single most important input to the design, and it means the
+emit-side surface is far smaller than it appears from counting raise sites.
 
 ## Goals
 
@@ -54,44 +82,47 @@ is that the two phases use different *payload types* for the same event.
   present.
 - Distinctions currently readable only in prose become fields: which field
   kind, which divergence, whose fault.
-- Emit-time failures carry source spans.
+- Emit-time failures carry source spans where a node is in scope.
 - `Diagnostic.message` becomes purely a developer/log string with no
   semantic load.
+- Backstop conditions are labelled honestly as library/caller defects
+  rather than dressed up as query errors.
 
 ## Non-goals
 
 - No change to query semantics. Nothing about which documents a query
   matches changes, so this introduces no divergence from whoosh and needs
-  no allowlist, `DIVERGENCES.md` divergence entry, or corpus line.
-- No change to `parse()`'s accumulate-everything behavior. It continues to
-  return every problem it found rather than failing on the first.
-- No change to `QueryParserError`, which signals an internal invariant
-  violation (a bug in this library) rather than a problem with the query.
+  no allowlist entry, `DIVERGENCES.md` divergence entry, or corpus line.
+  Verified: `tests/differential/test_differential.py:88-91` gates on
+  `if diagnostics:` truthiness only and never inspects `kind`;
+  `DiagnosticKind` appears nowhere under `tests/differential/`;
+  `allowlist.py` keys on regexes over the raw query string. Splitting
+  `UNSUPPORTED_PATTERN` cannot move
+  `test_diagnostic_skip_count_matches_corpus`'s pinned count of 23.
+- No change to `parse()`'s accumulate-everything behavior.
+- No change to `QueryParserError`, which signals a parser-pipeline
+  invariant violation.
 - No backward-compatibility shims. paperless-ngx's integration is not yet
-  complete, so the old names are removed rather than deprecated.
+  complete, so old names are removed rather than deprecated.
+- `free_text_tokens` is untouched: `ast.py:831-955` never imports, checks
+  or constructs `ErrorLeaf`/`Diagnostic`.
 
 ## Design
 
 ### Diagnostic
 
 ```python
-class Phase(Enum):
-    PARSE = auto()
-    EMIT = auto()
-
-
 class Cause(Enum):
     INVALID_INPUT = auto()   # the query text is wrong; the user must change it
     UNSUPPORTED = auto()     # the query is well-formed; this backend cannot run it
     MISCONFIGURED = auto()   # the registry/schema, not the query, is the obstacle
-    INTERNAL = auto()        # the backend rejected something we believed valid
+    INTERNAL = auto()        # a defect in this library or in a caller-built AST
 
 
 @dataclass(frozen=True, kw_only=True, slots=True)
 class Diagnostic:
     kind: DiagnosticKind
     cause: Cause
-    phase: Phase
     message: str
     startchar: int | None = None
     endchar: int | None = None
@@ -101,32 +132,40 @@ class Diagnostic:
     divergence: int | None = None
 ```
 
-`kw_only=True` because the field list has grown once and will again;
-positional construction would make every future addition a breaking change.
-All existing construction sites already pass keywords.
+There is deliberately **no `phase` field.** An earlier draft carried one,
+justified by emit re-raising a parse-origin diagnostic at `:552-555`. That
+justification is unnecessary: emit never *originates* an `INVALID_INPUT`
+diagnostic, so a `QueryError` whose cause is `INVALID_INPUT` is by
+construction one that wrapped a parse-time diagnostic. `Cause` subsumes the
+distinction at no cost. Otherwise `phase` would be fully redundant with the
+channel a host received the record through (`ParseResult.diagnostics` or
+`QueryError.diagnostic`).
+
+`kw_only=True` because the field list has grown once and will again.
 
 Severity remains fatal-only, permanently, as documented today: a
 `Diagnostic` always means the query it concerns cannot be emitted. `Cause`
 is not a severity tier. Every cause is fatal to the query; they differ in
 who can act on it, not in how bad it is.
 
-`Cause.MISCONFIGURED` exists for one condition today: `field:*` on a
-non-fast field (`emitters/tantivy_.py:534-537`). This is neither the user's
-error nor a permanent backend limitation, it is the operator's registry
-declaration. A host may reasonably alert on it rather than return a 400,
-and that decision is invisible in the current prose.
+`Cause.MISCONFIGURED` covers one measured condition, `field:*` on a
+non-fast field (`:534-537`). It earns a member because the correct host
+response differs in kind: this is the operator's registry declaration, not
+the user's query, so a host may reasonably alert rather than return a 400.
+That is invisible in the current prose.
 
-`divergence` is `int | None`. No condition maps to more than one
-`DIVERGENCES.md` entry; the plural-looking comment at
-`emitters/tantivy_.py:714` describes two separate branches, not one
-condition with two entries.
+`Cause.INTERNAL` covers the backstops, and is what makes the reachability
+finding actionable: a host can distinguish "your query is unrunnable" from
+"someone handed the emitter a malformed AST" without reading prose.
+
+`divergence` is `int | None`. No condition maps to more than one entry.
 
 ### Exceptions
 
 ```
 WhooshCompatError                 # base, unchanged
 ├── QueryError(diagnostic)        # NEW: replaces both emit-time types
-└── QueryParserError              # unchanged: internal invariant violation
+└── QueryParserError              # unchanged: parser-pipeline invariant
 ```
 
 ```python
@@ -136,51 +175,79 @@ class QueryError(WhooshCompatError):
         self.diagnostic = diagnostic
 ```
 
-`QueryEmitError` and `UnsupportedQueryError` are deleted, along with their
-entries in `__init__.py`'s `__all__`.
+`QueryEmitError` and `UnsupportedQueryError` are deleted.
 
-The invalid-vs-unsupported distinction those two classes encoded moves to
-`Diagnostic.cause`, where it is both finer-grained and impossible to forget
-to handle. A host writes one `except` clause.
+The invalid-vs-unsupported distinction those classes encoded moves to
+`Diagnostic.cause`, which is strictly more expressive: the two classes
+cannot represent `MISCONFIGURED`, the one distinction most worth surfacing.
 
-`QueryParserError` is deliberately untouched and stays outside this scheme.
-It means a tagger or filter plugin violated a pipeline invariant, which is
-a defect in this library, not a query a host should render an error for.
-
-`Cause.INTERNAL` is not the same thing and does not overlap with it.
-`INTERNAL` covers exactly one condition: the backend rejected a query this
-library constructed and believed valid (`emitters/tantivy_.py:359` wrapping
-a `tantivy` exception). The query reached the backend and came back
-refused, so it is still a query outcome and still a `QueryError`.
-`QueryParserError` fires earlier and never involves the backend at all.
+`QueryParserError` stays outside this scheme and is not merged into
+`Cause.INTERNAL`. It fires during the tagger/filter pipeline, before an AST
+exists; `INTERNAL` describes a `Diagnostic` about an AST that does exist.
 
 ### Kind inventory
 
-`UNSUPPORTED_PATTERN` splits into three members. Emit-only conditions gain
-members. Where parse and emit detect the genuinely same condition, they
-share a kind and differ in `phase`.
+Rows are grouped by whether query text can reach them. `UNSUPPORTED_PATTERN`
+splits three ways; each of the three retains a divergence entry.
 
-| Kind | Phases | Cause | Divergence |
-|---|---|---|---|
-| `BAD_DATE` | parse, emit | `INVALID_INPUT` | |
-| `BAD_NUMBER` | parse, emit | `INVALID_INPUT` | |
-| `TOO_DEEP` | parse | `INVALID_INPUT` | |
-| `PATTERN_ON_NUMERIC` | parse, emit | `UNSUPPORTED` | |
-| `PATTERN_ON_SUBPATH` | parse, emit | `UNSUPPORTED` | 30 |
-| `PATTERN_ON_BOOLEAN_EXISTS` | parse, emit | `UNSUPPORTED` | 29 |
-| `TEXT_RANGE` | emit | `UNSUPPORTED` | 5 |
-| `JSON_NEEDS_SUBPATH` | emit | `INVALID_INPUT` | |
-| `UNKNOWN_FIELD` | emit | `INVALID_INPUT` | |
-| `UNFIELDED_TERM` | emit | `INVALID_INPUT` | |
-| `EXISTS_REQUIRES_FAST` | emit | `MISCONFIGURED` | |
-| `KIND_NOT_IMPLEMENTED` | emit | `UNSUPPORTED` | |
-| `BACKEND_REJECTED` | emit | `INTERNAL` | |
+**Parse-time, reachable:**
 
-The three `PATTERN_ON_*` kinds firing in both phases is intentional and is
-the clearest payoff. Today a wildcard on a JSON subpath produces
-`UNSUPPORTED_PATTERN` if the parser catches it and an unrelated
-`UnsupportedQueryError` message if the emitter does, for one user-visible
-condition. Same kind, different `phase`, is the honest encoding.
+| Kind | Cause | Divergence |
+|---|---|---|
+| `BAD_DATE` | `INVALID_INPUT` | |
+| `BAD_NUMBER` | `INVALID_INPUT` | |
+| `TOO_DEEP` | `INVALID_INPUT` | |
+| `PATTERN_ON_NUMERIC` | `UNSUPPORTED` | 29 |
+| `PATTERN_ON_BOOLEAN_EXISTS` | `UNSUPPORTED` | 29 |
+| `PATTERN_ON_SUBPATH` | `UNSUPPORTED` | 30 |
+
+`DIVERGENCES.md:964-967` covers the numeric *and* BOOLEAN_EXISTS cases
+under entry 29 ("A wildcard/prefix pattern on a numeric field or a
+BOOLEAN_EXISTS field is diagnosed at parse time"), so both rows carry 29.
+An earlier draft left the numeric row blank.
+
+**Emit-time, reachable from query text:**
+
+| Kind | Cause | Divergence |
+|---|---|---|
+| `EXISTS_REQUIRES_FAST` | `MISCONFIGURED` | |
+| `TEXT_RANGE` | `UNSUPPORTED` | 5 |
+| `BACKEND_REJECTED` | `INTERNAL` | |
+
+`BACKEND_REJECTED` is reachable in principle rather than by a known query:
+it is the `:352-359` catch around `analyze(normalize(node))` and `visit()`.
+
+**Emit-time backstops, not reachable from query text.** All carry
+`cause=INTERNAL`. They keep distinct kinds so the existing matrix tests can
+assert which backstop fired without matching on message text:
+
+| Kind | Sites |
+|---|---|
+| `AST_UNFIELDED_TERM` | `:365` |
+| `AST_UNKNOWN_FIELD` | `:368` |
+| `AST_JSON_NEEDS_SUBPATH` | `:603`, `:682`, `:763` |
+| `AST_BAD_NUMBER` | `:583`, `:655`, `:664`, `:817` |
+| `AST_BAD_DATE` | `:831` |
+| `AST_PATTERN_ON_KIND` | `:753`, `:758`, `:768` |
+| `AST_KIND_NOT_IMPLEMENTED` | `:608`, `:687` |
+
+The `AST_` prefix is the contract: reaching one means a caller built a node
+the parser would never produce. This replaces the earlier draft's attempt
+to give these emit "phases" alongside their parse counterparts.
+
+`AST_PATTERN_ON_KIND` is deliberately **one** kind covering all three
+branches of `_reject_pattern_incompatible_kind`, unlike the parse-time
+split. The parse-time split exists because hosts render those; nobody
+renders a backstop. This also avoids the trap in the earlier draft, which
+claimed an emit phase for `PATTERN_ON_NUMERIC` when `:767` has no numeric
+branch at all (U64, DATE and DATETIME all fall through together).
+
+`AST_UNKNOWN_FIELD` is `INTERNAL`, not `INVALID_INPUT`: unknown field names
+never survive parsing as field refs, they are absorbed into the default
+field as free text (`nosuch:foo` -> `Term(field='content', text='nosuch:foo')`).
+Three of its 11 call sites pass a *synthesized* `FieldRef(spec.exists_target)`
+(`:549`, `:596`, `:675`), a name the user never typed, which is a further
+reason it cannot be a user-facing input error.
 
 ### Raise and report helpers
 
@@ -191,19 +258,44 @@ _CAUSE: Mapping[DiagnosticKind, Cause] = {...}
 _DIVERGENCE: Mapping[DiagnosticKind, int] = {...}
 
 def _fail(kind, *, node=None, resolved=None, raw_value=None, message) -> NoReturn:
-    ...  # fills phase=EMIT, cause/divergence from the tables,
-         # startchar/endchar from node, field/field_kind from resolved
+    ...  # cause/divergence from the tables, startchar/endchar from node,
+         # field/field_kind from resolved
 ```
 
-This is what fixes today's arbitrary class selection, where
-JSON-needs-subpath raises `QueryEmitError` but pattern-on-subpath raises
-`UnsupportedQueryError` for no principled reason.
+`visit_errorleaf` (`:552-555`) does **not** route through `_fail`. It
+re-raises an existing parse-origin `Diagnostic` unchanged, and must not
+have its cause rewritten to an emit-side value.
 
 `parser/syntax.py`'s `ErrorNode` currently defaults `kind` to
-`UNSUPPORTED_PATTERN` (`:469`). That default is never used, since its only
-non-date construction site passes `TOO_DEEP` explicitly
-(`parser/plugins.py:435`). With `UNSUPPORTED_PATTERN` gone, `kind` becomes
-a required argument.
+`UNSUPPORTED_PATTERN` (`:469`). With that member gone, `kind` becomes
+required. Its only `src/` construction site already passes `TOO_DEEP`
+explicitly (`parser/plugins.py:435`), but three test sites rely on the
+default (`tests/test_syntax.py:293`, `:651`, `:774`, with `:301` asserting
+the defaulted value) and must be updated.
+
+### Spans
+
+`_fail` derives `startchar`/`endchar` from `node` when one is in scope.
+Three emit sites have no node available and will carry `None`:
+
+- `_resolve` (`:363`) takes a `FieldRef`, not a node, and is called from 11
+  sites. Source of `AST_UNFIELDED_TERM` and `AST_UNKNOWN_FIELD`.
+- `_exists_query` (`:480`) takes only a `ResolvedField`. Source of
+  `EXISTS_REQUIRES_FAST`.
+- The `:359` backstop has no node at all.
+
+Threading a node through `_resolve` and `_exists_query` is in scope for
+this work, since `EXISTS_REQUIRES_FAST` is one of only two host-reachable
+emit conditions and is exactly the case Problem #2 describes. The other two
+are `INTERNAL` backstops where a span has no audience, so they may keep
+`None`. The test guard is therefore scoped to reachable kinds, not to all
+emit kinds, so it cannot be satisfied vacuously by `_fail`'s `node=None`
+default.
+
+Caveat worth recording: per `ARCHITECTURE.md:507-514`, a `Wildcard`/`Prefix`
+leaf's span covers only the wildcard marker character (`inv*` ->
+`Prefix(startchar=3, endchar=4)`), not the whole token. No host UI should
+be planned around underlining the full pattern.
 
 ### Messages
 
@@ -213,57 +305,124 @@ guarantee and must never be parsed.
 
 Two categories of content come out of the prose because they are structured
 now: `DIVERGENCES.md` references (three sites) and registry-configuration
-advice (one site). Documentation cross-references in *comments and
-docstrings* are unaffected; only user-reachable message strings are in
-scope.
+advice (one site). Cross-references in comments and docstrings are
+unaffected; only user-reachable message strings are in scope.
+
+`QueryError.__init__` passes `diagnostic.message` to `super()`, so
+`visit_errorleaf`'s current `f"cannot emit query: {…}"` prefix (`:553-555`)
+disappears. This is intended.
 
 ## Testing
 
 Test-driven, per the project convention: the failing test lands first and
 its failure is confirmed for the expected reason before implementation.
 
-Existing surface to migrate: 62 `match=` assertions and roughly 76
-references to the two removed exception names across 14 test files. The
-work is mechanical but not small, and assertions move from message text to
-`kind`/`cause`/`phase`.
+Measured migration surface (the earlier draft's numbers were wrong):
+
+- **80** occurrences of the two removed exception names across **13** test
+  files (`rg -o … | wc -l`).
+- **20** `match=` assertions actually attached to those two exception types,
+  in 5 files (`test_emit_json/patterns/phrase/ranges/terms.py`). The other
+  42 of the 62 total `match=` uses are registry `ValueError`, `TimeError`
+  and date/config asserts, untouched by this work.
+- **2** positional `Diagnostic(...)` constructions broken by `kw_only`:
+  `tests/test_errors.py:14`, `tests/test_ast.py:178`.
+- **3** `ErrorNode` constructions relying on the removed `kind` default.
 
 New guards:
 
-- Every `DiagnosticKind` member appears in the `_CAUSE` table. This is the
+- Every `DiagnosticKind` member appears in `_CAUSE`. This is the
   exhaustiveness check that keeps a new kind from silently defaulting.
 - No `Diagnostic.message` and no `QueryError` message contains
-  `"DIVERGENCES"`, guarding the prose cleanup against regression.
-- Emit-time diagnostics for node-scoped failures carry non-`None`
+  `"DIVERGENCES"`.
+- Emit-time diagnostics for the **reachable** kinds carry non-`None`
   `startchar`/`endchar`.
+- No `Cause.INVALID_INPUT` diagnostic originates at emit time, which is the
+  invariant that lets `Cause` stand in for the dropped `phase` field.
 
 `tests/emitter/test_kind_matrix.py` is the existing leaf-type by field-kind
-by spelling exhaustiveness matrix and is the primary vehicle here. Every
-cell asserts on `kind`, `cause`, and `phase`, never on message text. Per
-the project's sweep convention, no cell is exempted: each ends in a
-parse-time diagnostic, a documented emit-time `QueryError`, or a real
-search.
+by spelling exhaustiveness matrix and is the primary vehicle. Its `Raises`
+outcome descriptor is currently `(exc, match: str)`, checked at `:142-148`
+via `pytest.raises(outcome.exc, match=outcome.match)`, with 8 cells using
+it (`:282`, `:298`, `:402`, `:417`, `:431`, `:437`, `:460`, `:720`). The
+descriptor becomes `(kind, cause)` and all 8 cells change. Per the
+project's sweep convention no cell is exempted: each ends in a parse-time
+diagnostic, a documented emit-time `QueryError`, or a real search.
+
+`tests/emitter/test_hypothesis_e2e.py:242-243` currently suppresses **only**
+`UnsupportedQueryError`, encoding the invariant stated at `README.md:333`
+that the fuzzer never raises anything else. A mechanical rewrite to
+`suppress(QueryError)` would silently swallow that invariant. It must
+become an explicit re-raise on any cause other than `UNSUPPORTED`. This is
+the one place where "hosts write a single `except` clause" does not apply,
+and it is a deliberate tightening, since the fuzzer should also never see
+`MISCONFIGURED` or `INTERNAL`.
+
+`tests/emitter/test_acceptance_property.py:770` already catches both as a
+tuple and needs only the name change.
 
 ## Documentation
 
-- `README.md`: the host-contract section is rewritten. The "catch **both**"
-  warning is deleted, since there is one exception type. The "error
-  messages are written for the host" paragraph is re-aimed at the
-  structured contract: branch on `kind` and `cause`, treat `message` as
-  log output.
-- `ARCHITECTURE.md`: the diagnostic/error surface description is updated.
-- `DIVERGENCES.md`: entries 5, 29 and 30 note that they are now
-  machine-identifiable via `Diagnostic.divergence`.
+- `README.md`: host-contract section rewritten. The "catch **both**"
+  warning is deleted. The "error messages are written for the host"
+  paragraph is re-aimed at the structured contract. `:333`'s fuzzer
+  invariant is restated in terms of `Cause.UNSUPPORTED`.
+- `ARCHITECTURE.md`: four edits, not one. `:254-258` documents the
+  **positional** `Diagnostic(message, kind, startchar, endchar, field,
+  raw_value)` signature and lists the four enum members literally; `:262`
+  names "the `UNSUPPORTED_PATTERN` site"; `:279-283` describes the two
+  exception types; `:437` restates the invariant; `:513` describes
+  `UNSUPPORTED_PATTERN` diagnostics built from Wildcard/Prefix.
+- `CLAUDE.md:58-60` names both removed exceptions in the parsing-never-raises
+  invariant.
+- `DIVERGENCES.md`: entries 5, 29 and 30 gain a note that they are
+  machine-identifiable via `Diagnostic.divergence`. Separately, `:506`,
+  `:1048` and `:1612` name the removed exception classes and `:975`,
+  `:1040` name `DiagnosticKind.UNSUPPORTED_PATTERN`; all five are stale.
 - `fields.py:579-589`: a docstring describing the two-part host contract by
-  the old exception names is updated.
+  the old exception names.
+- `__init__.py`: remove `QueryEmitError`/`UnsupportedQueryError` from
+  `__all__` (`:53`, `:56`), add `QueryError` and `Cause`. `Diagnostic` and
+  `DiagnosticKind` are already exported (`:44-45`).
 - `CHANGELOG.md`: a breaking-change entry.
+
+Naming note, no action required: `tests/differential/allowlist.py` defines
+an unrelated `DivergenceKind` enum. With `Diagnostic.divergence` added,
+"divergence" now names three distinct concepts in this repo. Worth a
+sentence in `ARCHITECTURE.md` rather than a rename.
+
+## Rejected alternative
+
+Keep both exception classes, make `.diagnostic` mandatory on both, and drop
+`Cause` entirely on the grounds that the class *is* the cause. This is
+cheaper: `Phase` disappears anyway, the 80 test references and the doc
+mentions of both class names stay valid, and `test_hypothesis_e2e.py`'s
+selective suppression keeps working unmodified.
+
+Rejected because the two classes cannot express `MISCONFIGURED`. A non-fast
+field failing `field:*` would collapse back into `UnsupportedQueryError`
+alongside genuine backend limitations, which re-hides the one distinction
+with a genuinely different host response. The same objection applies to
+`INTERNAL`: with only two classes, the backstop conditions that the
+reachability probe showed dominate the emit surface would be
+indistinguishable from real query failures.
+
+The cost of rejecting it is concentrated in one file
+(`test_hypothesis_e2e.py`) and is a two-line change that tightens the
+invariant rather than weakening it.
 
 ## Open items
 
 Resolved during implementation, not blocking this design:
 
-- Whether `KIND_NOT_IMPLEMENTED` is reachable at all. The three fallthrough
-  raises it covers (`emitters/tantivy_.py:608`, `:687`, `:768`) may be
-  defensive dead code, in which case they belong under `QueryParserError`
-  as an internal invariant rather than in the kind table.
-- Whether `UNFIELDED_TERM` (`:365`) is reachable after `normalize()`, with
-  the same consequence.
+- Whether any of the seven `AST_*` backstops is truly unreachable even from
+  a hand-built AST, in which case it belongs under `QueryParserError`
+  rather than in the kind table. The probe establishes they are unreachable
+  from *query text*; it does not establish reachability from hand-built
+  nodes, which is what `test_kind_matrix.py`'s existing cells exercise.
+- Whether `:352-359`'s catch should be split. It currently wraps both
+  `analyze(normalize(node))` and `visit()`, and the `emit()` docstring
+  (`:326-340`) enumerates four shapes, three of which never reach tantivy
+  (a `None` child, a missing `visit_*` method at `ast.py:828`, and
+  `RecursionError`). One `BACKEND_REJECTED` kind describing all four as
+  "the backend rejected it" is inaccurate for three of them.
