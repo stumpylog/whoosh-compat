@@ -48,6 +48,7 @@ from typing import Any
 from whoosh_compat import ast
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.errors import cause_for
 from whoosh_compat.parser.common import attach
 
 
@@ -466,7 +467,7 @@ class ErrorNode(SyntaxNode):
         self,
         message: str,
         node: SyntaxNode | None = None,
-        kind: DiagnosticKind = DiagnosticKind.UNSUPPORTED_PATTERN,
+        kind: DiagnosticKind = DiagnosticKind.PATTERN_ON_SUBPATH,
     ) -> None:
         self.message = message
         self.node = node
@@ -487,6 +488,7 @@ class ErrorNode(SyntaxNode):
         diagnostic = Diagnostic(
             message=self.message,
             kind=self.kind,
+            cause=cause_for(self.kind),
             startchar=self.startchar,
             endchar=self.endchar,
         )

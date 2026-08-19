@@ -182,7 +182,7 @@ def test_wildcard_on_u64_field_is_diagnosed(reg: FieldRegistry, query: str, raw_
     r = wc.parse(query, registry=reg, default_fields=["content"])
     assert isinstance(r.ast, ast.ErrorLeaf)
     assert r.diagnostics
-    assert r.diagnostics[0].kind is DiagnosticKind.UNSUPPORTED_PATTERN
+    assert r.diagnostics[0].kind is DiagnosticKind.PATTERN_ON_NUMERIC
     assert r.diagnostics[0].field == FieldRef("asn")
     # raw_value carries the pattern exactly as the user typed it, for every
     # spelling: the trailing-star Prefix fold (do_wildcards strips the "*"
@@ -221,7 +221,7 @@ def test_wildcard_on_json_subpath_is_diagnosed(reg: FieldRegistry, query: str) -
     r = wc.parse(query, registry=reg, default_fields=["content"])
     assert isinstance(r.ast, ast.ErrorLeaf)
     assert r.diagnostics
-    assert r.diagnostics[0].kind is DiagnosticKind.UNSUPPORTED_PATTERN
+    assert r.diagnostics[0].kind is DiagnosticKind.PATTERN_ON_SUBPATH
     assert r.diagnostics[0].field == FieldRef("notes", "user")
 
 
@@ -258,7 +258,7 @@ def test_wildcard_on_boolean_exists_field_is_diagnosed(reg: FieldRegistry, query
     r = wc.parse(query, registry=reg, default_fields=["content"])
     assert isinstance(r.ast, ast.ErrorLeaf)
     assert r.diagnostics
-    assert r.diagnostics[0].kind is DiagnosticKind.UNSUPPORTED_PATTERN
+    assert r.diagnostics[0].kind is DiagnosticKind.PATTERN_ON_BOOLEAN_EXISTS
     assert r.diagnostics[0].field == FieldRef("has_tag")
 
 

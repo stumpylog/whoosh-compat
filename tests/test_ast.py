@@ -22,6 +22,7 @@ from whoosh_compat.ast import Term
 from whoosh_compat.ast import TermRange
 from whoosh_compat.ast import Visitor
 from whoosh_compat.ast import Wildcard
+from whoosh_compat.errors import Cause
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.fields import FieldRef
@@ -175,7 +176,13 @@ class TestNodeConstruction:
         assert b.boost == 2.5
 
     def test_errorleaf_construction(self) -> None:
-        diag = Diagnostic("bad value", DiagnosticKind.BAD_DATE, 10, 20)
+        diag = Diagnostic(
+            message="bad value",
+            kind=DiagnosticKind.BAD_DATE,
+            cause=Cause.INVALID_INPUT,
+            startchar=10,
+            endchar=20,
+        )
         el = ErrorLeaf(diagnostic=diag)
         assert el.diagnostic is diag
         assert el.diagnostic.message == "bad value"

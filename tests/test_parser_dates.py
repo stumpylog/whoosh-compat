@@ -6,6 +6,7 @@ import pytest
 
 import whoosh_compat as wc
 from whoosh_compat import ast
+from whoosh_compat.errors import Cause
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.fields import FieldKind
@@ -1139,7 +1140,13 @@ def test_daterangesyntaxnode_and_dateerrornode_r() -> None:
     node = DateRangeSyntaxNode("added", datetime(2020, 1, 1), datetime(2020, 1, 2), True, False)
     assert node.r() == f"DateRange {datetime(2020, 1, 1)!r}-{datetime(2020, 1, 2)!r}"
 
-    diag = Diagnostic(message="bad", kind=DiagnosticKind.BAD_DATE, startchar=0, endchar=1)
+    diag = Diagnostic(
+        message="bad",
+        kind=DiagnosticKind.BAD_DATE,
+        cause=Cause.INVALID_INPUT,
+        startchar=0,
+        endchar=1,
+    )
     err = DateErrorNode(diag)
     assert err.r() == "DateError 'bad'"
 

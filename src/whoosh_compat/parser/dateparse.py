@@ -90,6 +90,7 @@ from dateutil.relativedelta import relativedelta
 from whoosh_compat import ast
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.errors import cause_for
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldSpec
@@ -984,6 +985,7 @@ class DateParserPlugin(Plugin):
         diagnostic = Diagnostic(
             message=f"{text!r} is not a recognizable date",
             kind=DiagnosticKind.BAD_DATE,
+            cause=cause_for(DiagnosticKind.BAD_DATE),
             startchar=node.startchar,
             endchar=node.endchar,
             # DATE/DATETIME fields are never JSON (FieldRegistry rejects
