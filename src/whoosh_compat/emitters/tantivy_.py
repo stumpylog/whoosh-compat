@@ -62,6 +62,20 @@ def _is_truthy(value: object) -> bool:
     return bool(value)
 
 
+def _is_intable(value: object) -> bool:
+    """Whether ``int(value)`` succeeds.
+
+    Used only to name the offending bound in a numeric range's diagnostic,
+    the same way ``visit_daterange`` re-tests its bounds for a ``tzinfo``
+    attribute to name the offending date.
+    """
+    try:
+        int(value)  # type: ignore[call-overload]
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 # Identity sentinel for "this bracket class matches nothing" (an empty
 # class, e.g. after a reversed range removes itself). The VALUE is the
 # lookahead fragment CPython's fnmatch.translate emits for the same case,
@@ -326,7 +340,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         a hand-built (not just parsed) AST can violate the type contract in
         ways no single ``visit_*`` method specifically checks for, and the
         underlying call then raises one of several bare exceptions instead
-        of a documented type. Four shapes are converted here:
+        of a documented type. Three shapes are converted here:
 
         * A non-numeric ``Boosted.boost`` or other badly-typed leaf value
           (a kind every field kind can carry, or a future tantivy-py call
@@ -404,6 +418,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         rather than hand-picked per site. ``divergence`` is an argument
         rather than a table lookup because it varies by field kind for
         ``TEXT_RANGE`` and spans two entries for ``AST_PATTERN_ON_KIND``.
+
+        ``field`` is rebuilt in structured form (canonical name plus
+        subpath) rather than from ``resolved.dotted_name``, because
+        ``FieldRef("notes.user")`` and ``FieldRef("notes", "user")`` are
+        not equal even though they stringify alike: the dotted spelling
+        would leave a host reading ``diagnostic.field.json_path`` with the
+        subpath at parse time and ``None`` at emit time for the same field.
         """
 
         raise QueryError(
@@ -413,7 +434,11 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 message=message,
                 startchar=node.startchar if node is not None else None,
                 endchar=node.endchar if node is not None else None,
-                field=FieldRef(resolved.dotted_name) if resolved is not None else None,
+                field=(
+                    FieldRef(resolved.spec.name, resolved.json_path)
+                    if resolved is not None
+                    else None
+                ),
                 field_kind=resolved.spec.kind if resolved is not None else None,
                 raw_value=raw_value,
                 divergence=divergence,
@@ -825,16 +850,52 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         that ``_exists_query`` compiles for a TERM_SCAN field carries no
         user input and cannot hit the cap, so a failure there stays a
         genuine backend rejection.
+
+        The cap is not the only thing ``Query.regex_query`` reports as a
+        bare ``ValueError``, though: a field this library's registry knows
+        but the tantivy schema does not raises the same type. That is a
+        registry/schema mismatch, an operator's problem and not the query
+        text's, so it must report what the identical condition reports for
+        a plain term (``BACKEND_REJECTED``, via ``emit``'s backstop) rather
+        than being frozen into ``PATTERN_TOO_COMPLEX`` forever. The two are
+        told apart by probing the schema, which tantivy-py exposes no
+        introspection for, only in the failure path so the common case
+        stays a single call.
         """
         try:
             return tantivy.Query.regex_query(self.schema, resolved.spec.name, regex)
         except ValueError as exc:
+            if not self._field_in_schema(resolved.spec.name):
+                self._fail(
+                    DiagnosticKind.BACKEND_REJECTED,
+                    message=f"cannot emit query: {exc}",
+                    node=node,
+                    resolved=resolved,
+                )
             self._fail(
                 DiagnosticKind.PATTERN_TOO_COMPLEX,
                 message=f"pattern is too complex for the backend to compile: {exc}",
                 node=node,
                 resolved=resolved,
             )
+
+    def _field_in_schema(self, name: str) -> bool:
+        """Whether ``name`` is a field of the index's tantivy schema.
+
+        ``tantivy.Schema`` exposes no introspection at all on the pinned
+        version, so the cheapest available probe is a query construction
+        that only the missing-field condition rejects: an empty-string term
+        query builds fine against any text or string field and raises
+        ``ValueError`` when the field is absent. Only ``_regex_query``'s
+        failure path calls this, where the field is already known to be
+        TEXT or KEYWORD (``_reject_pattern_incompatible_kind`` closed the
+        kind axis before it), so no other rejection reason applies.
+        """
+        try:
+            tantivy.Query.term_query(self.schema, name, "")
+        except ValueError:
+            return False
+        return True
 
     def _reject_pattern_incompatible_kind(self, resolved: ResolvedField) -> None:
         """Backstop for a hand-built ``Prefix``/``Wildcard`` node whose
@@ -984,11 +1045,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             lo = None if node.lo is None else int(node.lo)
             hi = None if node.hi is None else int(node.hi)
         except (TypeError, ValueError) as exc:
+            bad = node.lo if node.lo is not None and not _is_intable(node.lo) else node.hi
             self._fail(
                 DiagnosticKind.AST_BAD_NUMBER,
                 message=f"numeric range bound is not a valid number for {spec.name!r}: {exc}",
                 node=node,
                 resolved=resolved,
+                raw_value=repr(bad),
             )
         # Currently numeric fields are U64 only.
         return self._range_query(resolved, tantivy.FieldType.Unsigned, lo, hi, node)
