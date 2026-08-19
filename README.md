@@ -133,11 +133,13 @@ a host can use for routing without knowing every `DiagnosticKind`:
 
 `Diagnostic.message` (and the `QueryError` exception message, which is the
 same string) carries no stability guarantee and may reword without notice.
-It may also reference this library's own documentation (`DIVERGENCES.md`
-entries) or give registry-configuration advice (e.g. "mark it fast=True").
-Treat it as developer/log output: a host showing errors to end users should
-build its own copy from `kind`/`cause`, not display or parse `message`; the
-paperless-ngx integration does exactly this.
+Everything a host needs to act on is on the record's own fields instead: a
+`DIVERGENCES.md` entry number on `divergence`, the field and its kind on
+`field`/`field_kind`, the offending literal on `raw_value`, and the span in
+the query string on `startchar`/`endchar`.
+Treat the message as developer/log output: a host showing errors to end
+users should build its own copy from `kind`/`cause`, not display or parse
+`message`; the paperless-ngx integration does exactly this.
 
 A `Diagnostic`'s severity is fatal-only, and always will be: there is no
 `severity` field, and none is planned. Any diagnostics present means the

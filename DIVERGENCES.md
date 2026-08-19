@@ -1058,6 +1058,17 @@ parse-then-emit pipeline).
     call is built, mirroring entry 5's text-range emit-time backstop.
     Machine-identifiable via `Diagnostic.divergence == 30`.
 
+    A lexicographic range on a JSON subpath (`notes.user:[a TO b]`) reports
+    this entry too, not entry 5, for the same underlying reason: there is
+    no tantivy-py API scoped to a subpath, so the range has nothing to
+    build against either. It differs only in when it is reported. A range
+    parses cleanly and is refused at emit time by `visit_termrange`
+    (`DiagnosticKind.TEXT_RANGE`, stamped `divergence == 30` once the
+    resolved field turns out to be a subpath), whereas a pattern is caught
+    at parse time. Entry 5 stays scoped to the TEXT/KEYWORD ranges that
+    worked in whoosh; a subpath range never did, because whoosh has no JSON
+    field concept to have supported it.
+
     A bare `field.subpath:*` (the "*"-alone existence-match special case,
     entries 20 and 29) is unaffected: it never reaches
     `_wildcard_kind_diagnostic` at parse time (handled by the earlier
@@ -1080,7 +1091,9 @@ parse-then-emit pipeline).
     subpaths, both `Prefix` and `Wildcard`) and
     `test_pattern_on_plain_json_field_no_subpath_still_works`;
     `tests/emitter/test_kind_matrix.py`'s `json-nonfast`/`json-fast`
-    `prefix-star`/`wildcard`/`bracket-class` cells.
+    `prefix-star`/`wildcard`/`bracket-class` cells; and, for the range
+    case, `tests/emitter/test_emit_ranges.py`'s
+    `test_text_range_divergence_varies_by_field_kind` (`json-subpath`).
 
 31. **A query nested past 200 parenthesization levels is diagnosed at parse
     time instead of crashing with an uncontrolled `RecursionError` (issue
