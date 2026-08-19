@@ -6,6 +6,7 @@ import pytest
 import tantivy
 
 from whoosh_compat import ast
+from whoosh_compat import parse
 from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.errors import Cause
 from whoosh_compat.errors import DiagnosticKind
@@ -716,3 +717,29 @@ def test_nested_all_drop_group_is_still_dropped_from_parent() -> None:
     )
     q = emit_(node, index=index, registry=registry)
     assert search_ids(index, q) == [1]
+
+
+# -- EXISTS_REQUIRES_FAST diagnostics carry a source span --------------------
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("notes:*", id="star-json"),
+        pytest.param("notes.user:*", id="star-subpath"),
+        pytest.param("slow_num:[TO]", id="double-open-inclusive"),
+        pytest.param("slow_num:{TO}", id="double-open-exclusive"),
+        pytest.param("slow_date:[TO]", id="double-open-date"),
+    ],
+)
+def test_exists_requires_fast_carries_a_span(
+    nonfast_reg: FieldRegistry, nonfast_index: TIndex, query: str
+) -> None:
+    result = parse(query, registry=nonfast_reg, default_fields=["content"])
+    assert not result.diagnostics
+    with pytest.raises(QueryError) as exc:
+        emit_(result.ast, index=nonfast_index[0], registry=nonfast_reg)
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.EXISTS_REQUIRES_FAST
+    assert d.startchar is not None, "span is required for a host-reachable kind"
+    assert d.endchar is not None

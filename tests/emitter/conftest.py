@@ -180,6 +180,51 @@ def ereg() -> FieldRegistry:
     )
 
 
+@pytest.fixture(scope="session")
+def nonfast_index() -> TIndex:
+    """Tantivy schema/index whose numeric, date and JSON fields are all
+    non-fast, the counterpart to ``tindex``'s all-fast ``asn``/``created``/
+    ``added``/``attrs``. Exists to exercise ``EXISTS_REQUIRES_FAST`` for
+    field kinds other than the JSON one ``tindex``/``ereg`` already cover
+    via the non-fast ``notes`` field.
+    """
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_text_field("content", stored=True)
+    sb.add_json_field("notes", stored=True)
+    sb.add_unsigned_field("slow_num", stored=True, indexed=True)
+    sb.add_date_field("slow_date", stored=True, indexed=True)
+    schema = sb.build()
+    index = tantivy.Index(schema)
+    w = index.writer()
+    for id_, _title, content, _tags, _asn, _created, _added, notes in DOCS:
+        doc = tantivy.Document()
+        doc.add_unsigned("id", id_)
+        doc.add_text("content", content)
+        if notes:
+            doc.add_json("notes", notes)
+        w.add_document(doc)
+    w.commit()
+    index.reload()
+    return index, schema
+
+
+@pytest.fixture
+def nonfast_reg() -> FieldRegistry:
+    """Registry counterpart to ``nonfast_index``: ``slow_num``/``slow_date``
+    are U64/DATE fields with no fast column, alongside the already
+    non-fast ``notes`` JSON field mirroring ``ereg``'s.
+    """
+    return FieldRegistry(
+        [
+            FieldSpec("content", FieldKind.TEXT, analyzer=lower_fold, pattern_normalizer=str.lower),
+            FieldSpec("notes", FieldKind.JSON, subpaths=("note", "user")),
+            FieldSpec("slow_num", FieldKind.U64),
+            FieldSpec("slow_date", FieldKind.DATE, date_only=True),
+        ]
+    )
+
+
 @pytest.fixture
 def parse(ereg: FieldRegistry) -> Callable[[str], ast.Node]:
     """``parse()`` bound to the emitter registry, returning just the AST."""
