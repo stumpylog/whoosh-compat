@@ -171,9 +171,7 @@ def _run(qs: str, ereg: FieldRegistry, tindex: TIndex, outcome: object) -> None:
                 f"{qs!r}: expected {outcome.field_kind}, got {d.field_kind}"
             )
         if outcome.field is not None:
-            assert d.field == outcome.field, (
-                f"{qs!r}: expected {outcome.field!r}, got {d.field!r}"
-            )
+            assert d.field == outcome.field, f"{qs!r}: expected {outcome.field!r}, got {d.field!r}"
         return
 
     if isinstance(outcome, Search):
