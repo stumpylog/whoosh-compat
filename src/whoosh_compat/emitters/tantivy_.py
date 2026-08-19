@@ -544,7 +544,9 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     def visit_nothing(self, node: ast.Nothing) -> tantivy.Query:
         return tantivy.Query.empty_query()
 
-    def _exists_query(self, resolved: ResolvedField) -> tantivy.Query:
+    def _exists_query(
+        self, resolved: ResolvedField, *, node: ast.Node | None = None
+    ) -> tantivy.Query:
         """Build an "exists" query for ``resolved.spec``: does this field
         have a value at all on a given document?
 
@@ -604,6 +606,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 f"field {resolved.dotted_name!r} ({spec.kind.name}) has no way"
                 f" to match 'exists' while non-fast"
             ),
+            node=node,
             resolved=resolved,
         )
 
@@ -617,7 +620,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # exists_target's, same redirect as visit_term/visit_phrase's
             # BOOLEAN_EXISTS branches.
             resolved = self._resolve(FieldRef(resolved.spec.exists_target))  # type: ignore[arg-type]
-        return self._exists_query(resolved)
+        return self._exists_query(resolved, node=node)
 
     def visit_errorleaf(self, node: ast.ErrorLeaf) -> tantivy.Query:
         # Re-raises the parse-time record unchanged. Routing this through
@@ -669,7 +672,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # emit correctly through _exists_query's strategy dispatch, so
             # nothing here may assume a plain non-JSON canonical name.
             target = self._resolve(FieldRef(spec.exists_target))  # type: ignore[arg-type]
-            exists = self._exists_query(target)
+            exists = self._exists_query(target, node=node)
             if _is_truthy(node.text):
                 return exists
             return _boolean_query([(tantivy.Occur.MustNot, exists)])
@@ -731,7 +734,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             if node.text == "*":
                 # Matches whoosh's NUMERIC.parse_query "*" -> existence
                 # special case, same as a quoted term.
-                return self._exists_query(resolved)
+                return self._exists_query(resolved, node=node)
             try:
                 value = int(node.text)
             except (TypeError, ValueError):
@@ -766,7 +769,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # emit correctly through _exists_query's strategy dispatch, so
             # nothing here may assume a plain non-JSON canonical name.
             target = self._resolve(FieldRef(spec.exists_target))  # type: ignore[arg-type]
-            exists = self._exists_query(target)
+            exists = self._exists_query(target, node=node)
             if node.text == "*" or _is_truthy(node.text):
                 return exists
             return _boolean_query([(tantivy.Occur.MustNot, exists)])
@@ -962,7 +965,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         """
         spec = resolved.spec
         if lo is None and hi is None:
-            return self._exists_query(resolved)
+            return self._exists_query(resolved, node=node)
         return tantivy.Query.range_query(
             self.schema,
             spec.name,
