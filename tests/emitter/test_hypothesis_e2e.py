@@ -18,7 +18,6 @@ looks like.
 
 from __future__ import annotations
 
-import contextlib
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -35,6 +34,7 @@ from tests.differential.strategies import wildcard_base
 from whoosh_compat import parse as wc_parse
 from whoosh_compat.ast import normalize
 from whoosh_compat.emitters.tantivy_ import emit as emit_
+from whoosh_compat.errors import Cause
 from whoosh_compat.errors import QueryError
 from whoosh_compat.fields import FieldRegistry
 
@@ -239,8 +239,14 @@ def test_emit_never_raises_except_unsupported(q: str, tindex: TIndex, ereg: Fiel
     # (DIVERGENCES.md entry 5, tantivy-py has no programmatic text-range
     # API) is the only construct that's parseable but genuinely
     # inexecutable against tantivy.
-    with contextlib.suppress(QueryError):
+    try:
         emit_(result.ast, index=tindex[0], registry=ereg)
+    except QueryError as exc:
+        # README documents that the fuzzer never produces anything but
+        # documented-unsupported shapes. MISCONFIGURED would mean the
+        # test registry is wrong; INTERNAL would mean a real defect.
+        if exc.diagnostic.cause is not Cause.UNSUPPORTED:
+            raise
 
 
 @given(q=_query_text(max_leaves=6))
