@@ -8,8 +8,11 @@ import pytest
 
 from whoosh_compat import ast
 from whoosh_compat import parse as _parse
+from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryEmitError
+from whoosh_compat.errors import QueryError
 from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 
@@ -216,6 +219,52 @@ def test_text_range_pins_the_two_part_host_contract(tindex: TIndex, ereg: FieldR
     assert result.diagnostics == ()
     with pytest.raises(UnsupportedQueryError, match="text ranges"):
         emit_ast(result.ast, tindex, ereg)
+
+
+@pytest.mark.parametrize(
+    ("query", "field_kind", "divergence"),
+    [
+        pytest.param("title:[a TO b]", FieldKind.TEXT, 5, id="text"),
+        pytest.param("tag:[a TO b]", FieldKind.KEYWORD, 5, id="keyword"),
+        pytest.param("notes.user:[a TO b]", FieldKind.JSON, 30, id="json-subpath"),
+        pytest.param("has_tag:[a TO b]", FieldKind.BOOLEAN_EXISTS, None, id="boolean-exists"),
+    ],
+)
+def test_text_range_divergence_varies_by_field_kind(
+    tindex: TIndex,
+    ereg: FieldRegistry,
+    parse: Callable[[str], ast.Node],
+    query: str,
+    field_kind: FieldKind,
+    divergence: int | None,
+) -> None:
+    """Entry 5 is scoped to text ranges that worked in whoosh.
+
+    A range on a synthetic boolean-exists field never did, and a subpath
+    range is entry 30's territory, so stamping 5 on all of them ships a
+    wrong reference.
+    """
+    with pytest.raises(QueryError) as exc:
+        emit_ast(parse(query), tindex, ereg)
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.TEXT_RANGE
+    assert d.field == FieldRef(query.split(":")[0])
+    assert d.field_kind is field_kind
+    assert d.divergence == divergence
+
+
+def test_text_range_on_unknown_field_reports_the_unknown_field(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
+    # Resolving the field first means an unresolvable field wins over the
+    # text-range refusal: it is the more specific failure.
+    with pytest.raises(QueryError) as exc:
+        emit_ast(
+            ast.TermRange(field=FieldRef("nope"), lo="a", hi="z", incl_lo=True, incl_hi=True),
+            tindex,
+            ereg,
+        )
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_UNKNOWN_FIELD
 
 
 def test_date_range_naive_bounds_pass_through(tindex: TIndex, ereg: FieldRegistry) -> None:
