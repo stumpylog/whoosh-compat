@@ -1,6 +1,6 @@
 """End-to-end resilience property: parse + emit against a real in-memory
 tantivy index must never raise anything except the documented
-:class:`~whoosh_compat.errors.UnsupportedQueryError`.
+:class:`~whoosh_compat.errors.QueryError`.
 
 The differential suite (``tests/differential/test_hypothesis.py``) only ever
 calls ``whoosh_compat.parse()``: it never builds a ``tantivy.Query`` or runs
@@ -35,7 +35,7 @@ from tests.differential.strategies import wildcard_base
 from whoosh_compat import parse as wc_parse
 from whoosh_compat.ast import normalize
 from whoosh_compat.emitters.tantivy_ import emit as emit_
-from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.errors import QueryError
 from whoosh_compat.fields import FieldRegistry
 
 from .conftest import TIndex
@@ -229,7 +229,7 @@ def test_emit_never_raises_except_unsupported(q: str, tindex: TIndex, ereg: Fiel
     result = wc_parse(q, registry=ereg, default_fields=_DEFAULT_FIELDS, tz=BERLIN, basedate=BASE)
     if result.diagnostics:
         # A diagnostic means the AST contains an ErrorLeaf: emitting one is
-        # documented to raise QueryEmitError (ARCHITECTURE.md's "Diagnostics
+        # documented to raise QueryError (ARCHITECTURE.md's "Diagnostics
         # never raise mid-parse" invariant is a *parsing* guarantee; emitting
         # a tree a caller was already told not to emit is a separate,
         # intentional contract). This property is about queries that parsed
@@ -239,7 +239,7 @@ def test_emit_never_raises_except_unsupported(q: str, tindex: TIndex, ereg: Fiel
     # (DIVERGENCES.md entry 5, tantivy-py has no programmatic text-range
     # API) is the only construct that's parseable but genuinely
     # inexecutable against tantivy.
-    with contextlib.suppress(UnsupportedQueryError):
+    with contextlib.suppress(QueryError):
         emit_(result.ast, index=tindex[0], registry=ereg)
 
 

@@ -16,8 +16,8 @@ import tantivy
 
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import TantivyEmitter
-from whoosh_compat.errors import QueryEmitError
-from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.errors import QueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -56,7 +56,7 @@ def test_json_subpath_term_parsed(
 
 def test_json_subpath_term_as_group_child(tindex: TIndex, ereg: FieldRegistry) -> None:
     # Regression: a JSON subpath term as a direct child of an And group used
-    # to raise QueryEmitError("unknown field 'notes.user'") because
+    # to raise QueryError("unknown field 'notes.user'") because
     # _group_child called self._resolve(child.field) directly instead of
     # going through the JSON-subpath-aware dispatch visit_term already uses.
     # Doc 1 has notes.user == "alice" and content contains "invoice".
@@ -127,8 +127,9 @@ def test_dotted_field_that_is_not_a_json_subpath_falls_back_to_resolve(
     # constructs the AST directly so it reaches the emitter rather than
     # being demoted by the parser first).
     node = ast.Term(field=FieldRef("notes", "bogus"), text="x")
-    with pytest.raises(QueryEmitError, match="unknown field"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_UNKNOWN_FIELD
 
 
 def test_json_subpath_parse_query_fallback_honors_multitoken_first(tindex: TIndex) -> None:
@@ -279,8 +280,14 @@ def test_json_subpath_exists_nonfast_raises_naming_dotted_form(
     # subpath-qualified form the user actually typed ("notes.user:*"), not
     # the bare field name ("notes:*"), which is not reachable syntax at all.
     node = parse("notes.user:*")
-    with pytest.raises(UnsupportedQueryError, match=r"notes\.user"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.EXISTS_REQUIRES_FAST
+    # The dotted form the user typed, not the bare field name: the
+    # behavior this test pins, expressed on the structured field rather
+    # than on message text (message carries no stability guarantee).
+    assert d.field == FieldRef("notes.user")
 
 
 def test_json_subpath_exists_multilevel_fast_field(tindex: TIndex) -> None:

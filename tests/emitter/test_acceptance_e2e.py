@@ -56,7 +56,7 @@ from whoosh.support.charset import accent_map
 from tests.differential.oracle import oracle_schema
 from whoosh_compat import parse as wc_parse
 from whoosh_compat.emitters.tantivy_ import emit as emit_
-from whoosh_compat.errors import QueryEmitError
+from whoosh_compat.errors import QueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -285,8 +285,9 @@ def test_created_previous_month_unquoted_is_a_documented_divergence(
 
     result = wc_parse(q, registry=ereg, default_fields=DEFAULT_FIELDS, basedate=BASE, tz=BERLIN)
     assert result.diagnostics, "expected a diagnostic for the unparseable 'previous' date token"
-    with pytest.raises(QueryEmitError):
+    with pytest.raises(QueryError) as exc:
         emit_(result.ast, index=tindex[0], registry=ereg)
+    assert exc.value.diagnostic is result.diagnostics[0]
 
 
 def test_exclusive_exact_date_range_is_a_documented_divergence(

@@ -7,9 +7,7 @@ from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.errors import Cause
 from whoosh_compat.errors import DiagnosticKind
-from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.errors import QueryError
-from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -60,8 +58,9 @@ def test_u64_term_non_numeric_text_raises_query_emit_error(
     # U64 value at parse time), but a hand-built ast.Term can. visit_phrase's
     # U64 branch already wrapped int(); visit_term's didn't.
     node = ast.Term(field=FieldRef("asn"), text="notanumber")
-    with pytest.raises(QueryEmitError, match="notanumber"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_BAD_NUMBER
 
 
 def test_date_kind_term_raises_unsupported_query_error(tindex: TIndex, ereg: FieldRegistry) -> None:
@@ -70,8 +69,9 @@ def test_date_kind_term_raises_unsupported_query_error(tindex: TIndex, ereg: Fie
     # hand-built ast.Term addressing a DATE field bypasses that; it used to
     # raise a bare NotImplementedError.
     node = ast.Term(field=FieldRef("created"), text="2020-01-01")
-    with pytest.raises(UnsupportedQueryError, match="DATE"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_KIND_NOT_IMPLEMENTED
 
 
 def test_zero_token_term_dropped(tindex: TIndex, ereg: FieldRegistry) -> None:
@@ -163,18 +163,21 @@ def test_boolean_exists_raw_string_text(
 
 
 def test_unfielded_term_raises(tindex: TIndex, ereg: FieldRegistry) -> None:
-    with pytest.raises(QueryEmitError, match="unfielded"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(ast.Term(field=None, text="x"), tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_UNFIELDED_TERM
 
 
 def test_unknown_field_raises(tindex: TIndex, ereg: FieldRegistry) -> None:
-    with pytest.raises(QueryEmitError, match="unknown field"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(ast.Term(field=FieldRef("nosuchfield"), text="x"), tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_UNKNOWN_FIELD
 
 
 def test_json_field_term_without_subpath_raises(tindex: TIndex, ereg: FieldRegistry) -> None:
-    with pytest.raises(QueryEmitError, match="JSON field"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(ast.Term(field=FieldRef("notes"), text="x"), tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_JSON_NEEDS_SUBPATH
 
 
 #: multitoken resolution: FIRST / PHRASE / OR (DEFAULT/AND is covered by

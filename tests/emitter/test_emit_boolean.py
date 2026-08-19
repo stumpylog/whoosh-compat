@@ -379,8 +379,8 @@ def test_registry_rejects_non_fast_non_text_non_keyword_exists_target() -> None:
     """A non-fast, non-TEXT, non-KEYWORD exists_target (e.g. a non-fast U64
     field) has no way to answer 'exists' at all: regex_query only matches a
     text/string field, and exists_query requires a fast field. This is now
-    rejected at registry construction rather than surfacing later as an
-    UnsupportedQueryError (or an opaque tantivy error) at emit/search time.
+    rejected at registry construction rather than surfacing later as a
+    QueryError (or an opaque tantivy error) at emit/search time.
     """
     with pytest.raises(ValueError, match="has_pages"):
         FieldRegistry(
@@ -410,7 +410,7 @@ def test_every_field_on_the_boolean_exists_field_itself(
     tindex: TIndex, ereg: FieldRegistry
 ) -> None:
     # has_tag:* (Every(field="has_tag"), a BOOLEAN_EXISTS field, not one of
-    # its targets) used to raise UnsupportedQueryError: BOOLEAN_EXISTS has
+    # its targets) used to raise QueryError: BOOLEAN_EXISTS has
     # no resolved exists strategy of its own (it has no physical column;
     # "existence" only ever makes sense via its exists_target). visit_term's
     # BOOLEAN_EXISTS branch already redirects through exists_target;

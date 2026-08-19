@@ -9,6 +9,9 @@ that used to build ``whoosh`` query objects directly:
 * :mod:`whoosh_compat.ast`: the backend-neutral query AST.
 * :mod:`whoosh_compat.fields`: :class:`FieldSpec`/:class:`FieldRegistry`,
   used to describe the schema the parser should parse queries against.
+
+``PARSE_KINDS`` and ``EMIT_KINDS`` are also exported so a host never needs
+its own hardcoded partition of :class:`DiagnosticKind` by phase.
 """
 
 from __future__ import annotations
@@ -24,11 +27,13 @@ from datetime import tzinfo
 from whoosh_compat import ast
 from whoosh_compat.ast import analyze
 from whoosh_compat.ast import free_text_tokens
+from whoosh_compat.errors import EMIT_KINDS
+from whoosh_compat.errors import PARSE_KINDS
+from whoosh_compat.errors import Cause
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
-from whoosh_compat.errors import QueryEmitError
+from whoosh_compat.errors import QueryError
 from whoosh_compat.errors import QueryParserError
-from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.errors import WhooshCompatError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
@@ -42,6 +47,9 @@ from whoosh_compat.parser.default import MultifieldParser
 __version__ = importlib.metadata.version("whoosh-compat")
 
 __all__ = [
+    "EMIT_KINDS",
+    "PARSE_KINDS",
+    "Cause",
     "Diagnostic",
     "DiagnosticKind",
     "FieldKind",
@@ -50,10 +58,9 @@ __all__ = [
     "FieldSpec",
     "Multitoken",
     "ParseResult",
-    "QueryEmitError",
+    "QueryError",
     "QueryParserError",
     "SubpathSpec",
-    "UnsupportedQueryError",
     "WhooshCompatError",
     "analyze",
     "ast",

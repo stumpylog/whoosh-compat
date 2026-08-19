@@ -8,8 +8,8 @@ import tantivy
 
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import emit as emit_
-from whoosh_compat.errors import QueryEmitError
-from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.errors import QueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -212,8 +212,9 @@ def test_phrase_on_u64_field_bad_number_raises_query_emit_error(
     tindex: TIndex, ereg: FieldRegistry
 ) -> None:
     node = ast.Phrase(field=FieldRef("asn"), text="notanumber", slop=1)
-    with pytest.raises(QueryEmitError, match="not a valid number"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_BAD_NUMBER
 
 
 # -- u64 domain: parsed input can never carry an out-of-domain u64
@@ -232,8 +233,9 @@ def test_phrase_on_u64_field_out_of_domain_raises_query_emit_error(
     tindex: TIndex, ereg: FieldRegistry, text: str
 ) -> None:
     node = ast.Phrase(field=FieldRef("asn"), text=text, slop=1)
-    with pytest.raises(QueryEmitError, match="not a valid number"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_BAD_NUMBER
 
 
 @pytest.mark.parametrize(
@@ -313,18 +315,20 @@ def test_phrase_on_bare_json_field_raises_query_emit_error(
     tindex: TIndex, ereg: FieldRegistry
 ) -> None:
     node = ast.Phrase(field=FieldRef("notes"), text="alice", slop=1)
-    with pytest.raises(QueryEmitError, match="JSON field"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_JSON_NEEDS_SUBPATH
 
 
 def test_date_kind_phrase_raises_unsupported_query_error(
     tindex: TIndex, ereg: FieldRegistry
 ) -> None:
-    # Same NotImplementedError -> UnsupportedQueryError fix as
-    # visit_term's DATE/DATETIME fallback.
+    # Same NotImplementedError -> QueryError fix as visit_term's
+    # DATE/DATETIME fallback.
     node = ast.Phrase(field=FieldRef("created"), text="2020-01-01", slop=1)
-    with pytest.raises(UnsupportedQueryError, match="DATE"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_KIND_NOT_IMPLEMENTED
 
 
 # -- exception contract: every field kind x quoted (Phrase) input either
@@ -349,5 +353,5 @@ def test_phrase_emission_never_raises_undocumented_exception(
     ref = FieldRef(name, subpath or None)
     node = ast.Phrase(field=ref, text=text, slop=1)
     # documented exception types: fine.
-    with contextlib.suppress(QueryEmitError, UnsupportedQueryError):
+    with contextlib.suppress(QueryError):
         emit_ast(node, tindex, ereg)

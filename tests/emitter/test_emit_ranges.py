@@ -9,9 +9,7 @@ import pytest
 from whoosh_compat import ast
 from whoosh_compat import parse as _parse
 from whoosh_compat.errors import DiagnosticKind
-from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.errors import QueryError
-from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -205,8 +203,9 @@ def test_numeric_range(
 
 def test_text_range_raises(tindex: TIndex, ereg: FieldRegistry) -> None:
     node = ast.TermRange(field=FieldRef("title"), lo="a", hi="z", incl_lo=True, incl_hi=True)
-    with pytest.raises(UnsupportedQueryError, match="text ranges"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.TEXT_RANGE
 
 
 def test_text_range_pins_the_two_part_host_contract(tindex: TIndex, ereg: FieldRegistry) -> None:
@@ -214,11 +213,12 @@ def test_text_range_pins_the_two_part_host_contract(tindex: TIndex, ereg: FieldR
     # diagnostics list is not, on its own, proof that emit() will succeed.
     # "title:[a TO b]" is a text-field range: it parses clean (no
     # diagnostics, no ErrorLeaf) and only fails once emit() is called, with
-    # a typed UnsupportedQueryError rather than a bare exception.
+    # a typed QueryError rather than a bare exception.
     result = _parse("title:[a TO b]", registry=ereg, default_fields=["content"])
     assert result.diagnostics == ()
-    with pytest.raises(UnsupportedQueryError, match="text ranges"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(result.ast, tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.TEXT_RANGE
 
 
 @pytest.mark.parametrize(
@@ -282,7 +282,7 @@ def test_date_range_naive_bounds_pass_through(tindex: TIndex, ereg: FieldRegistr
 
 
 def test_range_open_on_both_sides_means_field_exists(tindex: TIndex, ereg: FieldRegistry) -> None:
-    # A range with no bounds at all ("asn:[TO]") used to raise QueryEmitError
+    # A range with no bounds at all ("asn:[TO]") used to raise QueryError
     # (the ast.NumericRange/DateRange constructors don't forbid this shape,
     # and the grammar-aware property fuzzer found it parses cleanly, see
     # tests/emitter/test_hypothesis_e2e.py): semantically it just means "asn
@@ -310,8 +310,9 @@ def test_numeric_range_non_numeric_bound_raises_query_emit_error(
         incl_lo=True,
         incl_hi=True,
     )
-    with pytest.raises(QueryEmitError, match="notanumber"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_BAD_NUMBER
 
 
 def test_date_range_non_datetime_bound_raises_query_emit_error(
@@ -324,5 +325,6 @@ def test_date_range_non_datetime_bound_raises_query_emit_error(
         incl_lo=True,
         incl_hi=True,
     )
-    with pytest.raises(QueryEmitError, match="not-a-datetime"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_BAD_DATE

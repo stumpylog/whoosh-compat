@@ -182,21 +182,3 @@ class QueryParserError(WhooshCompatError):
     about an AST that already exists. This fires during the tagger/filter
     pipeline, before there is one.
     """
-
-
-class UnsupportedQueryError(WhooshCompatError):
-    """Deprecated, removed once every raise site moves to ``QueryError``."""
-
-
-class QueryEmitError(WhooshCompatError):
-    """Deprecated, removed once every raise site moves to ``QueryError``."""
-
-    def __init__(self, msg: str, *, diagnostic: Diagnostic | None = None):
-        """Initialize QueryEmitError with optional diagnostic.
-
-        Args:
-            msg: The error message.
-            diagnostic: Optional diagnostic information.
-        """
-        super().__init__(msg)
-        self.diagnostic = diagnostic

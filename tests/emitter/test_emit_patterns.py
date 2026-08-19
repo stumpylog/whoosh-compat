@@ -14,8 +14,8 @@ import tantivy
 
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import glob_to_regex
-from whoosh_compat.errors import QueryEmitError
-from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.errors import QueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -199,40 +199,39 @@ def test_every_field(
 
 
 @pytest.mark.parametrize(
-    ("node", "match"),
+    "node",
     [
         pytest.param(
             ast.Prefix(field=FieldRef("notes", "user"), text="ali"),
-            r"notes\.user",
             id="prefix-non-fast-subpath",
         ),
         pytest.param(
             ast.Wildcard(field=FieldRef("notes", "user"), pattern="a?ice"),
-            r"notes\.user",
             id="wildcard-non-fast-subpath",
         ),
         pytest.param(
             ast.Prefix(field=FieldRef("attrs", "user"), text="ali"),
-            r"attrs\.user",
             id="prefix-fast-subpath",
         ),
         pytest.param(
             ast.Wildcard(field=FieldRef("attrs", "user"), pattern="a?ice"),
-            r"attrs\.user",
             id="wildcard-fast-subpath",
         ),
     ],
 )
 def test_pattern_on_json_subpath_raises_at_emit(
-    tindex: TIndex, ereg: FieldRegistry, node: ast.Node, match: str
+    tindex: TIndex, ereg: FieldRegistry, node: ast.Node
 ) -> None:
     # A hand-built Prefix/Wildcard node bypasses the parser's parse-time
     # diagnostic entirely, so this is the backstop that catches it before
     # it can reach the silent-wrong-results regex query that used to be
     # built here: resolved.dotted_name is only ever read for
     # the error message, never handed to Query.regex_query.
-    with pytest.raises(UnsupportedQueryError, match=match):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.AST_PATTERN_ON_KIND
+    assert d.divergence == 30
 
 
 def test_pattern_on_plain_json_field_no_subpath_still_works(
@@ -251,40 +250,39 @@ def test_pattern_on_plain_json_field_no_subpath_still_works(
 
 
 @pytest.mark.parametrize(
-    ("node", "match"),
+    "node",
     [
         pytest.param(
             ast.Prefix(field=FieldRef("has_tag"), text="t"),
-            "has_tag",
             id="prefix-fast-target",
         ),
         pytest.param(
             ast.Wildcard(field=FieldRef("has_tag"), pattern="tr?e"),
-            "has_tag",
             id="wildcard-fast-target",
         ),
         pytest.param(
             ast.Prefix(field=FieldRef("has_tag_kw"), text="t"),
-            "has_tag_kw",
             id="prefix-nonfast-target",
         ),
         pytest.param(
             ast.Wildcard(field=FieldRef("has_tag_kw"), pattern="tr?e"),
-            "has_tag_kw",
             id="wildcard-nonfast-target",
         ),
     ],
 )
 def test_pattern_on_boolean_exists_field_raises_at_emit(
-    tindex: TIndex, ereg: FieldRegistry, node: ast.Node, match: str
+    tindex: TIndex, ereg: FieldRegistry, node: ast.Node
 ) -> None:
     # A hand-built Prefix/Wildcard node bypasses the parser's parse-time
     # diagnostic entirely, so this is the backstop that catches it before
     # it can reach tantivy's raw, backend-internal "Field ... is not
     # defined in the schema" ValueError (BOOLEAN_EXISTS has no schema
     # column of its own): same shape as the JSON-subpath backstop above.
-    with pytest.raises(UnsupportedQueryError, match=match):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.AST_PATTERN_ON_KIND
+    assert d.divergence == 29
 
 
 def _raw_keyword_index() -> tantivy.Index:
@@ -330,22 +328,20 @@ def test_wildcard_empty_class_still_matches_nothing() -> None:
 
 
 @pytest.mark.parametrize(
-    ("node", "match"),
+    "node",
     [
         pytest.param(
             ast.Prefix(field=FieldRef("notes"), text="al"),
-            "must address a subpath",
             id="prefix-bare-json",
         ),
         pytest.param(
             ast.Wildcard(field=FieldRef("notes"), pattern="al*"),
-            "must address a subpath",
             id="wildcard-bare-json",
         ),
     ],
 )
 def test_pattern_on_bare_json_field_raises_at_emit(
-    tindex: TIndex, ereg: FieldRegistry, node: ast.Node, match: str
+    tindex: TIndex, ereg: FieldRegistry, node: ast.Node
 ) -> None:
     # The bare-JSON sibling of the subpath backstop above, mirroring
     # visit_term/visit_phrase's identical cell: a hand-built pattern node
@@ -353,31 +349,40 @@ def test_pattern_on_bare_json_field_raises_at_emit(
     # to Query.regex_query against the JSON column's path-prefixed encoded
     # term bytes (which tantivy accepts and which silently matches nothing
     # for values that exist).
-    with pytest.raises(QueryEmitError, match=match):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.AST_JSON_NEEDS_SUBPATH
 
 
 @pytest.mark.parametrize(
-    ("node", "match"),
+    ("node", "field_kind"),
     [
-        pytest.param(ast.Prefix(field=FieldRef("asn"), text="10"), "U64", id="prefix-u64"),
-        pytest.param(ast.Wildcard(field=FieldRef("asn"), pattern="10*"), "U64", id="wildcard-u64"),
-        pytest.param(ast.Prefix(field=FieldRef("created"), text="20"), "DATE", id="prefix-date"),
+        pytest.param(ast.Prefix(field=FieldRef("asn"), text="10"), FieldKind.U64, id="prefix-u64"),
         pytest.param(
-            ast.Wildcard(field=FieldRef("created"), pattern="20*"), "DATE", id="wildcard-date"
+            ast.Wildcard(field=FieldRef("asn"), pattern="10*"), FieldKind.U64, id="wildcard-u64"
         ),
         pytest.param(
-            ast.Prefix(field=FieldRef("added"), text="20"), "DATETIME", id="prefix-datetime"
+            ast.Prefix(field=FieldRef("created"), text="20"), FieldKind.DATE, id="prefix-date"
+        ),
+        pytest.param(
+            ast.Wildcard(field=FieldRef("created"), pattern="20*"),
+            FieldKind.DATE,
+            id="wildcard-date",
+        ),
+        pytest.param(
+            ast.Prefix(field=FieldRef("added"), text="20"),
+            FieldKind.DATETIME,
+            id="prefix-datetime",
         ),
         pytest.param(
             ast.Wildcard(field=FieldRef("added"), pattern="20*"),
-            "DATETIME",
+            FieldKind.DATETIME,
             id="wildcard-datetime",
         ),
     ],
 )
 def test_pattern_on_non_text_kind_raises_at_emit(
-    tindex: TIndex, ereg: FieldRegistry, node: ast.Node, match: str
+    tindex: TIndex, ereg: FieldRegistry, node: ast.Node, field_kind: FieldKind
 ) -> None:
     # The remaining kind-axis siblings: tantivy accepts a regex query
     # against a numeric or date column's encoded term bytes and silently
@@ -386,8 +391,11 @@ def test_pattern_on_non_text_kind_raises_at_emit(
     # cells (the parser's UNSUPPORTED_PATTERN diagnostic fires first);
     # only a hand-built node can, which is exactly why the emit-time
     # dispatch has to be closed over the kind axis on its own.
-    with pytest.raises(UnsupportedQueryError, match=match):
+    with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.AST_PATTERN_ON_KIND
+    assert d.field_kind is field_kind
 
 
 def test_every_field_non_fast_non_text_raises(tindex: TIndex, ereg: FieldRegistry) -> None:
@@ -402,5 +410,6 @@ def test_every_field_non_fast_non_text_raises(tindex: TIndex, ereg: FieldRegistr
         [FieldSpec("asn", FieldKind.U64, fast=False)]
         + [spec for spec in ereg if spec.name != "asn"]
     )
-    with pytest.raises(UnsupportedQueryError, match="fast"):
+    with pytest.raises(QueryError) as exc:
         emit_ast(ast.Every(field=FieldRef("asn")), tindex, non_fast_registry)
+    assert exc.value.diagnostic.kind is DiagnosticKind.EXISTS_REQUIRES_FAST
