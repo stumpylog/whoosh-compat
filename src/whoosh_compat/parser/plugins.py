@@ -432,7 +432,7 @@ class GroupPlugin(Plugin):
             "query nesting exceeds the maximum supported depth "
             f"({_MAX_GROUP_NESTING_DEPTH})"
         )
-        return syntax.ErrorNode(message, node=overflow_start, kind=DiagnosticKind.TOO_DEEP)
+        return syntax.ErrorNode(message, kind=DiagnosticKind.TOO_DEEP, node=overflow_start)
 
 
 class EveryPlugin(TaggingPlugin):

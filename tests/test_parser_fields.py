@@ -3,7 +3,9 @@ import pytest
 
 import whoosh_compat as wc
 from whoosh_compat import ast
+from whoosh_compat.errors import Cause
 from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 
@@ -405,3 +407,68 @@ def test_field_boosts(reg: FieldRegistry) -> None:
     assert isinstance(or_group, ast.Or)
     assert ast.Boosted(ast.Term(field=FieldRef("title"), text="aaa"), 2.0) in or_group.children
     assert t.children[1] == ast.Term(field=FieldRef("title"), text="bbb")
+
+
+@pytest.mark.parametrize(
+    ("query", "kind", "field_kind"),
+    [
+        pytest.param("asn:1*", DiagnosticKind.PATTERN_ON_NUMERIC, FieldKind.U64, id="numeric"),
+        pytest.param(
+            "has_tag:t*",
+            DiagnosticKind.PATTERN_ON_BOOLEAN_EXISTS,
+            FieldKind.BOOLEAN_EXISTS,
+            id="boolean-exists",
+        ),
+        pytest.param(
+            "notes.user:fo*",
+            DiagnosticKind.PATTERN_ON_SUBPATH,
+            FieldKind.JSON,
+            id="json-subpath",
+        ),
+    ],
+)
+def test_pattern_diagnostics_split_by_field_kind(
+    reg: FieldRegistry, query: str, kind: DiagnosticKind, field_kind: FieldKind
+) -> None:
+    """A single collapsed pattern kind forced a host to match on prose or
+    re-resolve the field to tell numeric, boolean-exists and subpath apart.
+    """
+    result = wc.parse(query, registry=reg, default_fields=["content"])
+    (d,) = result.diagnostics
+    assert d.kind is kind
+    assert d.cause is Cause.UNSUPPORTED
+    assert d.field_kind is field_kind
+
+
+@pytest.mark.parametrize(
+    ("query", "kind", "field_kind"),
+    [
+        pytest.param("asn:nope", DiagnosticKind.BAD_NUMBER, FieldKind.U64, id="u64-term"),
+        pytest.param("created:nope", DiagnosticKind.BAD_DATE, FieldKind.DATE, id="date-term"),
+        pytest.param("added:nope", DiagnosticKind.BAD_DATE, FieldKind.DATETIME, id="datetime-term"),
+    ],
+)
+def test_value_diagnostics_carry_field_kind(
+    reg: FieldRegistry, query: str, kind: DiagnosticKind, field_kind: FieldKind
+) -> None:
+    result = wc.parse(query, registry=reg, default_fields=["content"])
+    (d,) = result.diagnostics
+    assert d.kind is kind
+    assert d.cause is Cause.INVALID_INPUT
+    assert d.field_kind is field_kind
+
+
+@pytest.mark.parametrize(
+    ("query", "entry"),
+    [
+        pytest.param("asn:1*", 29, id="numeric"),
+        pytest.param("has_tag:t*", 29, id="boolean-exists"),
+        pytest.param("notes.user:fo*", 30, id="json-subpath"),
+    ],
+)
+def test_pattern_divergences_are_machine_readable(
+    reg: FieldRegistry, query: str, entry: int
+) -> None:
+    """Entry 29 covers numeric AND boolean-exists; entry 30 covers subpaths."""
+    (d,) = wc.parse(query, registry=reg, default_fields=["content"]).diagnostics
+    assert d.divergence == entry
