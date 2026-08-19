@@ -22,12 +22,15 @@ exception.
 
 from __future__ import annotations
 
+import ast as py_ast
 import functools
+import pathlib
 from typing import cast
 
 import pytest
 
 from whoosh_compat import ast
+from whoosh_compat.emitters import tantivy_
 from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -89,3 +92,41 @@ def test_deep_hand_built_chain_raises_query_emit_error(tindex: TIndex, ereg: Fie
     deep = functools.reduce(_wrap, range(2000), cast("ast.Node", _TERM))
     with pytest.raises(QueryEmitError):
         emit_ast(deep, tindex, ereg)
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "three raise sites still spell the DIVERGENCES reference into the "
+        "message; they move to Diagnostic.divergence when the emit-time "
+        "diagnostics land, at which point this marker must be removed"
+    ),
+)
+def test_no_message_references_project_documentation() -> None:
+    """DIVERGENCES references belong in Diagnostic.divergence, not in prose.
+
+    Without this guard the cross-references can be deleted from messages
+    and silently not replaced, which is worse than leaving them.
+    """
+    emitter = pathlib.Path(tantivy_.__file__)
+    tree = py_ast.parse(emitter.read_text())
+
+    docstrings = set()
+    for node in py_ast.walk(tree):
+        if isinstance(node, py_ast.Module | py_ast.ClassDef | py_ast.FunctionDef):
+            first = node.body[0] if node.body else None
+            if isinstance(first, py_ast.Expr) and isinstance(first.value, py_ast.Constant):
+                docstrings.add(id(first.value))
+
+    # Only literal text that ends up in a runtime string counts. Comments are
+    # absent from the AST, and docstrings are prose about the code rather than
+    # something a caller ever reads back.
+    in_messages = [
+        node.value
+        for node in py_ast.walk(tree)
+        if isinstance(node, py_ast.Constant)
+        and isinstance(node.value, str)
+        and "DIVERGENCES" in node.value
+        and id(node) not in docstrings
+    ]
+    assert in_messages == [], in_messages

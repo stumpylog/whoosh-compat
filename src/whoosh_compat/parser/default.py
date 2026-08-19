@@ -54,6 +54,7 @@ from whoosh_compat import ast
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryParserError
+from whoosh_compat.errors import cause_for
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -446,6 +447,7 @@ class QueryParser:
             d = Diagnostic(
                 message=f"{text!r} is not a valid number for {ref}",
                 kind=DiagnosticKind.BAD_NUMBER,
+                cause=cause_for(DiagnosticKind.BAD_NUMBER),
                 startchar=startchar,
                 endchar=endchar,
                 field=ref,
@@ -558,16 +560,20 @@ class QueryParser:
         if resolved is None:
             return None
         if resolved.spec.kind is FieldKind.U64:
+            kind = DiagnosticKind.PATTERN_ON_NUMERIC
             message = f"wildcard patterns are not supported on numeric field {ref}"
         elif resolved.is_subpath:
+            kind = DiagnosticKind.PATTERN_ON_SUBPATH
             message = f"wildcard patterns are not supported on a JSON subpath ({ref})"
         elif resolved.spec.kind is FieldKind.BOOLEAN_EXISTS:
+            kind = DiagnosticKind.PATTERN_ON_BOOLEAN_EXISTS
             message = f"wildcard patterns are not supported on boolean-exists field {ref}"
         else:
             return None
         d = Diagnostic(
             message=message,
-            kind=DiagnosticKind.UNSUPPORTED_PATTERN,
+            kind=kind,
+            cause=cause_for(kind),
             startchar=startchar,
             endchar=endchar,
             field=ref,
