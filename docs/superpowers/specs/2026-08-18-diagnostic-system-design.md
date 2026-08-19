@@ -60,6 +60,8 @@ ran every candidate spelling through `parse()` then `emit()`. Results:
 | `notes:*`, `notes.user:*` | **emit**: exists-requires-fast |
 | `slow_num:[TO]`, `slow_date:[TO]`, `slow_num:{TO}` | **emit**: exists-requires-fast |
 | `title:[a TO b]`, `content:[TO]`, `notes:[TO]` | **emit**: text range |
+| `has_tag:[a TO b]`, `notes.user:[a TO b]` | **emit**: text range (on BOOLEAN_EXISTS and JSON subpath) |
+| `title:a` + `?` * 100 | **emit**: tantivy `RegexQueryError`, compiled regex exceeds 1000 states |
 | `nosuch:foo`, `notes.bogus:foo`, `notes:foo`, `notes:"a b"`, `notes:fo*` | no error: absorbed into the default field as free text |
 | `asn:notanumber`, `asn:"not a number"`, `asn:[abc TO def]` | parse: `BAD_NUMBER` |
 | `created:notadate`, `created:[zzz TO yyy]` | parse: `BAD_DATE` |
@@ -80,7 +82,16 @@ Note also that the message at `:534-537` hardcodes the `field:*` spelling
 `slow_num:[TO]`. It names a query the user never typed. That is a further
 argument for moving the advice out of prose and into `cause`.
 
-**Only two emit-time conditions are reachable from query text.** Every
+**A long pattern is reachable, and it is user input, not a defect.**
+`title:a` followed by 50 `?` emits fine; 100 fails, so the shortest
+counterexample is about 107 characters. It surfaces through the broad
+`:352-359` catch, which an earlier draft labelled `cause=INTERNAL`. That
+labelling is wrong in the way that matters most: a host following this
+spec's own `Cause` semantics would return 500 and alert an operator
+because a user typed a long wildcard. The fix is in the design below
+(`PATTERN_TOO_COMPLEX`), not a note.
+
+**Only three emit-time conditions are reachable from query text.** Every
 other emit raise site is a backstop for a hand-built AST that bypassed the
 parser, which the code already documents as such (`:710-712`: "Backstop for
 a hand-built `Prefix`/`Wildcard` node"; `:748-750`: "Reachable only from a
@@ -148,14 +159,22 @@ class Diagnostic:
     divergence: int | None = None
 ```
 
-There is deliberately **no `phase` field.** An earlier draft carried one,
-justified by emit re-raising a parse-origin diagnostic at `:552-555`. That
-justification is unnecessary: emit never *originates* an `INVALID_INPUT`
-diagnostic, so a `QueryError` whose cause is `INVALID_INPUT` is by
-construction one that wrapped a parse-time diagnostic. `Cause` subsumes the
-distinction at no cost. Otherwise `phase` would be fully redundant with the
-channel a host received the record through (`ParseResult.diagnostics` or
-`QueryError.diagnostic`).
+There is deliberately **no `phase` field**, because the parse-time and
+emit-time kind sets are **disjoint**: `kind` alone tells you which phase
+produced a record.
+
+An earlier draft argued this from causes instead ("emit never originates
+`INVALID_INPUT`"), which is true but insufficient. `visit_errorleaf`
+re-raises whatever the `ErrorLeaf` carries, and that includes the
+`PATTERN_ON_*` kinds, whose cause is `UNSUPPORTED`. So a
+`QueryError(cause=UNSUPPORTED)` is ambiguous between a wrapped parse-time
+`PATTERN_ON_SUBPATH` and an originated emit-time `TEXT_RANGE`. Causes
+partition only the `INVALID_INPUT` half. Disjoint kind sets cover all of
+it, and that is what the test guard asserts.
+
+Hosts that want the partition without hardcoding it get an exported
+frozenset rather than a per-record field, since it is a property of the
+kind, not of the occurrence.
 
 `kw_only=True` because the field list has grown once and will again.
 
@@ -227,20 +246,45 @@ An earlier draft left the numeric row blank.
 | Kind | Cause | Divergence |
 |---|---|---|
 | `EXISTS_REQUIRES_FAST` | `MISCONFIGURED` | |
-| `TEXT_RANGE` | `UNSUPPORTED` | 5 |
+| `TEXT_RANGE` | `UNSUPPORTED` | 5 / 30 / none, by field kind (see below) |
+| `PATTERN_TOO_COMPLEX` | `UNSUPPORTED` | |
 | `EMIT_FAILED` | `INTERNAL` | |
 
-`EMIT_FAILED` is reachable in principle rather than by a known query: it is
-the `:352-359` catch around `analyze(normalize(node))` and `visit()`.
+`PATTERN_TOO_COMPLEX` is new, and it is what keeps a long user wildcard out
+of `INTERNAL`. Rather than splitting the broad `:352-359` catch (which
+cannot cleanly separate a tantivy `ValueError` from an AST-walk one), the
+pattern-emitting call sites wrap their own `tantivy.Query.regex_query(...)`
+in a narrow `except ValueError`. That is targeted enough to be honest:
+at that point we know a pattern was being compiled and the backend refused
+it. `cause=UNSUPPORTED`, because the query is well-formed and simply
+exceeds what this backend will compile.
 
-It is deliberately **not** named `BACKEND_REJECTED`. That catch covers
-`ValueError`, `TypeError`, `AttributeError`, `NotImplementedError` and
-`RecursionError`, and the `emit()` docstring (`:326-340`) enumerates four
-shapes, three of which never reach tantivy at all: a `None` child found
-while walking, `generic_visit` finding no `visit_*` method (`ast.py:828`),
-and `RecursionError` on a too-deep hand-built tree. Logging a Python
-recursion limit as "the backend rejected your query" is simply false.
-`EMIT_FAILED` claims only what is true: emission did not complete.
+`EMIT_FAILED` keeps `cause=INTERNAL` and keeps the broad catch, now
+genuinely covering only defects: a `None` child found while walking,
+`generic_visit` finding no `visit_*` method (`ast.py:828`), and
+`RecursionError` on a too-deep hand-built tree. It is deliberately not
+named `BACKEND_REJECTED`: three of those shapes never reach tantivy, and
+logging a Python recursion limit as "the backend rejected your query" is
+false.
+
+`TEXT_RANGE`'s divergence varies by field kind, which is why it cannot come
+from a kind-keyed table. `visit_termrange` (`:772-773`) is the only visitor
+that raises without resolving its field, so today every spelling gets entry
+5. Measured, it fires on four different kinds:
+
+| Query | Correct divergence |
+|---|---|
+| `title:[a TO b]` (TEXT/KEYWORD) | 5 |
+| `notes.user:[a TO b]` (JSON subpath) | 30 |
+| `has_tag:[a TO b]` (BOOLEAN_EXISTS) | none |
+
+`DIVERGENCES.md:27-29` scopes entry 5 to text ranges that *"worked in
+whoosh"*. A range on a synthetic BOOLEAN_EXISTS field never worked in
+whoosh, and a subpath range is entry 30's territory. Stamping 5 on all
+three would ship a wrong cross-reference under the banner of making
+divergences machine-readable. `visit_termrange` must therefore resolve its
+field, which also fixes `TEXT_RANGE` shipping `field=None, field_kind=None`
+today, defeating Goal #3 on one of only three reachable emit kinds.
 
 **Emit-time backstops, not reachable from query text.** All carry
 `cause=INTERNAL`. They keep distinct kinds so the existing matrix tests can
@@ -279,13 +323,32 @@ reason it cannot be a user-facing input error.
 Emit gets one helper, so cause selection stops being hand-picked per site:
 
 ```python
+# errors.py, NOT the emitter: parse-side sites need it too (see below)
 _CAUSE: Mapping[DiagnosticKind, Cause] = {...}
-_DIVERGENCE: Mapping[DiagnosticKind, int] = {...}
 
-def _fail(kind, *, node=None, resolved=None, raw_value=None, message) -> NoReturn:
-    ...  # cause/divergence from the tables, startchar/endchar from node,
-         # field/field_kind from resolved
+def _fail(kind, *, node=None, resolved=None, raw_value=None,
+          divergence=None, message) -> NoReturn:
+    ...  # cause from _CAUSE, startchar/endchar from node,
+         # field/field_kind from resolved, divergence passed explicitly
 ```
+
+**`divergence` is a `_fail` argument, not a table lookup.** A
+`Mapping[DiagnosticKind, int]` cannot express either of the two kinds that
+need it: `TEXT_RANGE` varies 5 / 30 / none by field kind, and
+`AST_PATTERN_ON_KIND` merges sites carrying entry 30 (`:753`), entry 29
+(`:758`) and none (`:768`). A kind-keyed table would force both to `None`,
+which would *silently lose* the cross-references currently living in the
+message strings this spec deletes. The prose-cleanup guard would still
+pass. That is a worse outcome than the status quo, and it is only visible
+if you check the table's shape against the merged kinds.
+
+**`_CAUSE` lives in `errors.py`, not `emitters/tantivy_.py`.** `cause` is a
+required field with no default, so the four parse-side construction sites
+must supply it too: `parser/default.py:446`, `:568`,
+`parser/dateparse.py:984`, and `parser/syntax.py:487`. The last is
+decisive: `ErrorNode.query()` builds its `Diagnostic` from `self.kind` and
+so needs `_CAUSE[self.kind]`, and `parser/` must not import from
+`emitters/` under ARCHITECTURE's backend-neutrality rule.
 
 `visit_errorleaf` (`:552-555`) does **not** route through `_fail`. It
 re-raises an existing parse-origin `Diagnostic` unchanged, and must not
@@ -388,17 +451,32 @@ New guards:
   exhaustiveness check that keeps a new kind from silently defaulting.
 - No `Diagnostic.message` and no `QueryError` message contains
   `"DIVERGENCES"`.
-- Emit-time diagnostics for the **reachable** kinds carry non-`None`
-  `startchar`/`endchar`.
-- No `Cause.INVALID_INPUT` diagnostic originates at emit time, which is the
-  invariant that lets `Cause` stand in for the dropped `phase` field.
+- Emit-time diagnostics for the reachable, **node-scoped** kinds carry
+  non-`None` `startchar`/`endchar`. The qualifier matters: `EMIT_FAILED` is
+  reachable but has no node at `:359`, so an unqualified "reachable kinds"
+  guard would demand a span the design says cannot exist.
+- **The parse-time and emit-time kind sets are disjoint.** This, not the
+  cause partition, is what makes the dropped `phase` field redundant, and
+  it is the guard that will actually fail when someone adds a kind.
 
 `tests/emitter/test_kind_matrix.py` is the existing leaf-type by field-kind
 by spelling exhaustiveness matrix and is the primary vehicle. Its `Raises`
 outcome descriptor is currently `(exc, match: str)`, checked at `:142-148`
 via `pytest.raises(outcome.exc, match=outcome.match)`, with 8 cells using
 it (`:282`, `:298`, `:402`, `:417`, `:431`, `:437`, `:460`, `:720`). The
-descriptor becomes `(kind, cause)` and all 8 cells change. Per the
+descriptor becomes **`(kind, cause, field_kind)`**, and all 8 cells change.
+
+The third element is not optional. `tests/emitter/test_emit_patterns.py:361-391`
+(`test_pattern_on_non_text_kind_raises_at_emit`) has six parametrized cells
+asserting `match="U64"` / `"DATE"` / `"DATETIME"`, i.e. *which field kind*
+hit the backstop. Merging those into one `AST_PATTERN_ON_KIND` collapses
+all six to an identical assertion, and collapses them further with the
+subpath cell (`:234`) and the BOOLEAN_EXISTS cell (`:286`): eight
+discriminating cells reduced to one. `Diagnostic.field_kind` restores
+exactly that distinction, and `:768` has `resolved` in scope so `_fail` can
+populate it. Shipping a two-tuple would weaken eight cells that
+discriminate correctly today, which the project's sweep convention forbids.
+Per the
 project's sweep convention no cell is exempted: each ends in a parse-time
 diagnostic, a documented emit-time `QueryError`, or a real search.
 
@@ -411,6 +489,14 @@ the one place where "hosts write a single `except` clause" does not apply,
 and it is a deliberate tightening, since the fuzzer should also never see
 `MISCONFIGURED` or `INTERNAL`.
 
+**Ordering constraint:** this tightening must land *after*
+`PATTERN_TOO_COMPLEX` exists. Until then the fuzzer can generate a pattern
+past tantivy's 1000-state limit and hit `EMIT_FAILED`/`INTERNAL`, which the
+tightened guard would re-raise. It does not today only because
+`max_leaves=6` keeps generated patterns short, which is an accident of the
+generator's bounds and not an invariant. Tightening first plants a
+nondeterministic failure.
+
 `tests/emitter/test_acceptance_property.py:770` already catches both as a
 tuple and needs only the name change.
 
@@ -420,7 +506,7 @@ tuple and needs only the name change.
   warning is deleted. The "error messages are written for the host"
   paragraph is re-aimed at the structured contract. `:333`'s fuzzer
   invariant is restated in terms of `Cause.UNSUPPORTED`.
-- `ARCHITECTURE.md`: four edits, not one. `:254-258` documents the
+- `ARCHITECTURE.md`: five edits, not one. `:254-258` documents the
   **positional** `Diagnostic(message, kind, startchar, endchar, field,
   raw_value)` signature and lists the four enum members literally; `:262`
   names "the `UNSUPPORTED_PATTERN` site"; `:279-283` describes the two
@@ -452,17 +538,30 @@ cheaper: `Phase` disappears anyway, the 80 test references and the doc
 mentions of both class names stay valid, and `test_hypothesis_e2e.py`'s
 selective suppression keeps working unmodified.
 
-Rejected because the two classes cannot express `MISCONFIGURED`. A non-fast
-field failing `field:*` would collapse back into `UnsupportedQueryError`
-alongside genuine backend limitations, which re-hides the one distinction
-with a genuinely different host response. The same objection applies to
-`INTERNAL`: with only two classes, the backstop conditions that the
-reachability probe showed dominate the emit surface would be
-indistinguishable from real query failures.
+Rejected because the two classes cannot express `MISCONFIGURED` or
+`INTERNAL`, which the reachability probe showed dominate the emit surface.
 
-The cost of rejecting it is concentrated in one file
-(`test_hypothesis_e2e.py`) and is a two-line change that tightens the
-invariant rather than weakening it.
+That rebuttal, however, only defeats the version that drops `Cause`. A
+third option survives it: **keep both classes AND add `cause`, deriving the
+class mechanically from the cause inside `_fail`** (`UnsupportedQueryError`
+iff `cause is UNSUPPORTED`, `QueryEmitError` otherwise). That keeps full
+expressiveness, fixes the arbitrary class selection by construction rather
+than by deletion, and leaves 80 test references, 5 doc-file mentions and
+`test_hypothesis_e2e.py:242` working unmodified. Its migration is only the
+20 relevant `match=` assertions.
+
+The single thing the merge buys over it is "a host writes one `except`
+clause", and this spec concedes in the Testing section that even that does
+not hold for the one consumer in this repo, which must branch on `cause`
+anyway.
+
+The merge is still chosen, but for the honest reason: the third option
+keeps **two representations of overlapping information that can drift.**
+Nothing prevents a future hand-written `raise QueryEmitError(...)` carrying
+`cause=UNSUPPORTED`, contradicting its own class. Deriving the class inside
+`_fail` contains that only for sites that use `_fail`. One representation
+that cannot disagree with itself is worth the migration cost, given
+paperless-ngx is not yet on the old surface.
 
 ## Open items
 
@@ -475,9 +574,17 @@ Resolved during implementation, not blocking this design:
   backstop fired without matching on prose. Only a backstop proven
   unreachable even from a hand-built node would move to
   `QueryParserError`, and none is.
-- Whether `:352-359`'s catch should be split. **Resolved: not split,
-  renamed instead.** The five caught exception types do not separate
-  cleanly into "tantivy said no" and "our walk blew up" (tantivy-py raises
-  `ValueError`, which the AST walk also raises), so a split would be
-  guesswork at the catch site. `EMIT_FAILED` under `cause=INTERNAL` states
-  only what is known.
+- Whether `:352-359`'s catch should be split. **Resolved: not split at the
+  catch, narrowed at the source.** A split at `:359` would be guesswork,
+  since tantivy-py raises `ValueError` and so does the AST walk. Instead
+  the pattern-emitting sites catch their own `regex_query` failure as
+  `PATTERN_TOO_COMPLEX`, which removes the one user-reachable shape from
+  the broad catch. `EMIT_FAILED` then covers only defects and `INTERNAL`
+  becomes true of everything it labels.
+
+  An earlier revision closed this item as "not split, renamed instead", on
+  the strength of an unverified claim that the catch was unreachable from
+  query text. It is reachable in about 107 characters. The lesson is
+  recorded here rather than quietly fixed: no reachability claim in this
+  document should be trusted without a probe behind it, including the ones
+  that sound obviously true.
