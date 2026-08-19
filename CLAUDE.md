@@ -56,8 +56,8 @@ contract between them.
 ## Invariants worth knowing before editing
 
 - **Parsing never raises for bad query input.** Bad dates/numbers become
-  `Diagnostic`s plus `ErrorLeaf` nodes; only `emit()` raises (`QueryEmitError`,
-  `UnsupportedQueryError`). Registry construction *does* raise eagerly.
+  `Diagnostic`s plus `ErrorLeaf` nodes; only `emit()` raises (`QueryError`,
+  always carrying a `Diagnostic`). Registry construction *does* raise eagerly.
 - **`analyzer` vs `pattern_normalizer` are two different callables on purpose**
   (full token chain vs. character-level only for wildcard/prefix literals).
   Don't unify them; see README's "analyzer / pattern_normalizer seam".

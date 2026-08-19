@@ -8,6 +8,21 @@ Intentional behavioral differences from real Whoosh are not changelog
 material; they are permanently documented, each with its rationale, in
 [DIVERGENCES.md](./DIVERGENCES.md).
 
+## [0.2.0] - 2026-08-19
+
+### Breaking
+
+- `QueryEmitError` and `UnsupportedQueryError` are replaced by a single
+  `QueryError`, which always carries the `Diagnostic` describing why the
+  query could not be emitted (`err.diagnostic`).
+- `Diagnostic` is now a keyword-only dataclass, and gains `cause` (a
+  `Cause` classifying who can act on the diagnostic: `INVALID_INPUT`,
+  `UNSUPPORTED`, `MISCONFIGURED`, or `INTERNAL`), `field_kind`, and
+  `divergence` (the `DIVERGENCES.md` entry number, when one applies).
+- `DiagnosticKind.UNSUPPORTED_PATTERN` is split into `PATTERN_ON_NUMERIC`,
+  `PATTERN_ON_BOOLEAN_EXISTS`, and `PATTERN_ON_SUBPATH`, one per field kind
+  a wildcard/prefix pattern cannot be honored against.
+
 ## [0.1.0] - 2026-08-18
 
 Initial release.

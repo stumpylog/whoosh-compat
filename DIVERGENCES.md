@@ -26,7 +26,10 @@ parse, emit, search, `tests/emitter/test_acceptance_e2e.py`) test suites.
    matching correctness under implicit AND.
 5. Text-field ranges are parseable but unsupported at emit time (a current
    limitation: tantivy-py has no programmatic text-range API); they worked
-   in whoosh.
+   in whoosh. Machine-identifiable via `Diagnostic.divergence == 5`. Applies
+   only to TEXT/KEYWORD ranges: a JSON-subpath range reports entry 30
+   instead, and a BOOLEAN_EXISTS range reports no entry at all, because
+   neither ever worked in whoosh either.
 6. Structured `ErrorLeaf`/diagnostics replace whoosh's `error_query`
    NullQuery wrappers.
 
@@ -502,8 +505,9 @@ parse-then-emit pipeline).
     addresses one: `attrs.user:*` checks only `attrs.user`'s own fast column
     (`resolved.dotted_name`), distinct from the whole-field `attrs:*`, which
     checks whether any subpath has a value at all (`json_subpaths=True`); a
-    non-fast JSON subpath still has no strategy and raises
-    `UnsupportedQueryError` naming the dotted form the query used.
+    non-fast JSON subpath still has no strategy and raises `QueryError`
+    (`DiagnosticKind.EXISTS_REQUIRES_FAST`, `Cause.MISCONFIGURED`) naming
+    the dotted form the query used.
 
     Test references: `tests/emitter/test_emit_boolean.py`'s
     `test_boolean_exists_non_fast_text_target` (docs 3/4, punctuation-only
@@ -972,17 +976,21 @@ parse-then-emit pipeline).
     an actual wildcard search. A user typing `asn:1*` almost certainly
     means "starts with 1", and getting silently narrowed to "is exactly 1"
     with no error is a defect, not intended semantics, so it is not
-    reproduced. whoosh-compat instead reports a `DiagnosticKind.UNSUPPORTED_PATTERN`
-    diagnostic and an `ErrorLeaf`, the same shape `BAD_NUMBER`/`BAD_DATE`
-    already use for other invalid-input-on-parse cases, so a host can
-    surface it as a 400 instead of a wildcard that quietly means something
-    else, or later dies at tantivy search time (`regex_query` doesn't work
-    against a numeric field at all).
+    reproduced. whoosh-compat instead reports a
+    `DiagnosticKind.PATTERN_ON_NUMERIC` diagnostic and an `ErrorLeaf`, the
+    same shape `BAD_NUMBER`/`BAD_DATE` already use for other
+    invalid-input-on-parse cases, so a host can surface it as a 400
+    instead of a wildcard that quietly means something else, or later
+    dies at tantivy search time (`regex_query` doesn't work against a
+    numeric field at all). Machine-identifiable via `Diagnostic.divergence
+    == 29`.
 
     A BOOLEAN_EXISTS field (e.g. `has_tag`) has the same silent-mangle
     defect on real whoosh (`has_tag:t*` executes leniently, mangled to
     `Term('has_tag', True)`) and gets the same treatment here for the same
-    reason: this synthetic field also has no tantivy schema column of its
+    reason (reported as `DiagnosticKind.PATTERN_ON_BOOLEAN_EXISTS`, also
+    `Diagnostic.divergence == 29`): this synthetic field also has no
+    tantivy schema column of its
     own (it redirects to its `exists_target`'s), so letting a
     `Prefix`/`Wildcard` node reach `emit()` would fail there instead,
     either with an undocumented-shape error or, for a hand-built AST node
@@ -1037,16 +1045,18 @@ parse-then-emit pipeline).
     both confirmed directly against the pinned tantivy-py rather than
     assumed.
 
-    whoosh-compat reports the same `DiagnosticKind.UNSUPPORTED_PATTERN` diagnostic and
-    `ErrorLeaf` shape as entry 29, from the same `_wildcard_kind_diagnostic`
-    check in `parser/default.py`, extended to also fire when a `Prefix`/
-    `Wildcard` ref resolves to a JSON subpath (independent of the U64
-    check: a JSON field's own kind is never U64). A hand-built `Prefix`/
-    `Wildcard` node that bypasses the parser (so it never reaches the
-    parse-time diagnostic) is refused a second time at emit, by
-    `TantivyEmitter._reject_pattern_incompatible_kind` in `emitters/tantivy_.py`,
-    which raises `UnsupportedQueryError` before any `Query.regex_query`
+    whoosh-compat reports a `DiagnosticKind.PATTERN_ON_SUBPATH` diagnostic
+    and `ErrorLeaf`, the same shape entry 29 uses, from the same
+    `_wildcard_kind_diagnostic` check in `parser/default.py`, extended to
+    also fire when a `Prefix`/`Wildcard` ref resolves to a JSON subpath
+    (independent of the U64 check: a JSON field's own kind is never U64).
+    A hand-built `Prefix`/`Wildcard` node that bypasses the parser (so it
+    never reaches the parse-time diagnostic) is refused a second time at
+    emit, by `TantivyEmitter._reject_pattern_incompatible_kind` in
+    `emitters/tantivy_.py`, which raises `QueryError`
+    (`DiagnosticKind.AST_PATTERN_ON_KIND`) before any `Query.regex_query`
     call is built, mirroring entry 5's text-range emit-time backstop.
+    Machine-identifiable via `Diagnostic.divergence == 30`.
 
     A bare `field.subpath:*` (the "*"-alone existence-match special case,
     entries 20 and 29) is unaffected: it never reaches
@@ -1609,7 +1619,7 @@ parse-then-emit pipeline).
     the same principle entry 2 documents for `Wildcard`/`Prefix`
     patterns). Unlike entry 2 there is no emit-time counterpart to do the
     folding later: a text-field `TermRange` is unsupported at emit
-    entirely (`visit_termrange` raises `UnsupportedQueryError`, entry 5),
+    entirely (`visit_termrange` raises `QueryError`, entry 5),
     so the divergence is AST-level only and can never reach a search
     result. Previously this shape was silently absorbed by entry 2's
     allowlist regex (any token with an uppercase letter and a `*`/`?`),
