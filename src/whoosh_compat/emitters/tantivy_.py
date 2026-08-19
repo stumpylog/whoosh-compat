@@ -32,7 +32,6 @@ import tantivy
 from whoosh_compat import ast
 from whoosh_compat.errors import Diagnostic
 from whoosh_compat.errors import DiagnosticKind
-from whoosh_compat.errors import QueryEmitError
 from whoosh_compat.errors import QueryError
 from whoosh_compat.errors import cause_for
 from whoosh_compat.fields import ExistsStrategy
@@ -346,13 +345,23 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         Converting here, once, keeps every individual ``visit_*`` method
         free to just let its own tantivy-py calls raise naturally rather
         than needing its own try/except for cases already covered by this
-        backstop. ``ast.normalize``/``ast.analyze`` are called inside the
-        same try so a hand-built tree that fails during either stage (not
-        just during visiting) still gets the documented contract.
+        backstop.
+
+        The conversion is split by stage, and within the visiting stage by
+        exception type, because only one of those cells is a backend
+        rejection. ``ast.normalize``/``ast.analyze`` never call tantivy, so
+        anything escaping them is a caller-built shape defect
+        (``AST_INVALID_SHAPE``). During visiting, an ``AttributeError``,
+        ``NotImplementedError`` or ``RecursionError`` likewise never came
+        from tantivy (a missing ``visit_*`` method, a ``None`` child, a tree
+        too deep to walk), while a bare ``ValueError``/``TypeError`` is
+        tantivy-py refusing a query this emitter constructed
+        (``BACKEND_REJECTED``). ``QueryError`` derives from ``Exception``
+        rather than ``ValueError``, so a ``_fail`` from a nested visitor
+        passes through both handlers with its own kind intact.
         """
         try:
             analyzed = ast.analyze(ast.normalize(node), self.registry, default_mode=Multitoken.AND)
-            return self.visit(analyzed)
         except (
             ValueError,
             TypeError,
@@ -360,7 +369,22 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             NotImplementedError,
             RecursionError,
         ) as exc:
-            raise QueryEmitError(f"cannot emit query: {exc}") from exc
+            self._fail(
+                DiagnosticKind.AST_INVALID_SHAPE,
+                message=f"cannot emit query: {exc}",
+            )
+        try:
+            return self.visit(analyzed)
+        except (AttributeError, NotImplementedError, RecursionError) as exc:
+            self._fail(
+                DiagnosticKind.AST_INVALID_SHAPE,
+                message=f"cannot emit query: {exc}",
+            )
+        except (ValueError, TypeError) as exc:
+            self._fail(
+                DiagnosticKind.BACKEND_REJECTED,
+                message=f"cannot emit query: {exc}",
+            )
 
     # -- helpers -----------------------------------------------------
 
@@ -772,7 +796,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         text = str(node.text)
         if spec.pattern_normalizer is not None:
             text = spec.pattern_normalizer(text)
-        return tantivy.Query.regex_query(self.schema, spec.name, re.escape(text) + ".*")
+        return self._regex_query(resolved, re.escape(text) + ".*", node)
 
     def visit_wildcard(self, node: ast.Wildcard) -> tantivy.Query:
         resolved = self._resolve(node.field)
@@ -782,7 +806,32 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         if regex is None:
             # The glob provably matches nothing (empty bracket class).
             return tantivy.Query.empty_query()
-        return tantivy.Query.regex_query(self.schema, spec.name, regex)
+        return self._regex_query(resolved, regex, node)
+
+    def _regex_query(self, resolved: ResolvedField, regex: str, node: ast.Node) -> tantivy.Query:
+        """Build a regex query from a user-derived pattern.
+
+        tantivy caps a compiled regex at 1000 states, and a pattern short
+        enough to type by hand can exceed that (a term followed by ~100
+        single-character wildcards, or a ~1000-character prefix). That is
+        unusual input, not a defect in this library or in the caller's AST,
+        so it must not reach ``emit``'s internal-error backstop: a host
+        maps ``INTERNAL`` to a 500, and this deserves a 400.
+
+        Only the two pattern visitors route through here. The fixed ``.*``
+        that ``_exists_query`` compiles for a TERM_SCAN field carries no
+        user input and cannot hit the cap, so a failure there stays a
+        genuine backend rejection.
+        """
+        try:
+            return tantivy.Query.regex_query(self.schema, resolved.spec.name, regex)
+        except ValueError as exc:
+            self._fail(
+                DiagnosticKind.PATTERN_TOO_COMPLEX,
+                message=f"pattern is too complex for the backend to compile: {exc}",
+                node=node,
+                resolved=resolved,
+            )
 
     def _reject_pattern_incompatible_kind(self, resolved: ResolvedField) -> None:
         """Backstop for a hand-built ``Prefix``/``Wildcard`` node whose
@@ -1075,12 +1124,12 @@ def emit(
             pattern on an incompatible field), a registry that cannot
             answer an ``exists`` check on a non-fast field, and the
             caller-built-AST backstops (an unresolvable field, a value
-            that fails a field kind's domain check).
-        QueryEmitError: a hand-built tree with a ``None`` (or otherwise
-            non-node) value standing in for a required child, a tree deep
-            enough to exhaust the interpreter's recursion limit, or any
-            other shape that would otherwise raise a bare ``ValueError``,
-            ``TypeError``, ``AttributeError``, ``NotImplementedError`` or
-            ``RecursionError`` while building the query.
+            that fails a field kind's domain check). It also covers the
+            two catch-all backstops: ``AST_INVALID_SHAPE`` for a hand-built
+            tree with a ``None`` (or otherwise non-node) value standing in
+            for a required child, a node type no visitor handles, or a tree
+            deep enough to exhaust the interpreter's recursion limit, and
+            ``BACKEND_REJECTED`` for a bare ``ValueError``/``TypeError``
+            from tantivy-py refusing a query this emitter built.
     """
     return TantivyEmitter(index=index, registry=registry).emit(node)
