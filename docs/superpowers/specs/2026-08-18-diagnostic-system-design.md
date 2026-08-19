@@ -58,11 +58,27 @@ ran every candidate spelling through `parse()` then `emit()`. Results:
 | Query | Outcome |
 |---|---|
 | `notes:*`, `notes.user:*` | **emit**: exists-requires-fast |
-| `title:[a TO b]` | **emit**: text range |
+| `slow_num:[TO]`, `slow_date:[TO]`, `slow_num:{TO}` | **emit**: exists-requires-fast |
+| `title:[a TO b]`, `content:[TO]`, `notes:[TO]` | **emit**: text range |
 | `nosuch:foo`, `notes.bogus:foo`, `notes:foo`, `notes:"a b"`, `notes:fo*` | no error: absorbed into the default field as free text |
 | `asn:notanumber`, `asn:"not a number"`, `asn:[abc TO def]` | parse: `BAD_NUMBER` |
 | `created:notadate`, `created:[zzz TO yyy]` | parse: `BAD_DATE` |
 | `asn:1*`, `notes.user:fo*`, `has_tag:t*` | parse: `UNSUPPORTED_PATTERN` |
+
+`EXISTS_REQUIRES_FAST` is reachable through **two** distinct node shapes,
+not one. Besides `field:*` (an `Every` node), a double-open range delegates
+to the same helper: `_range_query` (`:797-799`) returns
+`self._exists_query(resolved)` when both bounds are `None`, because a range
+with no bounds means "this field has some value". So `slow_num:[TO]` on any
+non-fast field hits it, on U64 and DATE as well as JSON, in both the
+inclusive `[TO]` and exclusive `{TO}` spellings. A first pass at this table
+missed that by enumerating value spellings while holding the node type
+fixed, which is the sibling-cell failure `CLAUDE.md` warns about.
+
+Note also that the message at `:534-537` hardcodes the `field:*` spelling
+("mark it fast=True to support `'slow_num:*'`") even when the user wrote
+`slow_num:[TO]`. It names a query the user never typed. That is a further
+argument for moving the advice out of prose and into `cause`.
 
 **Only two emit-time conditions are reachable from query text.** Every
 other emit raise site is a backstop for a hand-built AST that bypassed the
@@ -212,10 +228,19 @@ An earlier draft left the numeric row blank.
 |---|---|---|
 | `EXISTS_REQUIRES_FAST` | `MISCONFIGURED` | |
 | `TEXT_RANGE` | `UNSUPPORTED` | 5 |
-| `BACKEND_REJECTED` | `INTERNAL` | |
+| `EMIT_FAILED` | `INTERNAL` | |
 
-`BACKEND_REJECTED` is reachable in principle rather than by a known query:
-it is the `:352-359` catch around `analyze(normalize(node))` and `visit()`.
+`EMIT_FAILED` is reachable in principle rather than by a known query: it is
+the `:352-359` catch around `analyze(normalize(node))` and `visit()`.
+
+It is deliberately **not** named `BACKEND_REJECTED`. That catch covers
+`ValueError`, `TypeError`, `AttributeError`, `NotImplementedError` and
+`RecursionError`, and the `emit()` docstring (`:326-340`) enumerates four
+shapes, three of which never reach tantivy at all: a `None` child found
+while walking, `generic_visit` finding no `visit_*` method (`ast.py:828`),
+and `RecursionError` on a too-deep hand-built tree. Logging a Python
+recursion limit as "the backend rejected your query" is simply false.
+`EMIT_FAILED` claims only what is true: emission did not complete.
 
 **Emit-time backstops, not reachable from query text.** All carry
 `cause=INTERNAL`. They keep distinct kinds so the existing matrix tests can
@@ -292,10 +317,38 @@ are `INTERNAL` backstops where a span has no audience, so they may keep
 emit kinds, so it cannot be satisfied vacuously by `_fail`'s `node=None`
 default.
 
+`_exists_query` has **three** callers, and all three must pass the node or
+the guard fails for one shape while passing for another: `visit_every`
+(bare `field:*`), BOOLEAN_EXISTS term emission in `visit_term`, and
+`_range_query`'s double-open delegation at `:797-799`. The last is the one
+easily missed, and it is the shape that reaches `EXISTS_REQUIRES_FAST` on
+U64 and DATE fields.
+
 Caveat worth recording: per `ARCHITECTURE.md:507-514`, a `Wildcard`/`Prefix`
 leaf's span covers only the wildcard marker character (`inv*` ->
 `Prefix(startchar=3, endchar=4)`), not the whole token. No host UI should
 be planned around underlining the full pattern.
+
+### Populating field_kind at parse time
+
+`field_kind` is useless if only the emitter fills it, since the three
+`PATTERN_ON_*` kinds are parse-only and are precisely the ones a host wants
+to tell apart by kind. All three parse-time construction sites have the
+information in hand already:
+
+- `parser/default.py:446` (`BAD_NUMBER`): inside `_parse_u64`, which is
+  U64-only by construction, so `field_kind=FieldKind.U64` is a constant.
+- `parser/default.py:568` (the `PATTERN_ON_*` split): `resolved` is in
+  scope, so `field_kind=resolved.spec.kind`.
+- `parser/dateparse.py:984` (`BAD_DATE`): `_error` currently takes
+  `field: str` and all 9 of its call sites pass `spec.name` (`:1042`,
+  `:1051`, `:1102`, `:1143`, `:1145`, `:1153`, `:1155`, `:1194`, `:1195`).
+  Widening the signature to carry the spec, or an explicit kind alongside
+  the name, distinguishes DATE from DATETIME exactly. The existing comment
+  at `:989-991` already establishes these are never JSON.
+
+Without this, a host resolving `PATTERN_ON_NUMERIC` still has to go back to
+the registry, which is the exact round-trip Problem #1 objects to.
 
 ### Messages
 
@@ -416,13 +469,15 @@ invariant rather than weakening it.
 Resolved during implementation, not blocking this design:
 
 - Whether any of the seven `AST_*` backstops is truly unreachable even from
-  a hand-built AST, in which case it belongs under `QueryParserError`
-  rather than in the kind table. The probe establishes they are unreachable
-  from *query text*; it does not establish reachability from hand-built
-  nodes, which is what `test_kind_matrix.py`'s existing cells exercise.
-- Whether `:352-359`'s catch should be split. It currently wraps both
-  `analyze(normalize(node))` and `visit()`, and the `emit()` docstring
-  (`:326-340`) enumerates four shapes, three of which never reach tantivy
-  (a `None` child, a missing `visit_*` method at `ast.py:828`, and
-  `RecursionError`). One `BACKEND_REJECTED` kind describing all four as
-  "the backend rejected it" is inaccurate for three of them.
+  a hand-built AST. **Resolved: keep all seven as distinct kinds.** A
+  caller building nodes directly against `ast.py` can produce every one of
+  these shapes, and distinct kinds let `test_kind_matrix.py` assert which
+  backstop fired without matching on prose. Only a backstop proven
+  unreachable even from a hand-built node would move to
+  `QueryParserError`, and none is.
+- Whether `:352-359`'s catch should be split. **Resolved: not split,
+  renamed instead.** The five caught exception types do not separate
+  cleanly into "tantivy said no" and "our walk blew up" (tantivy-py raises
+  `ValueError`, which the AST walk also raises), so a split would be
+  guesswork at the catch site. `EMIT_FAILED` under `cause=INTERNAL` states
+  only what is known.
