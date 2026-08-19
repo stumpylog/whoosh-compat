@@ -912,11 +912,30 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             )
 
     def visit_termrange(self, node: ast.TermRange) -> tantivy.Query:
+        """Refuse a lexicographic range, naming the divergence for its kind.
+
+        The field is resolved first, so an unresolvable one reports
+        ``AST_UNKNOWN_FIELD``: the more specific failure. The divergence
+        then follows the resolved kind, since DIVERGENCES.md entry 5 is
+        scoped to the ranges that worked in whoosh (TEXT and KEYWORD);
+        a JSON subpath range is entry 30's territory, and a range on a
+        synthetic boolean-exists field has no whoosh behavior to diverge
+        from at all.
+        """
+        resolved = self._resolve(node.field)
+        divergence: int | None
+        if resolved.is_subpath:
+            divergence = 30
+        elif resolved.spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
+            divergence = 5
+        else:
+            divergence = None
         self._fail(
             DiagnosticKind.TEXT_RANGE,
             message="text ranges are not supported",
             node=node,
-            divergence=5,
+            resolved=resolved,
+            divergence=divergence,
         )
 
     def _range_query(
