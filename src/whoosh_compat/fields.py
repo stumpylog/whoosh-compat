@@ -579,11 +579,11 @@ class FieldRegistry:
         cleanly and then raise at emit time. Note that "clean parse" is
         *not*, on its own, a guarantee that emitting will succeed: a
         text-field range (``title:[a TO b]``) also parses with no
-        diagnostics and then raises ``UnsupportedQueryError`` at emit time
+        diagnostics and then raises ``QueryError`` at emit time
         (DIVERGENCES.md entry 5). The real host contract has two parts, both
         documented on :func:`whoosh_compat.emitters.tantivy_.emit` and in the
         README: check ``ParseResult.diagnostics`` before emitting, *and*
-        expect emit() to still raise ``UnsupportedQueryError`` for a handful
+        expect emit() to still raise ``QueryError`` for a handful
         of parseable-but-inexecutable shapes. Returning ``None`` here for a
         bare JSON field name closes off one such shape at parse time instead
         of leaving it to that second check; it doesn't mean every other

@@ -94,14 +94,6 @@ def test_deep_hand_built_chain_raises_query_emit_error(tindex: TIndex, ereg: Fie
         emit_ast(deep, tindex, ereg)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "three raise sites still spell the DIVERGENCES reference into the "
-        "message; they move to Diagnostic.divergence when the emit-time "
-        "diagnostics land, at which point this marker must be removed"
-    ),
-)
 def test_no_message_references_project_documentation() -> None:
     """DIVERGENCES references belong in Diagnostic.divergence, not in prose.
 
