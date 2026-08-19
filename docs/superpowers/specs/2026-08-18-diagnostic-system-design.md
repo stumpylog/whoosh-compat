@@ -248,24 +248,19 @@ An earlier draft left the numeric row blank.
 | `EXISTS_REQUIRES_FAST` | `MISCONFIGURED` | |
 | `TEXT_RANGE` | `UNSUPPORTED` | 5 / 30 / none, by field kind (see below) |
 | `PATTERN_TOO_COMPLEX` | `UNSUPPORTED` | |
-| `EMIT_FAILED` | `INTERNAL` | |
 
-`PATTERN_TOO_COMPLEX` is new, and it is what keeps a long user wildcard out
-of `INTERNAL`. Rather than splitting the broad `:352-359` catch (which
-cannot cleanly separate a tantivy `ValueError` from an AST-walk one), the
-pattern-emitting call sites wrap their own `tantivy.Query.regex_query(...)`
-in a narrow `except ValueError`. That is targeted enough to be honest:
-at that point we know a pattern was being compiled and the backend refused
-it. `cause=UNSUPPORTED`, because the query is well-formed and simply
-exceeds what this backend will compile.
+Every reachable emit kind is non-`INTERNAL`, and that is not a coincidence:
+once the one user-reachable shape is pulled out of the broad catch, what
+remains is by definition a defect. This makes the span guard trivially
+scopable (see Spans) and gives hosts a clean rule: `INTERNAL` at emit time
+is never the user's fault.
 
-`EMIT_FAILED` keeps `cause=INTERNAL` and keeps the broad catch, now
-genuinely covering only defects: a `None` child found while walking,
-`generic_visit` finding no `visit_*` method (`ast.py:828`), and
-`RecursionError` on a too-deep hand-built tree. It is deliberately not
-named `BACKEND_REJECTED`: three of those shapes never reach tantivy, and
-logging a Python recursion limit as "the backend rejected your query" is
-false.
+`PATTERN_TOO_COMPLEX` is what keeps a long user wildcard out of `INTERNAL`.
+The pattern-emitting sites wrap their own `tantivy.Query.regex_query(...)`
+in a narrow `except ValueError`. At that point we know a pattern was being
+compiled and the backend refused it, so the label is honest.
+`cause=UNSUPPORTED`, because the query is well-formed and merely exceeds
+what this backend will compile.
 
 `TEXT_RANGE`'s divergence varies by field kind, which is why it cannot come
 from a kind-keyed table. `visit_termrange` (`:772-773`) is the only visitor
@@ -299,6 +294,29 @@ assert which backstop fired without matching on message text:
 | `AST_BAD_DATE` | `:831` |
 | `AST_PATTERN_ON_KIND` | `:753`, `:758`, `:768` |
 | `AST_KIND_NOT_IMPLEMENTED` | `:608`, `:687` |
+| `AST_INVALID_SHAPE` | `:352-359`, non-backend half |
+| `BACKEND_REJECTED` | `:352-359`, backend half |
+
+The last two replace a single `EMIT_FAILED` kind an earlier revision used
+for the whole `:352-359` catch. One try block currently wraps both
+`ast.analyze(ast.normalize(node))` and `self.visit(...)` and catches five
+exception types, which is at least two unrelated failure modes sharing a
+label. The split is by stage **and** by type, because splitting by stage
+alone mislabels a `RecursionError` raised during `visit()` as a backend
+rejection:
+
+- Anything raised by `normalize`/`analyze` is `AST_INVALID_SHAPE`. The
+  backend is not involved at that stage.
+- From `visit()`: `RecursionError`, `NotImplementedError` and
+  `AttributeError` are `AST_INVALID_SHAPE` (a too-deep tree, a missing
+  `visit_*` at `ast.py:828`, a `None` child). Only `ValueError` and
+  `TypeError` are `BACKEND_REJECTED`, which is where tantivy-py actually
+  refuses a query we constructed.
+
+With `PATTERN_TOO_COMPLEX` taking the one user-reachable case,
+`BACKEND_REJECTED` has no known reaching query and the name is finally
+accurate for what remains. If a query is later found that reaches it, that
+is a triage bug, not a host-facing error.
 
 The `AST_` prefix is the contract: reaching one means a caller built a node
 the parser would never produce. This replaces the earlier draft's attempt
@@ -451,10 +469,12 @@ New guards:
   exhaustiveness check that keeps a new kind from silently defaulting.
 - No `Diagnostic.message` and no `QueryError` message contains
   `"DIVERGENCES"`.
-- Emit-time diagnostics for the reachable, **node-scoped** kinds carry
-  non-`None` `startchar`/`endchar`. The qualifier matters: `EMIT_FAILED` is
-  reachable but has no node at `:359`, so an unqualified "reachable kinds"
-  guard would demand a span the design says cannot exist.
+- **Every reachable emit kind carries non-`None` `startchar`/`endchar`**:
+  `EXISTS_REQUIRES_FAST`, `TEXT_RANGE`, `PATTERN_TOO_COMPLEX`. No qualifier
+  is needed, because pulling the user-reachable regex case out of the broad
+  catch left every remaining node-less site under `cause=INTERNAL`. An
+  earlier revision needed a "node-scoped" escape hatch here, which was a
+  sign the kind table was wrong rather than the guard.
 - **The parse-time and emit-time kind sets are disjoint.** This, not the
   cause partition, is what makes the dropped `phase` field redundant, and
   it is the guard that will actually fail when someone adds a kind.
@@ -489,13 +509,19 @@ the one place where "hosts write a single `except` clause" does not apply,
 and it is a deliberate tightening, since the fuzzer should also never see
 `MISCONFIGURED` or `INTERNAL`.
 
-**Ordering constraint:** this tightening must land *after*
-`PATTERN_TOO_COMPLEX` exists. Until then the fuzzer can generate a pattern
-past tantivy's 1000-state limit and hit `EMIT_FAILED`/`INTERNAL`, which the
-tightened guard would re-raise. It does not today only because
-`max_leaves=6` keeps generated patterns short, which is an accident of the
-generator's bounds and not an invariant. Tightening first plants a
-nondeterministic failure.
+`MISCONFIGURED` is verifiably unreachable for this fuzzer: `_every_atom`
+(`:182`) builds `field:*` only over `_TEXT_FIELDS + _KEYWORD_FIELDS`, and
+`_NUM_FIELDS`/`_DATE_FIELDS` (`:48-49`) are `tag_id`, `asn`, `created`,
+`added`, all `fast=True` in the emitter registry. So the tightening cannot
+fire on that branch.
+
+**Ordering constraint on the `INTERNAL` branch:** the tightening must land
+*after* `PATTERN_TOO_COMPLEX` exists. Until then the fuzzer can generate a
+pattern past tantivy's 1000-state limit and land in the broad catch, which
+the tightened guard would re-raise. It does not today only because
+`max_leaves=6` (`:213`) keeps generated patterns short, which is an
+accident of the generator's bounds and not an invariant. Tightening first
+plants a nondeterministic failure.
 
 `tests/emitter/test_acceptance_property.py:770` already catches both as a
 tuple and needs only the name change.
@@ -574,13 +600,14 @@ Resolved during implementation, not blocking this design:
   backstop fired without matching on prose. Only a backstop proven
   unreachable even from a hand-built node would move to
   `QueryParserError`, and none is.
-- Whether `:352-359`'s catch should be split. **Resolved: not split at the
-  catch, narrowed at the source.** A split at `:359` would be guesswork,
-  since tantivy-py raises `ValueError` and so does the AST walk. Instead
-  the pattern-emitting sites catch their own `regex_query` failure as
-  `PATTERN_TOO_COMPLEX`, which removes the one user-reachable shape from
-  the broad catch. `EMIT_FAILED` then covers only defects and `INTERNAL`
-  becomes true of everything it labels.
+- Whether `:352-359`'s catch should be split. **Resolved: narrowed at the
+  source *and* split.** The pattern-emitting sites catch their own
+  `regex_query` failure as `PATTERN_TOO_COMPLEX`, removing the one
+  user-reachable shape; the remainder splits by stage and exception type
+  into `AST_INVALID_SHAPE` and `BACKEND_REJECTED`. Narrowing alone would
+  have left one `INTERNAL` kind still describing two unrelated failure
+  modes, which is the same silent-fallthrough this project's conventions
+  single out.
 
   An earlier revision closed this item as "not split, renamed instead", on
   the strength of an unverified claim that the catch was unreachable from
