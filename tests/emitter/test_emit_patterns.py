@@ -14,6 +14,7 @@ import tantivy
 
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import glob_to_regex
+from whoosh_compat.errors import Cause
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryError
 from whoosh_compat.fields import FieldKind
@@ -220,7 +221,7 @@ def test_every_field(
     ],
 )
 def test_pattern_on_json_subpath_raises_at_emit(
-    tindex: TIndex, ereg: FieldRegistry, node: ast.Node
+    tindex: TIndex, ereg: FieldRegistry, node: ast.Prefix | ast.Wildcard
 ) -> None:
     # A hand-built Prefix/Wildcard node bypasses the parser's parse-time
     # diagnostic entirely, so this is the backstop that catches it before
@@ -232,6 +233,12 @@ def test_pattern_on_json_subpath_raises_at_emit(
     d = exc.value.diagnostic
     assert d.kind is DiagnosticKind.AST_PATTERN_ON_KIND
     assert d.divergence == 30
+    # Discriminates the four cases from each other: without this they all
+    # assert the same two values and stop proving which cell they came
+    # from. The ref keeps its subpath, so the fast and non-fast rows are
+    # distinguishable on the record alone.
+    assert d.field == node.field
+    assert d.field_kind is FieldKind.JSON
 
 
 def test_pattern_on_plain_json_field_no_subpath_still_works(
@@ -271,7 +278,7 @@ def test_pattern_on_plain_json_field_no_subpath_still_works(
     ],
 )
 def test_pattern_on_boolean_exists_field_raises_at_emit(
-    tindex: TIndex, ereg: FieldRegistry, node: ast.Node
+    tindex: TIndex, ereg: FieldRegistry, node: ast.Prefix | ast.Wildcard
 ) -> None:
     # A hand-built Prefix/Wildcard node bypasses the parser's parse-time
     # diagnostic entirely, so this is the backstop that catches it before
@@ -283,6 +290,10 @@ def test_pattern_on_boolean_exists_field_raises_at_emit(
     d = exc.value.diagnostic
     assert d.kind is DiagnosticKind.AST_PATTERN_ON_KIND
     assert d.divergence == 29
+    # Same discrimination as the JSON-subpath group above: the fast and
+    # non-fast exists_target rows differ only in the field they name.
+    assert d.field == node.field
+    assert d.field_kind is FieldKind.BOOLEAN_EXISTS
 
 
 def _raw_keyword_index() -> tantivy.Index:
@@ -341,7 +352,7 @@ def test_wildcard_empty_class_still_matches_nothing() -> None:
     ],
 )
 def test_pattern_on_bare_json_field_raises_at_emit(
-    tindex: TIndex, ereg: FieldRegistry, node: ast.Node
+    tindex: TIndex, ereg: FieldRegistry, node: ast.Prefix | ast.Wildcard
 ) -> None:
     # The bare-JSON sibling of the subpath backstop above, mirroring
     # visit_term/visit_phrase's identical cell: a hand-built pattern node
@@ -351,7 +362,11 @@ def test_pattern_on_bare_json_field_raises_at_emit(
     # for values that exist).
     with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
-    assert exc.value.diagnostic.kind is DiagnosticKind.AST_JSON_NEEDS_SUBPATH
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.AST_JSON_NEEDS_SUBPATH
+    # The bare field, with no subpath invented for it.
+    assert d.field == FieldRef("notes")
+    assert d.field_kind is FieldKind.JSON
 
 
 @pytest.mark.parametrize(
@@ -397,6 +412,59 @@ def test_pattern_on_non_text_kind_raises_at_emit(
     d = exc.value.diagnostic
     assert d.kind is DiagnosticKind.AST_PATTERN_ON_KIND
     assert d.field_kind is field_kind
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        pytest.param(ast.Prefix(field=FieldRef("ghost"), text="ali"), id="prefix"),
+        pytest.param(ast.Wildcard(field=FieldRef("ghost"), pattern="a?ice"), id="wildcard"),
+    ],
+)
+def test_pattern_on_field_absent_from_schema_reports_the_mismatch(
+    tindex: TIndex, ereg: FieldRegistry, node: ast.Node
+) -> None:
+    # A field the whoosh-compat registry knows and the tantivy schema does
+    # not is an operator/deployment mismatch, never a property of the query
+    # text. tantivy-py signals it with the same bare ValueError it uses for
+    # a regex that busts the state cap, so the pattern path has to tell the
+    # two apart: reporting PATTERN_TOO_COMPLEX/UNSUPPORTED here would mask
+    # a broken deployment as a permanently unsupported query.
+    #
+    # The bar is the sibling cell: a plain term query on the same broken
+    # field already reports the mismatch correctly through emit()'s
+    # backstop, so the pattern visitors must land on the same kind and
+    # cause rather than inventing their own.
+    broken = FieldRegistry([*ereg, FieldSpec("ghost", FieldKind.TEXT)])
+    with pytest.raises(QueryError) as term_exc:
+        emit_ast(ast.Term(field=FieldRef("ghost"), text="alice"), tindex, broken)
+    term_d = term_exc.value.diagnostic
+    assert term_d.kind is DiagnosticKind.BACKEND_REJECTED
+    assert term_d.cause is Cause.INTERNAL
+
+    with pytest.raises(QueryError) as exc:
+        emit_ast(node, tindex, broken)
+    d = exc.value.diagnostic
+    assert d.kind is term_d.kind
+    assert d.cause is term_d.cause
+    assert d.field == FieldRef("ghost")
+    assert d.field_kind is FieldKind.TEXT
+
+
+def test_pattern_over_the_cap_on_a_real_field_is_still_unsupported(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
+    # The other side of the split above: the field IS in the schema, so a
+    # ValueError from regex_query really is the compiled pattern exceeding
+    # tantivy's 1000-state cap, which is bad input and stays a 400-shaped
+    # UNSUPPORTED rather than being reclassified as a deployment fault.
+    node = ast.Wildcard(field=FieldRef("content"), pattern="a" + "?" * 400)
+    with pytest.raises(QueryError) as exc:
+        emit_ast(node, tindex, ereg)
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.PATTERN_TOO_COMPLEX
+    assert d.cause is Cause.UNSUPPORTED
+    assert d.field == FieldRef("content")
 
 
 def test_every_field_non_fast_non_text_raises(tindex: TIndex, ereg: FieldRegistry) -> None:

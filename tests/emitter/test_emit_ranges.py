@@ -222,12 +222,24 @@ def test_text_range_pins_the_two_part_host_contract(tindex: TIndex, ereg: FieldR
 
 
 @pytest.mark.parametrize(
-    ("query", "field_kind", "divergence"),
+    ("query", "field", "field_kind", "divergence"),
     [
-        pytest.param("title:[a TO b]", FieldKind.TEXT, 5, id="text"),
-        pytest.param("tag:[a TO b]", FieldKind.KEYWORD, 5, id="keyword"),
-        pytest.param("notes.user:[a TO b]", FieldKind.JSON, 30, id="json-subpath"),
-        pytest.param("has_tag:[a TO b]", FieldKind.BOOLEAN_EXISTS, None, id="boolean-exists"),
+        pytest.param("title:[a TO b]", FieldRef("title"), FieldKind.TEXT, 5, id="text"),
+        pytest.param("tag:[a TO b]", FieldRef("tag"), FieldKind.KEYWORD, 5, id="keyword"),
+        pytest.param(
+            "notes.user:[a TO b]",
+            FieldRef("notes", "user"),
+            FieldKind.JSON,
+            30,
+            id="json-subpath",
+        ),
+        pytest.param(
+            "has_tag:[a TO b]",
+            FieldRef("has_tag"),
+            FieldKind.BOOLEAN_EXISTS,
+            None,
+            id="boolean-exists",
+        ),
     ],
 )
 def test_text_range_divergence_varies_by_field_kind(
@@ -235,6 +247,7 @@ def test_text_range_divergence_varies_by_field_kind(
     ereg: FieldRegistry,
     parse: Callable[[str], ast.Node],
     query: str,
+    field: FieldRef,
     field_kind: FieldKind,
     divergence: int | None,
 ) -> None:
@@ -243,14 +256,20 @@ def test_text_range_divergence_varies_by_field_kind(
     A range on a synthetic boolean-exists field never did, and a subpath
     range is entry 30's territory, so stamping 5 on all of them ships a
     wrong reference.
+
+    Also the span guard for ``TEXT_RANGE``: every emit kind reachable from
+    query text must locate itself in the source string, so a host can
+    underline the offending span.
     """
     with pytest.raises(QueryError) as exc:
         emit_ast(parse(query), tindex, ereg)
     d = exc.value.diagnostic
     assert d.kind is DiagnosticKind.TEXT_RANGE
-    assert d.field == FieldRef(query.split(":")[0])
+    assert d.field == field
     assert d.field_kind is field_kind
     assert d.divergence == divergence
+    assert d.startchar is not None
+    assert d.endchar is not None
 
 
 def test_text_range_on_unknown_field_reports_the_unknown_field(
@@ -300,19 +319,30 @@ def test_range_open_on_both_sides_means_field_exists(tindex: TIndex, ereg: Field
 # -- host constructing ast.NumericRange/ast.DateRange directly can.
 
 
+@pytest.mark.parametrize(
+    ("lo", "hi", "raw_value"),
+    [
+        pytest.param("notanumber", None, repr("notanumber"), id="lower-bound"),
+        pytest.param(1, "notanumber", repr("notanumber"), id="upper-bound"),
+    ],
+)
 def test_numeric_range_non_numeric_bound_raises_query_emit_error(
-    tindex: TIndex, ereg: FieldRegistry
+    tindex: TIndex, ereg: FieldRegistry, lo: object, hi: object, raw_value: str
 ) -> None:
     node = ast.NumericRange(
         field=FieldRef("asn"),
-        lo="notanumber",  # type: ignore[arg-type]
-        hi=None,
+        lo=lo,  # type: ignore[arg-type]
+        hi=hi,  # type: ignore[arg-type]
         incl_lo=True,
         incl_hi=True,
     )
     with pytest.raises(QueryError) as exc:
         emit_ast(node, tindex, ereg)
-    assert exc.value.diagnostic.kind is DiagnosticKind.AST_BAD_NUMBER
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.AST_BAD_NUMBER
+    # The offending bound, named the way every other AST_BAD_NUMBER site
+    # names its value, and identifying which of the two bounds was bad.
+    assert d.raw_value == raw_value
 
 
 def test_date_range_non_datetime_bound_raises_query_emit_error(

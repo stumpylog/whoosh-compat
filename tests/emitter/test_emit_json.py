@@ -284,10 +284,16 @@ def test_json_subpath_exists_nonfast_raises_naming_dotted_form(
         emit_ast(node, tindex, ereg)
     d = exc.value.diagnostic
     assert d.kind is DiagnosticKind.EXISTS_REQUIRES_FAST
-    # The dotted form the user typed, not the bare field name: the
-    # behavior this test pins, expressed on the structured field rather
-    # than on message text (message carries no stability guarantee).
-    assert d.field == FieldRef("notes.user")
+    # The subpath the user typed, not the bare field name: the behavior
+    # this test pins, expressed on the structured field rather than on
+    # message text (message carries no stability guarantee). The ref is
+    # the same structured shape the parse side produces for this field,
+    # so a host reading diagnostic.field.json_path gets the subpath in
+    # both phases rather than only at parse time.
+    assert d.field is not None
+    assert d.field == FieldRef("notes", "user")
+    assert d.field.json_path == "user"
+    assert str(d.field) == "notes.user"
 
 
 def test_json_subpath_exists_multilevel_fast_field(tindex: TIndex) -> None:
