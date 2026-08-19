@@ -25,12 +25,16 @@ import re
 from collections.abc import Callable
 from datetime import UTC
 from datetime import datetime
+from typing import NoReturn
 
 import tantivy
 
 from whoosh_compat import ast
+from whoosh_compat.errors import Diagnostic
+from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryEmitError
-from whoosh_compat.errors import UnsupportedQueryError
+from whoosh_compat.errors import QueryError
+from whoosh_compat.errors import cause_for
 from whoosh_compat.fields import ExistsStrategy
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
@@ -318,12 +322,12 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         top-level group (DIVERGENCES.md entries 7 and 15).
 
         Most invalid-input shapes get a specific, well-messaged
-        ``QueryEmitError``/``UnsupportedQueryError`` from the ``visit_*``
-        method that first notices them. This is the backstop for the rest:
+        ``QueryError`` (via ``_fail``) from the ``visit_*`` method that
+        first notices them. This is the backstop for the rest:
         a hand-built (not just parsed) AST can violate the type contract in
         ways no single ``visit_*`` method specifically checks for, and the
         underlying call then raises one of several bare exceptions instead
-        of one of the two documented types. Four shapes are converted here:
+        of a documented type. Four shapes are converted here:
 
         * A non-numeric ``Boosted.boost`` or other badly-typed leaf value
           (a kind every field kind can carry, or a future tantivy-py call
@@ -360,12 +364,51 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
     # -- helpers -----------------------------------------------------
 
+    def _fail(
+        self,
+        kind: DiagnosticKind,
+        *,
+        message: str,
+        node: ast.Node | None = None,
+        resolved: ResolvedField | None = None,
+        raw_value: str | None = None,
+        divergence: int | None = None,
+    ) -> NoReturn:
+        """Raise a ``QueryError`` carrying a fully populated ``Diagnostic``.
+
+        Single funnel for emit-time failures so the cause is looked up
+        rather than hand-picked per site. ``divergence`` is an argument
+        rather than a table lookup because it varies by field kind for
+        ``TEXT_RANGE`` and spans two entries for ``AST_PATTERN_ON_KIND``.
+        """
+
+        raise QueryError(
+            Diagnostic(
+                kind=kind,
+                cause=cause_for(kind),
+                message=message,
+                startchar=node.startchar if node is not None else None,
+                endchar=node.endchar if node is not None else None,
+                field=FieldRef(resolved.dotted_name) if resolved is not None else None,
+                field_kind=resolved.spec.kind if resolved is not None else None,
+                raw_value=raw_value,
+                divergence=divergence,
+            )
+        )
+
     def _resolve(self, field: FieldRef | None) -> ResolvedField:
         if field is None:
-            raise QueryEmitError("cannot emit an unfielded term")
+            self._fail(
+                DiagnosticKind.AST_UNFIELDED_TERM,
+                message="cannot emit an unfielded term",
+            )
         resolved = self.registry.resolve(field)
         if resolved is None:
-            raise QueryEmitError(f"unknown field {str(field)!r}")
+            self._fail(
+                DiagnosticKind.AST_UNKNOWN_FIELD,
+                message=f"unknown field {str(field)!r}",
+                raw_value=str(field),
+            )
         return resolved
 
     def _json_paths_supported(self) -> bool:
@@ -531,10 +574,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         # for a subpath) so the message matches what the user actually
         # typed rather than a bare field name that was never reachable
         # syntax to begin with.
-        raise UnsupportedQueryError(
-            f"field {resolved.dotted_name!r} ({spec.kind.name}) has no way to"
-            f" match 'exists' while non-fast: mark it fast=True to support"
-            f" '{resolved.dotted_name}:*'"
+        self._fail(
+            DiagnosticKind.EXISTS_REQUIRES_FAST,
+            message=(
+                f"field {resolved.dotted_name!r} ({spec.kind.name}) has no way"
+                f" to match 'exists' while non-fast"
+            ),
+            resolved=resolved,
         )
 
     def visit_every(self, node: ast.Every) -> tantivy.Query:
@@ -550,9 +596,10 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         return self._exists_query(resolved)
 
     def visit_errorleaf(self, node: ast.ErrorLeaf) -> tantivy.Query:
-        raise QueryEmitError(
-            f"cannot emit query: {node.diagnostic.message}", diagnostic=node.diagnostic
-        )
+        # Re-raises the parse-time record unchanged. Routing this through
+        # _fail would restamp an emit-side cause onto a parse diagnostic,
+        # destroying the phase information the cause carries.
+        raise QueryError(node.diagnostic)
 
     def visit_term(self, node: ast.Term) -> tantivy.Query:
         if node.field is not None and node.field.json_path is not None:
@@ -579,10 +626,14 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         if spec.kind is FieldKind.U64:
             try:
                 value = int(node.text)
-            except (TypeError, ValueError) as exc:
-                raise QueryEmitError(
-                    f"{node.text!r} is not a valid number for {spec.name!r}"
-                ) from exc
+            except (TypeError, ValueError):
+                self._fail(
+                    DiagnosticKind.AST_BAD_NUMBER,
+                    message=f"{node.text!r} is not a valid number for {spec.name!r}",
+                    node=node,
+                    resolved=resolved,
+                    raw_value=str(node.text),
+                )
             return tantivy.Query.term_query(self.schema, spec.name, value)
 
         if spec.kind is FieldKind.BOOLEAN_EXISTS:
@@ -600,13 +651,21 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             return _boolean_query([(tantivy.Occur.MustNot, exists)])
 
         if spec.kind is FieldKind.JSON:
-            raise QueryEmitError(
-                f"field {spec.name!r} is a JSON field; term queries must "
-                f"address a subpath (e.g. {spec.name}.<subpath>)"
+            self._fail(
+                DiagnosticKind.AST_JSON_NEEDS_SUBPATH,
+                message=(
+                    f"field {spec.name!r} is a JSON field; term queries must "
+                    f"address a subpath (e.g. {spec.name}.<subpath>)"
+                ),
+                node=node,
+                resolved=resolved,
             )
 
-        raise UnsupportedQueryError(
-            f"term emission for field kind {spec.kind.name} is not implemented"
+        self._fail(
+            DiagnosticKind.AST_KIND_NOT_IMPLEMENTED,
+            message=f"term emission for field kind {spec.kind.name} is not implemented",
+            node=node,
+            resolved=resolved,
         )
 
     def visit_phrase(self, node: ast.Phrase) -> tantivy.Query:
@@ -651,17 +710,27 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 return self._exists_query(resolved)
             try:
                 value = int(node.text)
-            except (TypeError, ValueError) as exc:
-                raise QueryEmitError(
-                    f"{node.text!r} is not a valid number for {spec.name!r}"
-                ) from exc
+            except (TypeError, ValueError):
+                self._fail(
+                    DiagnosticKind.AST_BAD_NUMBER,
+                    message=f"{node.text!r} is not a valid number for {spec.name!r}",
+                    node=node,
+                    resolved=resolved,
+                    raw_value=str(node.text),
+                )
             if not (0 <= value <= _U64_MAX):
                 # Parsed input can no longer carry an out-of-domain u64 value
                 # here (the parse-time domain check now
                 # also covers the double-quoted/Phrase spelling), but a
                 # hand-built ast.Phrase bypasses the parser entirely, so this
                 # is a backstop for that case, same rule as term/range.
-                raise QueryEmitError(f"{node.text!r} is not a valid number for {spec.name!r}")
+                self._fail(
+                    DiagnosticKind.AST_BAD_NUMBER,
+                    message=f"{node.text!r} is not a valid number for {spec.name!r}",
+                    node=node,
+                    resolved=resolved,
+                    raw_value=str(node.text),
+                )
             return tantivy.Query.term_query(self.schema, spec.name, value)
 
         if spec.kind is FieldKind.BOOLEAN_EXISTS:
@@ -679,13 +748,21 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             return _boolean_query([(tantivy.Occur.MustNot, exists)])
 
         if spec.kind is FieldKind.JSON:
-            raise QueryEmitError(
-                f"field {spec.name!r} is a JSON field; phrase queries must "
-                f"address a subpath (e.g. {spec.name}.<subpath>)"
+            self._fail(
+                DiagnosticKind.AST_JSON_NEEDS_SUBPATH,
+                message=(
+                    f"field {spec.name!r} is a JSON field; phrase queries must "
+                    f"address a subpath (e.g. {spec.name}.<subpath>)"
+                ),
+                node=node,
+                resolved=resolved,
             )
 
-        raise UnsupportedQueryError(
-            f"phrase emission for field kind {spec.kind.name} is not implemented"
+        self._fail(
+            DiagnosticKind.AST_KIND_NOT_IMPLEMENTED,
+            message=f"phrase emission for field kind {spec.kind.name} is not implemented",
+            node=node,
+            resolved=resolved,
         )
 
     def visit_prefix(self, node: ast.Prefix) -> tantivy.Query:
@@ -739,10 +816,10 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
           ``ValueError``, a backend-internal message that also
           contradicts the field being queryable at all (``has_tag:true``
           works fine).
-        * A bare JSON field (no subpath). ``QueryEmitError``, mirroring
-          ``visit_term``/``visit_phrase``'s identical cell: the ref is
-          malformed addressing (a JSON field is only queryable through a
-          subpath), not a backend limitation.
+        * A bare JSON field (no subpath). ``AST_JSON_NEEDS_SUBPATH``,
+          mirroring ``visit_term``/``visit_phrase``'s identical cell: the
+          ref is malformed addressing (a JSON field is only queryable
+          through a subpath), not a backend limitation.
         * Any other kind (U64, DATE, DATETIME, and every future
           ``FieldKind`` member until explicitly classified here).
           Reachable only from a hand-built node: query text gets the
@@ -750,27 +827,48 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         """
         spec = resolved.spec
         if resolved.is_subpath:
-            raise UnsupportedQueryError(
-                f"wildcard/prefix patterns are not supported on JSON subpath "
-                f"{resolved.dotted_name!r} (DIVERGENCES.md entry 30)"
+            self._fail(
+                DiagnosticKind.AST_PATTERN_ON_KIND,
+                message=(
+                    f"wildcard/prefix patterns are not supported on JSON subpath "
+                    f"{resolved.dotted_name!r}"
+                ),
+                resolved=resolved,
+                divergence=30,
             )
         if spec.kind is FieldKind.BOOLEAN_EXISTS:
-            raise UnsupportedQueryError(
-                f"wildcard/prefix patterns are not supported on boolean-exists "
-                f"field {spec.name!r} (DIVERGENCES.md entry 29)"
+            self._fail(
+                DiagnosticKind.AST_PATTERN_ON_KIND,
+                message=(
+                    f"wildcard/prefix patterns are not supported on boolean-exists "
+                    f"field {spec.name!r}"
+                ),
+                resolved=resolved,
+                divergence=29,
             )
         if spec.kind is FieldKind.JSON:
-            raise QueryEmitError(
-                f"field {spec.name!r} is a JSON field; pattern queries must "
-                f"address a subpath (e.g. {spec.name}.<subpath>)"
+            self._fail(
+                DiagnosticKind.AST_JSON_NEEDS_SUBPATH,
+                message=(
+                    f"field {spec.name!r} is a JSON field; pattern queries must "
+                    f"address a subpath (e.g. {spec.name}.<subpath>)"
+                ),
+                resolved=resolved,
             )
         if spec.kind is not FieldKind.TEXT and spec.kind is not FieldKind.KEYWORD:
-            raise UnsupportedQueryError(
-                f"pattern emission for field kind {spec.kind.name} is not implemented"
+            self._fail(
+                DiagnosticKind.AST_PATTERN_ON_KIND,
+                message=f"pattern emission for field kind {spec.kind.name} is not implemented",
+                resolved=resolved,
             )
 
     def visit_termrange(self, node: ast.TermRange) -> tantivy.Query:
-        raise UnsupportedQueryError("text ranges are not supported (DIVERGENCES.md entry 5)")
+        self._fail(
+            DiagnosticKind.TEXT_RANGE,
+            message="text ranges are not supported",
+            node=node,
+            divergence=5,
+        )
 
     def _range_query(
         self,
@@ -814,9 +912,12 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             lo = None if node.lo is None else int(node.lo)
             hi = None if node.hi is None else int(node.hi)
         except (TypeError, ValueError) as exc:
-            raise QueryEmitError(
-                f"numeric range bound is not a valid number for {spec.name!r}: {exc}"
-            ) from exc
+            self._fail(
+                DiagnosticKind.AST_BAD_NUMBER,
+                message=f"numeric range bound is not a valid number for {spec.name!r}: {exc}",
+                node=node,
+                resolved=resolved,
+            )
         # Currently numeric fields are U64 only.
         return self._range_query(resolved, tantivy.FieldType.Unsigned, lo, hi, node)
 
@@ -826,11 +927,15 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         try:
             lo = None if node.lo is None else _to_naive_utc(node.lo)
             hi = None if node.hi is None else _to_naive_utc(node.hi)
-        except AttributeError as exc:
+        except AttributeError:
             bad = node.lo if node.lo is not None and not hasattr(node.lo, "tzinfo") else node.hi
-            raise QueryEmitError(
-                f"date range bound {bad!r} is not a valid datetime for {spec.name!r}"
-            ) from exc
+            self._fail(
+                DiagnosticKind.AST_BAD_DATE,
+                message=f"date range bound {bad!r} is not a valid datetime for {spec.name!r}",
+                node=node,
+                resolved=resolved,
+                raw_value=repr(bad),
+            )
 
         # Clamp into tantivy's representable window (see _TANTIVY_DATE_MIN
         # above): a bound past either edge would otherwise wrap modulo
@@ -928,10 +1033,10 @@ def emit(
     1. The :class:`~whoosh_compat.errors.Diagnostic` list on the
        :class:`~whoosh_compat.ParseResult` that produced ``node`` must be
        empty. A non-empty list means the tree contains at least one
-       ``ErrorLeaf``, and calling ``emit()`` on that raises
-       ``QueryEmitError``.
+       ``ErrorLeaf``, and calling ``emit()`` on that raises ``QueryError``
+       carrying that very parse-time ``Diagnostic``.
     2. Even with an empty diagnostics list, ``emit()`` can still raise
-       ``UnsupportedQueryError`` for a query shape that parses cleanly but
+       ``QueryError`` for a query shape that parses cleanly but
        has no way to execute against tantivy today. The canonical example is
        a text-field range (``title:[a TO b]``): whoosh supported this, but
        tantivy-py has no programmatic text-range API (DIVERGENCES.md entry
@@ -960,20 +1065,22 @@ def emit(
     that holds by construction, not by convention).
 
     Raises:
-        QueryEmitError: ``node`` (or a value it contains) cannot be turned
-            into a valid query: an unresolvable field, a value that fails a
-            field kind's domain check, a hand-built tree with a ``None`` (or
-            otherwise non-node) value standing in for a required child, a
-            hand-built tree deep enough to exhaust the interpreter's
-            recursion limit, or any other shape that would otherwise raise a
-            bare ``ValueError``, ``TypeError``, ``AttributeError``,
-            ``NotImplementedError`` or ``RecursionError`` while building the
-            query.
-        UnsupportedQueryError: ``node`` describes a query shape this emitter
+        QueryError: ``node`` cannot be turned into a valid query. The
+            attached ``Diagnostic`` says why: its ``kind`` names the
+            specific condition and its ``cause`` says who can act on it,
+            which is what a host should branch on. This covers a tree
+            carrying a parse-time ``ErrorLeaf`` (the parse ``Diagnostic``
+            is re-raised unchanged), a query shape this emitter
             deliberately does not support (a text range, a wildcard/prefix
-            pattern on an incompatible field, an ``exists`` check on a
-            non-fast field with no way to answer it). A sibling of
-            ``QueryEmitError`` under the common ``WhooshCompatError`` base,
-            not a subclass of it.
+            pattern on an incompatible field), a registry that cannot
+            answer an ``exists`` check on a non-fast field, and the
+            caller-built-AST backstops (an unresolvable field, a value
+            that fails a field kind's domain check).
+        QueryEmitError: a hand-built tree with a ``None`` (or otherwise
+            non-node) value standing in for a required child, a tree deep
+            enough to exhaust the interpreter's recursion limit, or any
+            other shape that would otherwise raise a bare ``ValueError``,
+            ``TypeError``, ``AttributeError``, ``NotImplementedError`` or
+            ``RecursionError`` while building the query.
     """
     return TantivyEmitter(index=index, registry=registry).emit(node)

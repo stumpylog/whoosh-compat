@@ -5,7 +5,10 @@ import tantivy
 
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import emit as emit_
+from whoosh_compat.errors import Cause
+from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryEmitError
+from whoosh_compat.errors import QueryError
 from whoosh_compat.errors import UnsupportedQueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
@@ -292,3 +295,56 @@ def test_prefix_without_normalizer(tindex: TIndex) -> None:
     )
     q = emit_ast(ast.Prefix(field=FieldRef("content"), text="shopn"), tindex, ereg)
     assert search_ids(tindex[0], q) == [2, 4]
+
+
+# -- Structured emit diagnostics ---------------------------------------------
+
+
+def test_exists_on_non_fast_field_is_misconfigured(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
+    """A non-fast field failing ``field:*`` is the operator's registry, not
+    the user's query, so a host may alert rather than return a 400.
+    """
+    with pytest.raises(QueryError) as exc:
+        emit_ast(parse("notes:*"), tindex, ereg)
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.EXISTS_REQUIRES_FAST
+    assert d.cause is Cause.MISCONFIGURED
+    assert d.field_kind is FieldKind.JSON
+
+
+def test_text_range_is_unsupported_with_its_divergence(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
+    with pytest.raises(QueryError) as exc:
+        emit_ast(parse("title:[a TO b]"), tindex, ereg)
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.TEXT_RANGE
+    assert d.cause is Cause.UNSUPPORTED
+    assert d.divergence == 5
+
+
+def test_hand_built_unknown_field_is_internal(tindex: TIndex, ereg: FieldRegistry) -> None:
+    """Query text cannot reach this: unknown field names are absorbed into
+    the default field as free text. Only a hand-built node gets here.
+    """
+    node = ast.Term(field=FieldRef("nosuchfield"), text="x")
+    with pytest.raises(QueryError) as exc:
+        emit_ast(node, tindex, ereg)
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.AST_UNKNOWN_FIELD
+    assert d.cause is Cause.INTERNAL
+
+
+def test_errorleaf_reraise_keeps_the_parse_diagnostic(
+    tindex: TIndex, ereg: FieldRegistry, parse: Callable[[str], ast.Node]
+) -> None:
+    """emit() must re-raise the parse-time record unchanged, not restamp it
+    with an emit-side cause.
+    """
+    with pytest.raises(QueryError) as exc:
+        emit_ast(parse("asn:notanumber"), tindex, ereg)
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.BAD_NUMBER
+    assert d.cause is Cause.INVALID_INPUT
