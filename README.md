@@ -86,7 +86,7 @@ The public API boundary, as of 0.1.0:
 
 **Internal / not stable** (usable, but subject to change without notice between versions):
 
-- `whoosh_compat.parser.*` — the forked whoosh tagger and filter pipeline. The parser is a fork of whoosh's own query parser, kept close to upstream so it stays diffable and easy to maintain. Because it tracks a third-party codebase, its internals and behavior may change between whoosh-compat releases, even minor ones.
+- `whoosh_compat.parser.*`: the forked whoosh tagger and filter pipeline. The parser is a fork of whoosh's own query parser, kept close to upstream so it stays diffable and easy to maintain. Because it tracks a third-party codebase, its internals and behavior may change between whoosh-compat releases, even minor ones.
 
 The `parser.*` exemption forecloses nothing: it can always be promoted to stable later. In the meantime, if you import directly from `whoosh_compat.parser`, your code may need updates on whoosh-compat releases.
 
@@ -103,28 +103,41 @@ example) needs to check for **two** independent failure modes, not one:
    bad *query* input; a malformed date, an out-of-domain number, or other
    field-kind-specific problem becomes a `Diagnostic` plus an `ErrorLeaf` in
    the tree instead. Calling `emit()` on a tree containing an `ErrorLeaf`
-   raises `QueryEmitError`.
-2. **`emit()` raises `UnsupportedQueryError` or `QueryEmitError`.** This
-   can happen even when `diagnostics` is empty: some query shapes parse
-   cleanly but have no way to execute against tantivy today. The canonical
-   example is a text-field range, `title:[a TO b]`: whoosh supported this,
-   but tantivy-py has no programmatic text-range API (`DIVERGENCES.md`
-   entry 5), so the query parses with `diagnostics == ()` and only fails
-   once `emit()` is called. Catch **both** exception types: they are
-   siblings under `WhooshCompatError`, not parent and child, and both mean
-   "this query cannot run", which for an HTTP host is a 400.
+   raises `QueryError`.
+2. **`emit()` raises `QueryError`.** This can happen even when
+   `diagnostics` is empty: some query shapes parse cleanly but have no way
+   to execute against tantivy today. The canonical example is a text-field
+   range, `title:[a TO b]`: whoosh supported this, but tantivy-py has no
+   programmatic text-range API (`DIVERGENCES.md` entry 5), so the query
+   parses with `diagnostics == ()` and only fails once `emit()` is called.
+   There is a single exception type now: `QueryError` always carries a
+   `Diagnostic` (`err.diagnostic`) describing why.
 
 **An empty `diagnostics` tuple does not, by itself, mean emitting is safe.**
 Both checks matter; a host that only looks at `diagnostics` will still see
-an uncaught `UnsupportedQueryError` bubble up for shapes like the one above.
+an uncaught `QueryError` bubble up for shapes like the one above.
 
-**Error messages are written for the host, not the end user.** Both
-`Diagnostic.message` and the emit-time exception messages may reference
-this library's own documentation (`DIVERGENCES.md` entries) or give
-registry-configuration advice (e.g. "mark it fast=True"). A host showing
-errors to end users should rephrase or filter them; the paperless-ngx
-integration strips the documentation references and rewrites the
-configuration-advice messages, for example.
+**Branch on `Diagnostic.kind` and `Diagnostic.cause`; treat `message` as
+log output, never parse it.** Both `ParseResult.diagnostics` entries and a
+caught `QueryError`'s `.diagnostic` are structured records: `kind` is a
+stable `DiagnosticKind` member a host can switch on (for example, mapping
+`BAD_DATE` to a typed `InvalidDateQuery`), and `cause` is a coarser `Cause`
+a host can use for routing without knowing every `DiagnosticKind`:
+
+| `Cause`         | Meaning                                    | Typical host response       |
+| --------------- | ------------------------------------------- | ---------------------------- |
+| `INVALID_INPUT` | The query text itself is malformed          | HTTP 400                     |
+| `UNSUPPORTED`   | The query is well-formed but this backend can't run it | HTTP 400        |
+| `MISCONFIGURED` | The registry/schema setup is wrong          | Operator alert, not a 400    |
+| `INTERNAL`      | The AST violates an invariant `parse()` would never produce | HTTP 500 |
+
+`Diagnostic.message` (and the `QueryError` exception message, which is the
+same string) carries no stability guarantee and may reword without notice.
+It may also reference this library's own documentation (`DIVERGENCES.md`
+entries) or give registry-configuration advice (e.g. "mark it fast=True").
+Treat it as developer/log output: a host showing errors to end users should
+build its own copy from `kind`/`cause`, not display or parse `message`; the
+paperless-ngx integration does exactly this.
 
 A `Diagnostic`'s severity is fatal-only, and always will be: there is no
 `severity` field, and none is planned. Any diagnostics present means the
@@ -329,8 +342,10 @@ It drives four properties:
   and `normalize()` never raises.
 - `tests/emitter/test_hypothesis_e2e.py::test_emit_never_raises_except_unsupported`:
   parsing a query that produced no diagnostics, then emitting it against a
-  real in-memory tantivy index, never raises anything except the
-  documented `UnsupportedQueryError`.
+  real in-memory tantivy index, never raises a `QueryError` whose
+  `diagnostic.cause` is anything other than `Cause.UNSUPPORTED` (the
+  documented case of a construct that parses cleanly but has no way to
+  execute against tantivy, such as `DIVERGENCES.md` entry 5).
 - `tests/emitter/test_hypothesis_e2e.py::test_normalize_idempotent_on_emitter_registry_grammar`:
   the same `normalize()` property again, against the emitter registry's
   own (smaller, JSON/BOOLEAN_EXISTS-carrying) field vocabulary.

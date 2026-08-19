@@ -874,8 +874,9 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
           through a subpath), not a backend limitation.
         * Any other kind (U64, DATE, DATETIME, and every future
           ``FieldKind`` member until explicitly classified here).
-          Reachable only from a hand-built node: query text gets the
-          parse-time ``UNSUPPORTED_PATTERN`` diagnostic first.
+          Reachable only from a hand-built node: query text gets a
+          parse-time ``PATTERN_ON_NUMERIC``/``PATTERN_ON_BOOLEAN_EXISTS``/
+          ``PATTERN_ON_SUBPATH`` diagnostic first.
         """
         spec = resolved.spec
         if resolved.is_subpath:

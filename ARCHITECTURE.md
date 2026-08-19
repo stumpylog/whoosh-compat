@@ -252,20 +252,27 @@ work is `tantivy_.py`'s `TantivyEmitter(ast.Visitor[tantivy.Query])`, whose
 module docstring explains its one deliberate exception to "build everything
 programmatically" (the JSON-subpath carve-out, §5).
 
-**Errors/diagnostics flow (`errors.py`)**: `Diagnostic(message, kind,
-startchar, endchar, field, raw_value)` is a plain data record; `DiagnosticKind`
-currently has `BAD_DATE`/`BAD_NUMBER`/`TOO_DEEP`/`UNSUPPORTED_PATTERN`
-(`errors.py` is the authority; hosts branching exhaustively on the kind
-should read the enum itself). `field` and `raw_value`
-default to `None` and are populated wherever a `Diagnostic` is constructed
-against a known field (`DateParserPlugin._error()` in `dateparse.py`, and
-both `BAD_NUMBER` sites plus the `UNSUPPORTED_PATTERN` site
-(`_wildcard_kind_diagnostic`) in `default.py`'s `QueryParser`): `field` is a
-`FieldRef` naming the field the diagnostic concerns (always the canonical
-name, since a `Diagnostic` is only ever built once a field has resolved to
-a spec), `raw_value` is the offending text as the user typed it. A host
-that wants a typed exception (e.g. paperless-ngx's `InvalidDateQuery(field,
-value)`) reads these two fields directly instead of regex-parsing
+**Errors/diagnostics flow (`errors.py`)**: `Diagnostic` is a frozen,
+keyword-only dataclass (`kind`, `cause`, `message`, `startchar`, `endchar`,
+`field`, `field_kind`, `raw_value`, `divergence`). `DiagnosticKind` is an
+18-member enum, partitioned by `PARSE_KINDS`/`EMIT_KINDS` (`errors.py` is
+the authority; hosts branching exhaustively on the kind should read the
+enum itself). Every member maps to a `Cause` (`INVALID_INPUT`/
+`UNSUPPORTED`/`MISCONFIGURED`/`INTERNAL`) via `cause_for()`, which a host
+uses for coarse routing without knowing every `DiagnosticKind`. `field` and
+`raw_value` default to `None` and are populated wherever a `Diagnostic` is
+constructed against a known field (`DateParserPlugin._error()` in
+`dateparse.py`, and the `BAD_NUMBER` and pattern-diagnostic sites
+(`_wildcard_kind_diagnostic`, which now reports `PATTERN_ON_NUMERIC`,
+`PATTERN_ON_BOOLEAN_EXISTS`, or `PATTERN_ON_SUBPATH` depending on the
+field's kind) in `default.py`'s `QueryParser`): `field` is a `FieldRef`
+naming the field the diagnostic concerns (always the canonical name, since
+a `Diagnostic` is only ever built once a field has resolved to a spec),
+`raw_value` is the offending text as the user typed it. `divergence`, when
+set, is the `DIVERGENCES.md` entry number the diagnostic corresponds to, so
+a host can cross-reference without reading prose. A host that wants a typed
+exception (e.g. paperless-ngx's `InvalidDateQuery(field, value)`) reads
+`kind`/`cause`/`field`/`raw_value` directly instead of regex-parsing
 `message`, which stays human-readable and can change wording without
 notice; a host that just wants the field's display name calls
 `str(diag.field)`. Parsing never raises for bad input:
@@ -276,10 +283,17 @@ mirrors Whoosh's own leniency, where an unparseable date became a null query
 rather than an exception. `whoosh_compat.parse()` surfaces the accumulated
 list as `ParseResult.diagnostics`, which a caller should check before
 emitting (paperless-ngx, for example, maps a non-empty diagnostics list to
-an HTTP 400). Emitting, by contrast, *does* raise: `QueryEmitError` when
-asked to emit an `ErrorLeaf`, `UnsupportedQueryError` for a construct that's
+an HTTP 400). Emitting, by contrast, *does* raise: a single `QueryError`,
+always carrying the `Diagnostic` describing why (`err.diagnostic`), whether
+the cause is an `ErrorLeaf` reaching `emit()` or a construct that's
 parseable but genuinely inexecutable against tantivy (text-field
-`TermRange`, see §4). Both inherit `WhooshCompatError`.
+`TermRange`, see §4). `QueryError` inherits `WhooshCompatError`.
+
+(`tests/differential/allowlist.py`'s `DivergenceKind` enum is unrelated to
+`Diagnostic.divergence`: "divergence" now names three distinct concepts in
+this repo, the differential-testing allowlist classification, the
+`DIVERGENCES.md` entry numbers, and the `Diagnostic.divergence` field that
+cross-references the latter.)
 
 ## 4. Key invariants
 
@@ -434,7 +448,7 @@ is worth restating as an invariant because it's load-bearing for callers.
 eagerly, see `FieldRegistry.__init__`). Malformed dates, numbers, or other
 field-kind-specific parse failures become `Diagnostic`s plus `ErrorLeaf`
 AST nodes. Only `emit()` on a tree containing an `ErrorLeaf` raises
-(`QueryEmitError`), by which point the diagnostics list already told the
+(`QueryError`), by which point the diagnostics list already told the
 caller not to do that.
 
 **Query nesting is capped, so pathological input can't turn "never raises"
@@ -510,8 +524,9 @@ span covers only the wildcard *marker* character, not the merged pattern
 `WildcardPlugin.do_wildcards` concatenates adjacent text nodes' text into
 the wildcard node without ever widening its char range. A host using
 spans for error highlighting should expect single-character spans for
-these two leaf types (and for the `UNSUPPORTED_PATTERN` diagnostics built
-from them; their `raw_value` does carry the full pattern as typed).
+these two leaf types (and for the `PATTERN_ON_NUMERIC`/
+`PATTERN_ON_BOOLEAN_EXISTS`/`PATTERN_ON_SUBPATH` diagnostics built from
+them; their `raw_value` does carry the full pattern as typed).
 
 ## 5. Extension points
 

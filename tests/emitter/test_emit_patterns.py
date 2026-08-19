@@ -388,7 +388,8 @@ def test_pattern_on_non_text_kind_raises_at_emit(
     # against a numeric or date column's encoded term bytes and silently
     # matches nothing, so every non-TEXT/KEYWORD kind must end in a
     # documented emit-time error instead. Query text can't reach these
-    # cells (the parser's UNSUPPORTED_PATTERN diagnostic fires first);
+    # cells (the parser's PATTERN_ON_NUMERIC/PATTERN_ON_BOOLEAN_EXISTS/
+    # PATTERN_ON_SUBPATH diagnostic fires first);
     # only a hand-built node can, which is exactly why the emit-time
     # dispatch has to be closed over the kind axis on its own.
     with pytest.raises(QueryError) as exc:
