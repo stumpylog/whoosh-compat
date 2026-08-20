@@ -89,6 +89,9 @@ def test_now_compact(reg: FieldRegistry) -> None:
     assert isinstance(r, ast.DateRange)
     assert r.lo is not None
     assert (BASE.astimezone(UTC) - r.lo).days == 7
+    # The upper bound is what makes this a seven-day window rather than the
+    # instant seven days ago: a lower bound alone cannot tell the two apart.
+    assert r.hi == BASE.astimezone(UTC)
 
 
 def test_whoosh_plusminus(reg: FieldRegistry) -> None:
@@ -307,11 +310,19 @@ def test_datetime_boost_preserved(reg: FieldRegistry) -> None:
     ],
 )
 def test_dayname_keywords(reg: FieldRegistry, query: str, expected_date: datetime) -> None:
+    # A weekday keyword names a whole day, so both bounds are pinned: the
+    # lower bound alone is equally consistent with the instant that day
+    # starts at.
     r = dparse(query, reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(
         expected_date.year, expected_date.month, expected_date.day, tzinfo=BERLIN
     ).astimezone(UTC)
+    assert r.hi == (
+        datetime(expected_date.year, expected_date.month, expected_date.day, tzinfo=BERLIN)
+        + timedelta(days=1)
+    ).astimezone(UTC)
+    assert not r.incl_hi
 
 
 # --- Time12 grammar (parser/dateparse.py:647-657) ---------------------------
@@ -371,18 +382,24 @@ def test_this_year(reg: FieldRegistry) -> None:
     r = dparse("added:'this year'", reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 1, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == datetime(2027, 1, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert not r.incl_hi
 
 
 def test_this_month(reg: FieldRegistry) -> None:
     r = dparse("added:'this month'", reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 8, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == datetime(2026, 9, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert not r.incl_hi
 
 
 def test_today(reg: FieldRegistry) -> None:
     r = dparse("added:today", reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 8, 4, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == datetime(2026, 8, 5, tzinfo=BERLIN).astimezone(UTC)
+    assert not r.incl_hi
 
 
 def test_now_keyword(reg: FieldRegistry) -> None:
@@ -439,6 +456,8 @@ def test_tomorrow(reg: FieldRegistry) -> None:
     r = dparse("added:tomorrow", reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 8, 5, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == datetime(2026, 8, 6, tzinfo=BERLIN).astimezone(UTC)
+    assert not r.incl_hi
 
 
 # --- dmy/mdy/ymd/ydm and month-name sequences (English.setup's self.dmy) ---
@@ -490,10 +509,15 @@ def test_compact_numeric_datetime(reg: FieldRegistry) -> None:
 
 def test_compact_numeric_datetime_progressive_partial(reg: FieldRegistry) -> None:
     # progressive=True: a prefix of the simple sequence (year+month only)
-    # still matches.
+    # still matches, and spans the whole month it names. Both bounds are
+    # pinned for the same reason as the 8-digit day above: a lower bound
+    # alone cannot tell a month-wide window from the instant it starts at.
     r = dparse("added:'202003'", reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2020, 3, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == datetime(2020, 4, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert r.incl_lo
+    assert not r.incl_hi
 
 
 def test_compact_numeric_datetime_full_width_is_a_single_second_instant(
@@ -948,6 +972,8 @@ def test_rfc3339_date_only_field_z_designator_is_a_no_op(reg: FieldRegistry) -> 
     r = dparse("created:'2026-08-04T00:00:00Z'", reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 8, 4, tzinfo=UTC)
+    assert r.hi == datetime(2026, 8, 5, tzinfo=UTC)
+    assert not r.incl_hi
 
 
 def test_trailing_z_without_preceding_t_is_not_treated_as_utc_designator(
@@ -1150,6 +1176,10 @@ def test_range_both_sides_are_periods_cannot_combine(reg: FieldRegistry) -> None
     r = dparse("added:['previous month' TO 'this month']", reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2026, 7, 1, tzinfo=BERLIN).astimezone(UTC)
+    # The upper side is the other half of the non-combine branch: it takes
+    # "this month"'s end, not its start, so the range spans both months.
+    assert r.hi == datetime(2026, 9, 1, tzinfo=BERLIN).astimezone(UTC)
+    assert not r.incl_hi
 
 
 @pytest.mark.parametrize(
@@ -1334,8 +1364,14 @@ def test_torange_combo_basic(reg: FieldRegistry) -> None:
     r = dparse("added:'3pm to 5pm'", reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo is not None
+    assert r.hi is not None
     lo_local = r.lo.astimezone(BERLIN)
     assert lo_local.hour == 15
+    # The upper side is the end of the 5pm hour, not its start: each side of
+    # a "to" combo is itself an hour-wide window, and the range takes the
+    # far edge of the second one.
+    assert r.hi.astimezone(BERLIN).hour == 18
+    assert not r.incl_hi
 
 
 def test_torange_combo_first_side_fails_whole_thing_fails(reg: FieldRegistry) -> None:
