@@ -31,13 +31,28 @@ Repository = "https://github.com/stumpylog/whoosh-compat"
 tantivy = ["tantivy>=0.26.0"]
 
 [tool.hatch.build.targets.sdist]
-# `.superpowers/` holds AI-workflow scratch (task briefs, reports, raw review
-# diffs) that has no business in a published sdist. It is also gitignored, but
-# hatchling only reads the repository-root ignore file - the nested
-# `.superpowers/sdd/.gitignore` that git honors is invisible to it, and no
-# ignore file at all applies when building from an unpacked tree rather than a
-# checkout. This exclude is what holds in every case.
-exclude = [".superpowers"]
+# Everything here is AI-workflow material rather than library material, and
+# publication is the one step that cannot be quietly amended: excluded content
+# can be added to a later sdist, published content cannot be recalled.
+#
+#   .superpowers        task briefs, agent reports, raw review diffs. Also
+#                       gitignored, but hatchling only reads the
+#                       repository-root ignore file - the nested
+#                       `.superpowers/sdd/.gitignore` that git honors is
+#                       invisible to it, and no ignore file applies at all
+#                       when building from an unpacked tree rather than a
+#                       checkout. This exclude is what holds in every case.
+#   docs/superpowers    plans, specs and raw review-findings reports. The
+#                       findings files are largely about the *host* project
+#                       (paperless-ngx), including write-ups of unfixed
+#                       defects in another codebase; shipping those inside a
+#                       public artifact should be a deliberate act, not a
+#                       packaging default. The durable design rationale is in
+#                       ARCHITECTURE.md and DIVERGENCES.md, which do ship.
+#   .claude             agent skills for working on this repository.
+#
+# All three stay in git; this is about what gets uploaded, not what is kept.
+exclude = [".superpowers", "docs/superpowers", ".claude"]
 
 [dependency-groups]
 dev = [
