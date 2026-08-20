@@ -437,9 +437,12 @@ def fill_in(at: DateLike, basedate: datetime,
     ``parser.dateparse.DateParserPlugin``). That combination only arises
     from a period keyword written together with a time of day
     ("previous week 3pm", "3pm previous week"): a period names a span, so a
-    time of day on it names nothing. Rejecting it in both word orders is a
-    deliberate divergence from whoosh, which crashes on one order and
-    silently discards the time on the other (see DIVERGENCES.md).
+    time of day on it names nothing. Real whoosh has nothing to diverge
+    from here -- it has no ``previous week``/``previous quarter`` at all,
+    and returns ``None`` for both word orders -- so rejecting them
+    constrains only whoosh-compat's own extension, which previously
+    crashed on one order and silently discarded the time on the other
+    (see DIVERGENCES.md entry 52).
     """
 
     if isinstance(at, datetime):
