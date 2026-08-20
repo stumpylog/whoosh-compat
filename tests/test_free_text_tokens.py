@@ -16,7 +16,9 @@ import pytest
 
 import whoosh_compat as wc
 from whoosh_compat.ast import Multitoken
+from whoosh_compat.ast import analyze
 from whoosh_compat.ast import free_text_tokens
+from whoosh_compat.ast import normalize
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
@@ -304,3 +306,32 @@ def test_multitoken_first_still_takes_only_the_first_token() -> None:
     assert free_text_tokens(result.ast, registry=freg, fields=("content",), analyzed=False) == (
         "alpha-beta",
     )
+
+
+def test_an_already_analyzed_tree_cannot_answer_the_polarity_question(
+    stem_reg: FieldRegistry,
+) -> None:
+    # Pins the documented precondition on ``node`` (and DIVERGENCES.md entry
+    # 23's qualifier): the guarantee is about the tree as parsed. A caller
+    # who analyzes first hands over a tree where the AndNot has already
+    # collapsed onto its negative side, and no later walk can tell that node
+    # apart from one the user asked for. Both modes degrade, and the raw
+    # mode degrades twice over: it returns *analyzed* text, having no other
+    # left to return. Not guarded in code (an analyzed tree is structurally
+    # an ordinary tree); pinned here so the precondition is not mistaken for
+    # a caveat nobody checked.
+    fields = ("content", "title")
+    result = wc.parse("the ANDNOT secret", registry=stem_reg, default_fields=["content", "title"])
+    collapsed = analyze(normalize(result.ast), stem_reg)
+    assert free_text_tokens(collapsed, registry=stem_reg, fields=fields) == ("secret",)
+    assert free_text_tokens(collapsed, registry=stem_reg, fields=fields, analyzed=False) == (
+        "secret",
+    )
+
+    stemmed = wc.parse("universities", registry=stem_reg, default_fields=["content", "title"])
+    assert free_text_tokens(
+        analyze(normalize(stemmed.ast), stem_reg),
+        registry=stem_reg,
+        fields=fields,
+        analyzed=False,
+    ) == ("univers",)

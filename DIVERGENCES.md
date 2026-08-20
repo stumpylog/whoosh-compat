@@ -870,13 +870,22 @@ parse-then-emit pipeline).
     a host a term to search for that the user had explicitly excluded. It
     now walks the normalized-but-unanalyzed tree and analyzes each
     contributing leaf on its own, so polarity comes from the query as
-    written and no analysis outcome can reintroduce a negated term. Any
-    future API answering a question about polarity, intent, or "which words
-    did the user type" must take the same route: the analyzed tree cannot
-    answer those questions, and it is not going to be changed so that it
-    can, since that would mean giving up the timing-independence this entry
-    chose. Test reference: `tests/test_free_text_tokens.py`'s
-    `test_negated_terms_never_survive_an_analysis_collapse`.
+    written and no analysis outcome can reintroduce a negated term *into a
+    tree it is given as parsed*. That qualifier is the whole guarantee: a
+    caller who analyzes the tree itself before calling still gets the old
+    answer, because the collapse has already happened and no later walk can
+    see it. `free_text_tokens()` documents that as a precondition on its
+    `node` parameter (and notes that `analyzed=False` on such a tree returns
+    analyzed text, having no raw text left to return) rather than guarding
+    on it, since an analyzed tree is structurally indistinguishable from any
+    other valid tree. Any future API answering a question about polarity,
+    intent, or "which words did the user type" must take the same route and
+    carry the same precondition: the analyzed tree cannot answer those
+    questions, and it is not going to be changed so that it can, since that
+    would mean giving up the timing-independence this entry chose. Test
+    references: `tests/test_free_text_tokens.py`'s
+    `test_negated_terms_never_survive_an_analysis_collapse` and
+    `test_an_already_analyzed_tree_cannot_answer_the_polarity_question`.
 
 24. **An all-zero-token quoted phrase parses to a real empty-words `Phrase`
     object in real whoosh, but is dropped entirely by whoosh-compat's

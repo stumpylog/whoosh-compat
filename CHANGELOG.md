@@ -102,13 +102,17 @@ material; they are permanently documented, each with its rationale, in
   again: analysis is not generally idempotent (a stemmer maps
   `universities` to `univers` and `univers` to `univ`), so re-analyzing
   analyzed output searches a stem the index does not contain. The mode
-  never consults the analyzer, so a value the analyzer would drop entirely
-  (an all-stopword term) still contributes its raw text, and that text can
-  contain characters a re-parse would read as grammar (a colon, a bracket)
+  never consults the analyzer. Which *nodes* contribute is unchanged
+  (negation, patterns, kinds and dedupe are all structural), but the text
+  differs in three ways: an all-stopword term still contributes its raw text
+  (`the` -> `('the',)`, versus `()` analyzed), a phrase contributes one entry
+  rather than one per word (`"tax reports"` -> `('tax reports',)`), and a
+  term the analyzer would split contributes one entry (`alpha-beta` ->
+  `('alpha-beta',)`). So an entry can contain whitespace and punctuation,
+  including characters a re-parse would read as grammar (a colon, a bracket)
   even though the query grammar around them is gone: quote or escape before
-  re-parsing. Every other rule, negation included, is structural and
-  identical in both modes. The default is `analyzed=True`, so existing
-  callers are unaffected.
+  re-parsing. The default is `analyzed=True`, so existing callers are
+  unaffected.
 
 ### Fixed
 
@@ -122,7 +126,10 @@ material; they are permanently documented, each with its rationale, in
   walks the normalized-but-unanalyzed tree and analyzes each contributing
   leaf on its own, so polarity comes from the query as written. A host
   building a secondary matching clause from these tokens was showing
-  documents the user had asked to exclude.
+  documents the user had asked to exclude. The guarantee is about the tree
+  as parsed: `node` now documents a precondition, since a caller who runs
+  `analyze()` itself before calling hands over a tree the collapse has
+  already happened in.
 - `FieldSpec(subpaths=...)` rejects a sequence that is neither a tuple nor a
   mapping instead of passing it to `dict()`. A list of names was read as a
   sequence of key/value pairs, so `subpaths=['ab', 'cd']` silently became

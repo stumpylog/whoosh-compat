@@ -194,18 +194,36 @@ onto several default fields counts once. Tokens are the field analyzer's
 output verbatim, never re-split; see the function's docstring for the
 full contract.
 
+Pass the tree **as parsed** (`ParseResult.ast`). The negation rule is why:
+`analyze()` deliberately collapses an `AndNot` whose positive side
+analyzed to nothing, leaving the negative side standing alone as an
+ordinary positive node (`DIVERGENCES.md` entry 23), so a tree you analyzed
+yourself before calling no longer records what the user excluded, and no
+walk can recover it.
+
 Pass `analyzed=False` to get the raw text each contributing leaf was
 parsed from instead of the analyzer's output. Do that whenever the tokens
 are going back into a parser that will analyze them again: analysis is
 not generally idempotent (a stemmer maps `universities` to `univers` and
 then `univers` to `univ`), so re-analyzing analyzed output searches for
 something the index does not contain. In that mode the analyzer is never
-consulted, so a value the analyzer would drop entirely (an all-stopword
-term) still contributes its raw text, and the text can contain characters
-a *re-parse* would read as grammar (a colon, a bracket) even though the
-query grammar around them is gone: quote or escape before re-parsing.
-Every other rule, negation included, is structural and identical in both
-modes.
+consulted. Which *nodes* contribute is unchanged (negation, patterns,
+kinds and dedupe are all structural), but the text differs in three ways
+worth sizing for:
+
+| query | `analyzed=True` | `analyzed=False` |
+| --- | --- | --- |
+| `the` (a stopword) | `()` | `('the',)` |
+| `"tax reports"` | `('tax', 'report')` | `('tax reports',)` |
+| `alpha-beta` (analyzer splits it) | `('alpha', 'beta')` | `('alpha-beta',)` |
+
+So an entry in this mode can contain whitespace and punctuation, and the
+number of entries is the number of contributing leaves rather than of
+words. It can also contain characters a *re-parse* would read as grammar
+(a colon, a bracket) even though the query grammar around them is gone:
+quote or escape before re-parsing, and note that a whole-token filter
+(`\w+`) over these entries drops every hyphenated, dotted or
+quoted-phrase term outright, because the text is untokenized.
 
 **Cap query length at the host boundary.** Parse time is quadratic in the
 length of a long run of word characters containing no `:` (the fieldname

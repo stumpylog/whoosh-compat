@@ -896,12 +896,14 @@ def free_text_tokens(
 
     * ``Not`` subtrees and ``AndNot`` negative sides contribute nothing: a
       term the user excluded must not resurface in a matching clause. This
-      holds unconditionally, which is why the walk runs on the tree as
-      parsed and analyzes leaf by leaf instead of analyzing the tree first:
-      whole-tree :func:`analyze` drops an operand whose every token the
-      analyzer consumed (DIVERGENCES.md entry 23), so an ``AndNot`` whose
-      positive side was all stopwords would collapse to its own *negative*
-      side and hand back a bare positive term the user had excluded.
+      holds for every shape of the tree *as parsed*, which is why the walk
+      runs on that tree and analyzes leaf by leaf instead of analyzing the
+      tree first: whole-tree :func:`analyze` drops an operand whose every
+      token the analyzer consumed (DIVERGENCES.md entry 23), so an
+      ``AndNot`` whose positive side was all stopwords would collapse to its
+      own *negative* side and hand back a bare positive term the user had
+      excluded. The rule is therefore conditional on ``node`` being the tree
+      as parsed; see ``node``'s precondition below.
     * ``AndMaybe`` and ``Require`` contribute both sides (both express
       positive intent, whether or not they score).
     * ``Boosted`` is transparent; ``And``/``Or`` recurse.
@@ -914,7 +916,20 @@ def free_text_tokens(
       counts once (dedupe is by token text).
 
     Args:
-        node: the AST to collect from (typically ``ParseResult.ast``).
+        node: the AST to collect from. **Must be the tree as parsed**
+            (``ParseResult.ast``, or any tree that has not been through
+            :func:`analyze`); :func:`normalize` having been applied is fine,
+            and is what ``parse()`` already does. Passing an
+            already-analyzed tree is not rejected, but it cannot answer the
+            questions this function asks, and both modes degrade silently:
+            polarity is gone, so a negated term can come back out (that is
+            entry 23's collapse, already applied, and no walk can undo it),
+            and the raw text is gone, so ``analyzed=False`` returns
+            *analyzed* text in flat contradiction of its own name. There is
+            no guard because there is nothing reliable to guard on: an
+            analyzed tree is structurally a valid tree, and the ``analyzed``
+            flags it carries are ``compare=False`` provenance, not a
+            trustworthy input contract.
         registry: resolves field names and provides analyzers.
         fields: the field names (aliases allowed) whose leaves count as
             free text. Must be non-empty, and every name must resolve to a
@@ -927,19 +942,34 @@ def free_text_tokens(
             that will analyze them itself: analysis is not generally
             idempotent (a stemmer maps ``universities`` to ``univers`` and
             ``univers`` to ``univ``), so re-analyzing analyzed output
-            searches for something the index does not contain. Two
-            consequences follow from "the analyzer is never consulted",
-            and both are deliberate:
+            searches for something the index does not contain.
+
+            Which NODES contribute is structural and identical in both
+            modes, with the single exception of the zero-token leaf below;
+            polarity, patterns, kinds and dedupe never vary. What differs is
+            the text: three differences a caller sizing its output should
+            expect, and one hazard. All four are deliberate consequences of
+            "the analyzer is never consulted":
 
             * A leaf whose analysis would be empty (an all-stopword value)
-              still contributes its raw text. Deciding *membership* by the
+              still contributes its raw text: ``the`` yields ``('the',)``
+              here and ``()`` analyzed. Deciding *membership* by the
               analyzer while refusing its *output* would be a half-analysis
               that this mode's whole contract denies, and it would make the
               result depend on a stopword list the caller opted out of. The
               re-parse downstream applies that list once, in its own index's
-              terms, which is where it belongs. This is the only rule above
-              that ``analyzed=False`` changes; polarity, patterns, kinds and
-              dedupe are all structural and behave identically.
+              terms, which is where it belongs. This is the one case where
+              the two modes disagree about a node rather than about text.
+            * A ``Phrase`` contributes its raw text as ONE entry, not one
+              per word: ``"tax reports"`` yields ``('tax reports',)`` here
+              and ``('tax', 'report')`` analyzed. Splitting it would be this
+              function tokenizing, which it does not do in either mode.
+            * A ``Term`` whose analyzer splits it contributes ONE entry
+              here: ``alpha-beta`` yields ``('alpha-beta',)`` here and
+              ``('alpha', 'beta')`` analyzed (whatever the field's
+              ``Multitoken`` policy made of it). So an entry in this mode
+              can contain whitespace and punctuation, and the count of
+              entries is the count of leaves, not of words.
             * Raw text has not been through tokenization, so unlike the
               analyzed mode it can still contain characters (a colon, a
               hyphen, a bracket) that a *re-parse* would read as grammar,

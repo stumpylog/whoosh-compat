@@ -396,7 +396,14 @@ any API answering a question about intent rather than about matching must
 walk the normalized-but-unanalyzed tree and analyze whichever leaves it
 decides to keep, one leaf at a time. `ast.free_text_tokens()` is the one
 such API today and does exactly that (`_leaf_analyzed_texts`); it is the
-model for any future one.
+model for any future one. The corollary binds the *caller* too: such an API
+can only answer for the tree it is handed, so passing one that has already
+been through `analyze()` silently forfeits the guarantee, the collapse
+having already happened where no later walk can see it.
+`free_text_tokens()` states that as a precondition on its `node` parameter
+rather than guarding on it: an analyzed tree is structurally
+indistinguishable from any other valid tree, and the `analyzed` flags it
+carries are `compare=False` provenance, not an input contract.
 
 **The analyzer contract carries no positions.** `FieldSpec.analyzer` is typed
 `Callable[[str], list[str]] | None`: it returns tokens in order, with no
