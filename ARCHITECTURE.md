@@ -325,6 +325,7 @@ one path that probes *up front* rather than on failure, because tantivy's
 no build-time failure to catch, and without the probe a drifted field would
 build a well-formed query that dies in the searcher, outside `emit`'s
 `QueryError` contract.
+
 `field` and
 `raw_value` default to `None` and are populated wherever a `Diagnostic` is
 constructed against a known field (`DateParserPlugin._error()` in
@@ -538,13 +539,16 @@ silently.
 
 **Diagnostics never raise mid-parse.** See §3's error-flow paragraph: this
 is worth restating as an invariant because it's load-bearing for callers.
-`whoosh_compat.parse()` always returns a `ParseResult`, never raises for bad
-*query* input (as opposed to bad *registry construction*, which does raise
-eagerly, see `FieldRegistry.__init__`). Malformed dates, numbers, or other
-field-kind-specific parse failures become `Diagnostic`s plus `ErrorLeaf`
-AST nodes. Only `emit()` on a tree containing an `ErrorLeaf` raises
-(`QueryError`), by which point the diagnostics list already told the
-caller not to do that.
+`whoosh_compat.parse()` always returns a `ParseResult`, never reporting bad
+*query* input by raising (as opposed to bad *registry construction*, which
+does raise eagerly, see `FieldRegistry.__init__`). Malformed dates, numbers,
+or other field-kind-specific parse failures become `Diagnostic`s plus
+`ErrorLeaf` AST nodes. The one exception `parse()` can raise is
+`QueryParserError`, and it never means the query was bad: it is the
+backstop's report of a defect in this library, and the compounding nesting
+shape described below is the known way to reach it from a query string. Only
+`emit()` on a tree containing an `ErrorLeaf` raises `QueryError`, by which
+point the diagnostics list already told the caller not to do that.
 
 **Query nesting is capped, so pathological input can't turn "never raises"
 into a `RecursionError`.** A well-formed but absurdly deep query (thousands

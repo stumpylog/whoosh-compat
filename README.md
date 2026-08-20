@@ -403,7 +403,7 @@ strategy covering the whole supported query language (README's syntax
 table above): nested groups, every operator, wildcards/ranges/phrases/
 comma-lists/boosts/JSON subpaths, and deliberately placed zero-token
 values (an all-stopword term/phrase, see `strategies.ZERO_TOKEN_WORDS`).
-It drives four properties:
+It drives five properties:
 
 - `tests/differential/test_hypothesis.py::test_fuzz_grammar_matches_oracle`:
   the same AST-shape parity check as the static corpus (layer 2 above), but
