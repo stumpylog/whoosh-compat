@@ -265,6 +265,14 @@ material; they are permanently documented, each with its rationale, in
   does not make one instance safe to call `parse()` on concurrently from
   multiple threads, which the class docstrings now say explicitly.
 
+- `ast.Visitor.visit()` dispatched on the exact concrete class name only,
+  so a `Node` subclass with no `visit_<its-own-name>` method of its own
+  (e.g. a caller-defined specialization of `Term`) fell straight through
+  to `generic_visit` and raised `NotImplementedError`, converting to
+  `AST_INVALID_SHAPE` at the emitter -- an internal error, HTTP 500 -- for
+  what is otherwise a structurally ordinary node. It now walks
+  `type(node).__mro__` up to (and including) `Node`, so a subclass
+  dispatches through its nearest ancestor's `visit_*` method.
 - `FieldRegistry.exists_strategy(spec)` keyed its answer purely by
   `spec.name`, so a spec this registry never registered returned `None`
   -- indistinguishable from "this registry's own field of that name has

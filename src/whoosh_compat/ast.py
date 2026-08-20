@@ -1152,15 +1152,32 @@ class Visitor(Generic[T]):
     def visit(self, node: Node) -> T:
         """Dispatch to the appropriate visit_* method based on node type.
 
+        Walks ``type(node).__mro__`` rather than dispatching on the exact
+        concrete class name alone: a ``Node`` subclass with no
+        ``visit_<its-own-name>`` method of its own (e.g. a caller-defined
+        specialization of ``Term``) still reaches its nearest ancestor's
+        visitor method instead of falling straight through to
+        ``generic_visit``. Without this, any such subclass -- a
+        structurally ordinary, legitimate node -- was indistinguishable
+        from a genuinely unhandled shape, converting to
+        ``AST_INVALID_SHAPE`` at the emitter (an internal error, HTTP 500)
+        rather than being visited normally. The walk stops at (and
+        includes) ``Node`` itself; a class not descended from ``Node`` at
+        all still falls through to ``generic_visit``, unchanged.
+
         Args:
             node: The AST node to visit.
 
         Returns:
             The result of the visit method.
         """
-        method_name = "visit_" + type(node).__name__.lower()
-        method = getattr(self, method_name, self.generic_visit)
-        return method(node)
+        for cls in type(node).__mro__:
+            method = getattr(self, "visit_" + cls.__name__.lower(), None)
+            if method is not None:
+                return method(node)
+            if cls is Node:
+                break
+        return self.generic_visit(node)
 
     def generic_visit(self, node: Node) -> T:
         """Called for nodes without a specific visit_* method.

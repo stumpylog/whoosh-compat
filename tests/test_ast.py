@@ -285,3 +285,16 @@ class TestVisitor:
         with pytest.raises(NotImplementedError) as exc_info:
             Counter().visit(p)
         assert "Phrase" in str(exc_info.value)
+
+    def test_visitor_dispatch_walks_mro_for_node_subclass(self) -> None:
+        # A Node subclass with no visit_<exact-class-name> method of its own
+        # must still dispatch through its nearest ancestor's visit_* method
+        # (here, Term's), not fall straight to generic_visit: the previous
+        # exact-class-name dispatch treated any such subclass as completely
+        # unhandled, turning a legitimate Term specialization into
+        # AST_INVALID_SHAPE -> HTTP 500 at the emitter.
+        class MyTerm(Term):
+            pass
+
+        t = MyTerm(field=None, text="hello")
+        assert Counter().visit(t) == 1
