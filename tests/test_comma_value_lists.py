@@ -82,10 +82,10 @@ def test_double_quoted_comma_values_are_never_split_even_before_a_known_field(
 ) -> None:
     # The more common user spelling of "quote the value" takes a different
     # grammar path than the single-quoted case above (a double-quoted value
-    # is a Phrase, not a Term -- PhrasePlugin's tagging regex, not
-    # RangePlugin's/the bare-word grammar's), but the outcome the
-    # comma_values feature cares about is the same: the comma stays inside
-    # one value, and no clause split happens even though "added:" follows
-    # it.
+    # is tagged by PhrasePlugin and becomes a Phrase, not a Term; the
+    # single-quoted case above is tagged by SingleQuotePlugin instead), but
+    # the outcome the comma_values feature cares about is the same: the
+    # comma stays inside one value, and no clause split happens even though
+    # "added:" follows it.
     t = parse('tag:"foo,added:2020-01-01"', reg)
     assert t == ast.Phrase(field=FieldRef("tag"), text="foo,added:2020-01-01")

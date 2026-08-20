@@ -2,25 +2,29 @@
 
 Real whoosh's ``English.units`` table (parser/dateparse.py) recognizes each
 of these abbreviated unit words as a synonym for the corresponding full unit
-(years/months/weeks/hours/minutes/seconds) inside a bare or bracketed
-``-<n><unit>`` relative offset, and whoosh-compat parses the *same* offset to
-the *same* instant on both sides -- verified directly against the pinned
-oracle for every unit below, bare and bracketed alike (see DIVERGENCES.md
-entry 25's correction: an earlier claim that a bare ``-<n><unit>`` spelling
-like ``added:-2yrs`` was a whoosh-compat-only extension was wrong; only the
+(years/months/weeks/hours/minutes/seconds) inside a ``-<n><unit>`` relative
+offset. For the *bare* (non-bracketed) spelling, whoosh-compat's offset
+resolves to the same instant real whoosh's does -- verified directly against
+the pinned oracle for every unit below (see DIVERGENCES.md entry 25's
+correction: an earlier claim that a bare ``-<n><unit>`` spelling like
+``added:-2yrs`` was a whoosh-compat-only extension was wrong; only the
 ``now±<n><unit>`` spelling is). The differential corpus
-(tests/differential/corpus_paperless.txt) carries several of these
+(tests/differential/corpus_paperless.txt) also carries several of these
 spellings as *bracketed range bounds* (``created:[-999yrs to now]``), but
-those lines are allowlisted under DIVERGENCES.md entry 12 (a real,
-unrelated divergence about timezone handling in range bounds) with an
-*inverted* assertion (the differential harness checks the trees DIFFER,
-not that they match) -- so despite superficially "passing", nothing in the
-differential suite actually confirms those bracketed spellings resolve to
-the *correct* offset either. Nothing in this repo pinned, in one place, that
-each abbreviation resolves to the *correct* offset (as opposed to, say,
+that is a different, unresolved comparison, not a bracketed instance of the
+one above: those lines are allowlisted under DIVERGENCES.md entry 12
+(LocalDateParser's tz-reversal override not reaching range bounds), and the
+*whole bracketed query* genuinely diverges between the two sides there
+(confirmed directly: the emitted range's ``now`` bound itself differs by two
+hours, whoosh-compat's local-tz ``08:30Z`` vs the oracle's ``10:30Z``), even
+though the offset arithmetic feeding the lower bound lands on the same
+instant either way. Nothing in this repo pinned, in one place, that each
+abbreviation's *offset* resolves to the correct instant (as opposed to, say,
 "wks" silently being read as "weeks" but "mos" being misread as "minutes").
 This is the direct, human-readable pin for that, for the bare (non-bracketed)
-spelling, both quoted and unquoted.
+spelling, both quoted and unquoted; the bracketed-query-level divergence
+(entry 12) is out of scope here and is not claimed to be resolved by these
+tests.
 """
 
 from __future__ import annotations

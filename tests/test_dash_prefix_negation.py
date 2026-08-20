@@ -2,7 +2,7 @@
 
 Real whoosh's default plugin list has no bare-minus negation plugin either
 (``-term`` negation is a query-string convention some other systems use, not
-part of whoosh's own default ``QueryParser`` grammar); ``GroupPlugin``'s
+part of whoosh's own default ``QueryParser`` grammar); ``OperatorsPlugin``'s
 ``NotGroup``/``PrefixOperator`` only fires for the ``NOT`` keyword. A leading
 ``-`` on an unfielded term is therefore just a character in the term text
 (separator stripping, if any, is an analyzer-time decision, not a parse-time
