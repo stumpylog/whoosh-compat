@@ -1095,8 +1095,9 @@ parse-then-emit pipeline).
     case, `tests/emitter/test_emit_ranges.py`'s
     `test_text_range_divergence_varies_by_field_kind` (`json-subpath`).
 
-31. **A query nested past 200 parenthesization levels is diagnosed at parse
-    time instead of crashing with an uncontrolled `RecursionError` (issue
+31. **A query nested past 200 levels -- whether by parentheses or by a chain
+    of non-merging operators -- is diagnosed at parse time instead of
+    crashing with an uncontrolled `RecursionError` (issue
     #31).** Real whoosh has no nesting cap at all: it recurses through its
     own query-building traversal the same way this parser's fork did, and
     both were confirmed directly to start `RecursionError`-ing on bare
@@ -1111,15 +1112,31 @@ parse-then-emit pipeline).
     "never raises for query input" invariant intact regardless of the
     interpreter's recursion limit.
 
+    Parentheses are not the only source of depth, so the cap is not enforced
+    only on them. `InfixOperator.replace_self()` builds one new group per
+    non-merging infix operator, so a flat, paren-free chain of `ANDNOT` /
+    `ANDMAYBE` / `REQUIRE` nests one level per operator ("a ANDNOT b ANDNOT
+    c" -> "((a ANDNOT b) ANDNOT c)"), which real whoosh also builds and also
+    `RecursionError`s on, at ~991 operands here before the cap was extended.
+    `OperatorsPlugin.do_operators` therefore counts those operators in each
+    flat group and reports the same `TOO_DEEP` diagnostic at 200 or more.
+    Merging operators (`AND` / `OR`) merge side-by-side groups into one flat
+    group and build no hierarchy, so a chain of them of any length parses
+    normally, as does a chain of prefix `NOT`s, each of which wraps a single
+    node without nesting.
+
     Not carried through the differential-triage allowlist/corpus triple:
     the corpus generators (`tests/differential/strategies.py`) have no
-    mechanism that produces 200+ levels of paren nesting, so there is no
+    mechanism that produces 200+ levels of paren nesting or 200+ operator
+    chains, so there is no
     oracle-comparison test this could ever apply to; the divergence is
     exercised directly instead (see the test references below).
 
     Test references: `tests/test_parser_basics.py`'s
     `test_paren_nesting_below_cap_has_no_diagnostic` and
     `test_paren_nesting_beyond_cap_reports_diagnostic_instead_of_raising`;
+    all of `tests/test_parse_depth_limits.py` (the operator-built case, plus
+    the merging-operator and below-the-cap non-regressions);
     `tests/test_normalize.py`'s `TestIterativeNormalizeDeepTree` (covers
     `ast.normalize()`'s traversal directly, via a hand-built tree that
     bypasses the parser's cap entirely).

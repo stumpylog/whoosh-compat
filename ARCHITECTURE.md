@@ -459,14 +459,34 @@ recursively (the tag/filter pipeline's own filters, `GroupNode.query()`, and
 `ast.normalize()` before it became iterative) costs Python call-stack frames
 proportional to depth. Left unbounded, `parse()` would eventually
 `RecursionError` instead of returning a `ParseResult`, which is exactly the
-invariant this section opens with breaking. `GroupPlugin.do_groups`
-(`parser/plugins.py`) is the one place that turns flat `(`/`)` markers into
-real tree hierarchy, so it's also the cheapest and earliest place to bound
-it: past `_MAX_GROUP_NESTING_DEPTH` (200) unclosed levels, further nesting is
+invariant this section opens with breaking. Two stages construct hierarchy,
+and both bound it at `_MAX_GROUP_NESTING_DEPTH` (200), each as early as it
+can see the depth coming.
+
+`GroupPlugin.do_groups` (`parser/plugins.py`) turns flat `(`/`)` markers into
+real tree hierarchy: past 200 unclosed levels, further nesting is
 tracked as an opaque, uncounted overflow region instead of being
 materialized into hierarchy, and collapsed to a single `Diagnostic(kind=
 TOO_DEEP)` plus `ErrorLeaf` once its matching close paren is seen (or at the
-end of input, for unbalanced parens). 200 was chosen with a wide safety
+end of input, for unbalanced parens).
+
+`OperatorsPlugin.do_operators` builds hierarchy too, and the bracket stack
+cannot see it: `InfixOperator.replace_self()` nests one new group per
+*non-merging* infix operator (`ANDNOT`, `ANDMAYBE`, `REQUIRE`), so a flat,
+paren-free `a ANDNOT b ANDNOT c ...` chain is as deep as it is long, and the
+filter's own descent into every level used to make ~991 operands a
+`RecursionError` out of `parse()`. It therefore counts those operators in
+each flat group before rearranging anything and, at 200 or more, collapses
+the group to the same `TOO_DEEP` leaf (`_too_deep_node()`, shared with
+`do_groups`) instead of materializing the levels. Merging operators
+(`AND`/`OR`) absorb their neighbour into a single flat group and add no
+depth, so a chain of them is unaffected at any length; prefix/postfix
+operators (`NOT`) wrap one node each without nesting and are likewise not
+counted. `do_operators`' descent into subgroups is an explicit work stack
+rather than recursion, so hierarchy reaching it from any source cannot
+exhaust frames on the way down.
+
+200 was chosen with a wide safety
 margin: confirmed directly against both the pinned real-whoosh oracle and
 this parser's own tag/filter pipeline with the cap removed, both start
 `RecursionError`-ing on bare `(`-nesting somewhere between depth 950 and

@@ -65,8 +65,13 @@ TaggerEntry = tuple[Tagger, int]
 FilterFn = Any
 FilterEntry = tuple[FilterFn, int]
 
-# Maximum parenthesization depth GroupPlugin.do_groups will materialize into
-# real tree hierarchy. Not a whoosh concept: whoosh (and this parser's own
+# Maximum depth of tree hierarchy this parser will materialize. Two stages
+# construct hierarchy, and both enforce this cap: GroupPlugin.do_groups (one
+# level per unclosed "(") and OperatorsPlugin.do_operators (one level per
+# non-merging operator -- ANDNOT/ANDMAYBE/REQUIRE/NOT -- since
+# Operator.replace_self() builds a new group for each, while merging groups
+# like AND/OR absorb their neighbour into one flat group and so add no depth
+# at all). Not a whoosh concept: whoosh (and this parser's own
 # tag/filter pipeline, and ast.normalize() before it became iterative) all
 # eventually RecursionError on pathologically deep nesting, just at
 # interpreter-recursion-limit-dependent depths nobody chose on purpose
@@ -80,6 +85,19 @@ FilterEntry = tuple[FilterFn, int]
 # would ever use. See DIVERGENCES.md entry 31 and ARCHITECTURE.md's
 # "parsing never raises" invariant.
 _MAX_GROUP_NESTING_DEPTH = 200
+
+
+def _too_deep_node(node: syntax.SyntaxNode | None) -> syntax.ErrorNode:
+    """The single leaf that stands in for a region of the query that would
+    have exceeded ``_MAX_GROUP_NESTING_DEPTH``. ``node`` is only used to
+    position the diagnostic.
+    """
+
+    message = (
+        "query nesting exceeds the maximum supported depth "
+        f"({_MAX_GROUP_NESTING_DEPTH})"
+    )
+    return syntax.ErrorNode(message, kind=DiagnosticKind.TOO_DEEP, node=node)
 
 
 class Plugin:
@@ -389,7 +407,7 @@ class GroupPlugin(Plugin):
                 if overflow_depth:
                     overflow_depth -= 1
                     if overflow_depth == 0:
-                        stack[-1].append(self._overflow_node(overflow_start))
+                        stack[-1].append(_too_deep_node(overflow_start))
                         overflow_start = None
                     continue
                 # Close bracket: pop the current level of hierarchy and append
@@ -409,7 +427,7 @@ class GroupPlugin(Plugin):
             # Unbalanced parens inside the overflow region (more opens than
             # closes): still surface the diagnostic rather than silently
             # dropping the whole thing.
-            stack[-1].append(self._overflow_node(overflow_start))
+            stack[-1].append(_too_deep_node(overflow_start))
 
         top = stack[0]
         # If the parens were unbalanced (more opens than closes), just take
@@ -425,15 +443,6 @@ class GroupPlugin(Plugin):
             top.boost = boost
 
         return top
-
-    @staticmethod
-    def _overflow_node(overflow_start: syntax.SyntaxNode | None) -> syntax.ErrorNode:
-        message = (
-            "query nesting exceeds the maximum supported depth "
-            f"({_MAX_GROUP_NESTING_DEPTH})"
-        )
-        return syntax.ErrorNode(message, kind=DiagnosticKind.TOO_DEEP, node=overflow_start)
-
 
 class EveryPlugin(TaggingPlugin):
     expr = rcompile("[*]:[*]")
@@ -753,7 +762,43 @@ class OperatorsPlugin(Plugin):
     def do_operators(self, parser: Any, group: syntax.GroupNode) -> syntax.GroupNode:
         """This filter finds PrefixOperator, PostfixOperator, and InfixOperator
         nodes in the tree and calls their logic to rearrange the nodes.
+
+        The descent into subgroups uses an explicit stack rather than
+        recursion, so that hierarchy arriving from any source (deeply nested
+        parens, or the groups ``_apply_operators`` itself builds) can't
+        exhaust the interpreter's frames.
         """
+
+        top = self._apply_operators(parser, group)
+        stack = [top]
+        while stack:
+            g = stack.pop()
+            for i, t in enumerate(g):
+                if isinstance(t, syntax.GroupNode):
+                    g[i] = self._apply_operators(parser, t)
+                    stack.append(g[i])
+
+        return top
+
+    def _apply_operators(self, parser: Any, group: syntax.GroupNode) -> syntax.GroupNode:
+        """Rearrange the operator nodes of a single group (not its subgroups)."""
+
+        # Each non-merging infix operator becomes one more level of hierarchy
+        # in replace_self() below ("a ANDNOT b ANDNOT c" -> ((a ANDNOT b)
+        # ANDNOT c)), so a flat, paren-free chain of them builds depth that
+        # GroupPlugin.do_groups' bracket stack never saw. Cap it here the same
+        # way, by collapsing the whole group to one diagnostic leaf instead of
+        # materializing hierarchy every later filter would recurse through.
+        # Merging operators (AND/OR) build a single flat group no matter how
+        # long the chain, and prefix/postfix operators wrap one node each
+        # without nesting, so neither is counted.
+        nonmerging = sum(
+            1
+            for t in group
+            if isinstance(t, syntax.InfixOperator) and not t.grouptype.merging
+        )
+        if nonmerging >= _MAX_GROUP_NESTING_DEPTH:
+            return parser.group([_too_deep_node(next(iter(group), None))])
 
         for tagger, _ in self.ops:
             # Get the operators created by the configured taggers
@@ -779,11 +824,6 @@ class OperatorsPlugin(Plugin):
                     if isinstance(t, optype):
                         i = t.replace_self(parser, group, i)
                     i -= 1
-
-        # Descend into the groups and recursively call do_operators
-        for i, t in enumerate(group):
-            if isinstance(t, syntax.GroupNode):
-                group[i] = self.do_operators(parser, t)
 
         return group
 
