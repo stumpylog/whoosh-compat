@@ -507,9 +507,24 @@ parse-then-emit pipeline).
 
     A time of day *trailing* one of the six is joined on, so that the
     unquoted spelling reaches the grammar as the value the quoted spelling
-    would: entry 52's rejection of a time on a period keyword therefore
-    holds for `created:previous week 3pm` exactly as for
-    `created:"previous week 3pm"`. A time *leading* it is not joined, and
+    would. What the grammar then does with that value depends on the
+    keyword, and rejection is only one of the two outcomes. `previous week`
+    and `previous quarter` resolve to a span, so entry 52 rejects the
+    combination: `created:previous week 3pm` is a BAD_DATE, exactly as
+    `created:"previous week 3pm"` is. The other four (`previous month`,
+    `previous year`, `this month`, `this year`) resolve to a calendar unit
+    and *accept* the time, which narrows the range to that time of day on
+    the period's first and last day: `added:previous month noon` is
+    `2026-07-01T12:00Z .. 2026-07-31T12:00:00.000001Z`, not the whole
+    month. Both outcomes are a change from paperless-ngx v2, whose rewrite
+    matched the phrase alone: there, `added:previous month noon` was the
+    full-month range **plus a free-text `noon` term**, and that free-text
+    term is now gone. This is the same class of v2 divergence as the
+    rejecting branch, accepted for the same reason (the unquoted spelling
+    must mean what the quoted one means), and it is recorded here so the
+    accepting half is not a surprise.
+
+    A time *leading* the phrase is not joined, and
     the asymmetry is deliberate: a field prefix binds the next date
     expression, and in `created:3pm previous week` it finds `3pm`, a
     complete value, and stops. The phrase after it was never combined with
@@ -518,6 +533,16 @@ parse-then-emit pipeline).
     v2 did with that spelling (its quoting shim only fired on a phrase
     directly following a date-field prefix). Quoting is what forces the
     two into one value, so only `created:"3pm previous week"` is rejected.
+
+    One spelling inconsistency this leaves, noted rather than fixed:
+    `added:("previous month")` joins but `added:(previous month)` does
+    not. Inside a parenthesized group the field name has already been
+    propagated to *both* words by the time the join runs, and the join
+    requires the words after the head to carry no field name of their own
+    (the guard that keeps `added:previous title:month` apart). This is
+    v2-parity-neutral, since the host rewrite it replaces also required
+    the phrase to directly follow `field:`, so it is left alone rather
+    than widened further.
 
     Test references: `tests/test_parser_date_phrases.py` (the whole file);
     `tests/test_parser_period_keywords.py`'s
@@ -2194,7 +2219,10 @@ parse-then-emit pipeline).
     is bound into the same value, so `added:previous week 3pm` is diagnosed
     exactly like `added:"previous week 3pm"` (before entry 19 it was
     rejected too, but for the unrelated reason that a bare `previous` is
-    not a date). The *leading*-time spelling is the one place quoting
+    not a date). That cuts both ways, and the unquoted spelling inherits
+    the *acceptance* above just as faithfully: `added:previous month 3pm`
+    is the same narrowed range as `added:"previous month 3pm"`, since only
+    the span-valued keywords reject at all. The *leading*-time spelling is the one place quoting
     matters, and not as an exception to this rule: unquoted,
     `added:3pm previous week` never combines the two at all (`added:` binds
     `3pm` and stops, leaving "previous week" free text, as released

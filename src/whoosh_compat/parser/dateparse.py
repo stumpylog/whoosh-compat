@@ -1128,6 +1128,17 @@ class DateParserPlugin(Plugin):
         trailing time of day, see :meth:`_phrase_run`) on a field explicitly
         named in the query: everything else about date-field parsing keeps
         ending at the first space, as whoosh's grammar does.
+
+        One consequence of requiring the *following* words to carry no
+        field name of their own (the guard that keeps
+        ``added:previous title:month`` two separate values): inside a
+        parenthesized group, ``added:(previous month)``, the field name has
+        already been propagated onto both words by FieldsPlugin, so the run
+        breaks and the phrase is not joined, while
+        ``added:("previous month")`` is a single value already and works.
+        Left as is rather than widened: the host rewrite this replaces also
+        only ever fired on a phrase directly following ``field:``, so
+        nothing regresses (DIVERGENCES.md entry 19).
         """
 
         registry = parser.registry
@@ -1153,7 +1164,10 @@ class DateParserPlugin(Plugin):
                         " ".join(cast(str, group[j].text) for j in idxs)
                     )
                     joined.set_fieldname(head.fieldname)
-                    joined.set_boost(head.boost)
+                    # No boost is carried over: BoostPlugin applies one at
+                    # FILTER_BOOSTS_POST (510), long after this filter, so
+                    # `added:previous month^2` boosts the joined node and
+                    # arrives as Boosted(DateRange, 2.0) on its own.
                     joined.startchar = head.startchar
                     joined.endchar = last.endchar
                     group[i:idxs[-1] + 1] = [joined]

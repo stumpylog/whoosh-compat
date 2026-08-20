@@ -73,11 +73,16 @@ material; they are permanently documented, each with its rationale, in
   notes"`, where those characters are ordinary phrase text.
   The widening is limited to those six phrases on an explicitly named date
   field, plus a time of day *trailing* one of them, so that an unquoted
-  spelling reaches the grammar as the same value the quoted spelling would:
-  `added:previous week 3pm` is therefore the same `BAD_DATE` as
-  `added:"previous week 3pm"` (`DIVERGENCES.md` entry 52), where before it
-  was a `BAD_DATE` only by accident of `previous` not being a date on its
-  own. A *leading* time is not joined: `added:3pm previous week` stays an
+  spelling reaches the grammar as the same value the quoted spelling would.
+  What the grammar does with that value has two outcomes, not one: the two
+  span-valued keywords reject it, so `added:previous week 3pm` is the same
+  `BAD_DATE` as `added:"previous week 3pm"` (`DIVERGENCES.md` entry 52),
+  where before it was a `BAD_DATE` only by accident of `previous` not being
+  a date on its own; the other four are calendar units and accept it,
+  narrowing the range to that time of day on the period's first and last
+  day, so `added:previous month noon` is
+  `2026-07-01T12:00Z .. 2026-07-31T12:00:00.000001Z` rather than the whole
+  month plus a free-text `noon` term. A *leading* time is not joined: `added:3pm previous week` stays an
   instant plus two free-text terms, because `added:` binds `3pm` and stops,
   so the phrase and the time were never one value to reject. Nothing else
   about a date value becomes whitespace-greedy:

@@ -14,7 +14,9 @@ the grammar then does with it, and for why a *leading* time is not joined).
 Nothing else about date-field parsing becomes whitespace-greedy.
 """
 
+from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -169,3 +171,78 @@ def test_quoted_phrase_inside_a_text_phrase_is_untouched(registry: FieldRegistry
         field=FieldRef("title"),
         text="see added:previous month notes",
     )
+
+
+# -- a trailing time is part of the joined value ---------------------------
+
+
+@pytest.mark.parametrize("phrase", ["previous month", "previous year", "this month", "this year"])
+def test_trailing_time_narrows_the_calendar_unit_phrases(
+    registry: FieldRegistry, phrase: str
+) -> None:
+    """The *accepting* half of the trailing-time join, which is easy to miss
+    because the rejecting half (``previous week``/``quarter``, see
+    ``test_parser_period_keywords.py``) is the one that produced a crash.
+
+    These four resolve to a calendar unit rather than a span, so the joined
+    time narrows the range instead of making it unusable. That is a change
+    from paperless v2, whose phrase-only rewrite left the time behind as a
+    free-text term next to a full-period range; the value now matches the
+    quoted spelling, which is the whole point of the join.
+    """
+    quoted = dparse(f'added:"{phrase} noon"', registry)
+    bare = dparse(f"added:{phrase} noon", registry)
+
+    assert not bare.diagnostics
+    assert bare.ast == quoted.ast
+    # A single DateRange, not a DateRange AND a leftover "noon" term.
+    assert isinstance(bare.ast, ast.DateRange)
+    assert bare.ast.lo is not None
+    assert bare.ast.lo.astimezone(BERLIN).hour == 12
+
+
+def test_trailing_time_pins_one_concrete_narrowed_range(registry: FieldRegistry) -> None:
+    """One fully spelled-out expectation, so the equality above cannot be
+    satisfied by both spellings breaking together.
+    """
+    r = dparse("added:previous month noon", registry).ast
+    assert isinstance(r, ast.DateRange)
+    # BASE is 2026-08-05 Europe/Berlin, so "previous month" is July 2026.
+    assert r.lo == datetime(2026, 7, 1, 12, 0, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == datetime(2026, 7, 31, 12, 0, tzinfo=BERLIN).astimezone(UTC) + timedelta(
+        microseconds=1
+    )
+
+
+def test_boost_after_an_unquoted_phrase_applies_to_the_joined_value(
+    registry: FieldRegistry,
+) -> None:
+    """The boost binds to the joined node, not to a leftover word: boosts are
+    applied by a filter running long after this join, so the join carries no
+    boost of its own.
+    """
+    result = dparse("added:previous month^2", registry)
+    assert not result.diagnostics
+    assert isinstance(result.ast, ast.Boosted)
+    assert result.ast.boost == 2.0
+    assert isinstance(result.ast.child, ast.DateRange)
+
+
+def test_phrase_inside_a_parenthesized_group_is_not_joined(registry: FieldRegistry) -> None:
+    """CHARACTERIZATION of a documented spelling inconsistency (entry 19):
+    ``added:("previous month")`` works but ``added:(previous month)`` does
+    not, because inside a group the field name has already been propagated
+    onto both words and the join requires the words after the head to carry
+    no field name of their own.
+
+    v2-parity-neutral (the host rewrite it replaces also only fired on a
+    phrase directly following ``field:``), so it is pinned rather than
+    fixed. If a future change makes the bare form join, this test is where
+    that shows up.
+    """
+    grouped = dparse("added:(previous month)", registry)
+    assert [d.raw_value for d in grouped.diagnostics] == ["previous", "month"]
+
+    quoted_in_group = dparse('added:("previous month")', registry)
+    assert not quoted_in_group.diagnostics
+    assert isinstance(quoted_in_group.ast, ast.DateRange)

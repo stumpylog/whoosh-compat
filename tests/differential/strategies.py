@@ -119,6 +119,19 @@ _ZERO_TOKEN_CANDIDATES = (
 ZERO_TOKEN_WORDS: tuple[str, ...] = tuple(w for w in _ZERO_TOKEN_CANDIDATES if _analyze(w) == [])
 assert ZERO_TOKEN_WORDS, "the analyzer contract this module exploits no longer holds"
 
+# The multi-word keywords are listed in their QUOTED spelling only, and
+# deliberately so: do not "complete" this list with the bare spellings that
+# DIVERGENCES.md entry 19 also accepts. The generator composes these into
+# larger queries, including inside quoted phrase values, and the oracle's
+# _rewrite_natural_date_keywords is a quote-blind regex: on a generated
+# `title:"x created:previous month y"` it rewrites the phrase's interior
+# while whoosh-compat correctly leaves the phrase alone. That is a real,
+# expected divergence, so adding the bare spellings here would produce
+# recurring fuzz failures whose only remedy is an allowlist entry
+# suppressing the very corruption entry 19 exists to remove. The bare
+# spellings are compared against the oracle by the fifteen static corpus
+# lines in corpus_paperless.txt/corpus_docs.txt, where the rewrite is
+# legitimate because the phrase really is the field's value.
 DATE_KEYWORDS: tuple[str, ...] = (
     "today",
     "yesterday",
