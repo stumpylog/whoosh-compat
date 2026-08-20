@@ -56,12 +56,17 @@ contract between them.
 ## Invariants worth knowing before editing
 
 - **Parsing never raises for bad query input.** Bad dates/numbers become
-  `Diagnostic`s plus `ErrorLeaf` nodes; only `emit()` raises (`QueryError`,
-  always carrying a `Diagnostic`). Registry construction *does* raise eagerly.
+  `Diagnostic`s plus `ErrorLeaf` nodes; on the query path it is `emit()` that
+  raises, and its `QueryError` always carries a `Diagnostic`. Registry
+  construction *does* raise eagerly.
   Enforced, not merely intended: `parse()` wraps the pipeline in a backstop that
   converts any unexpected exception into `QueryParserError` (chaining the
   original), so the only exception a caller ever handles means "a library
-  defect" and hosts route it to a monitorable 500. Don't downgrade it to a
+  defect" and hosts route it to a monitorable 500. `emit()`'s backstop is
+  deliberately *not* the same blanket `except Exception`: it converts a
+  named allowlist (see its docstring), so anything outside that list -
+  `_translate_class`'s `AssertionError`, for one - still escapes as itself.
+  Don't downgrade it to a
   `Diagnostic` (that would blame the user for a bug and hide it from
   monitoring), and don't treat it as a licence to skip fixing a root cause:
   `tests/test_parse_never_raises.py` is where new escape routes get pinned.
