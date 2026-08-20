@@ -214,14 +214,23 @@ material; they are permanently documented, each with its rationale, in
     run now excludes `T`, leaving one candidate split point rather than one
     per `T`.
 
-  None of the three accepts or rejects anything it did not before: the glob
-  translation is byte-identical to its previous output over 412,683
-  exhaustive and 600,000 random pattern/normalizer pairs (including the
-  multi-character-fold and fullwidth-bracket cases entry 2 qualifies) as
-  well as against the `fnmatch.translate` oracle, and the date regex matches
-  its previous form over every string up to length 5 in `TtZz a\n\r`. Query
-  *parsing* remains quadratic in a long unmatched word-character run (see
-  `ARCHITECTURE.md`); hosts must cap query length at their own boundary.
+  None of the three accepts or rejects anything it did not before. The glob
+  translation is byte-identical to its previous output over 6,002,157
+  pattern/normalizer pairs: every pattern up to length 5 in an alphabet of
+  the ASCII class characters and the fullwidth forms `［］！－＼`, under the
+  identity, `str.lower`, and a stand-in for the host's real
+  `ascii_fold(str.lower)` -- which is the normalizer class that matters
+  here, because it is the only one that can put a `!`, `-`, `\`, `[` or `]`
+  somewhere the user did not type one. (An earlier round of this work
+  claimed byte-identity on the strength of identity/`str.lower` runs alone.
+  Those cannot vary a pattern's syntax at all, and a real difference under
+  the host's normalizer survived them; the equivalence machinery now carries
+  a syntax-creating normalizer for good.) The date regex likewise matches
+  its previous form over every string up to length 5 in `TtZz a\n\r`.
+
+  Query *parsing* remains quadratic in a long unmatched word-character run
+  (see `ARCHITECTURE.md`); hosts must cap query length at their own
+  boundary.
 
 ### Internal
 

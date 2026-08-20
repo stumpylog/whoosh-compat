@@ -87,6 +87,10 @@ def _is_intable(value: object) -> bool:
 # ( ? ! ), then b") and translates to the valid fragment "[(?!)]".
 _EMPTY_CLASS = "(?!)"
 
+# _translate_class works at fnmatch's offsets into the class as typed, so the
+# per-character fold it applies to the body must not change the length.
+_CLASS_FOLD_LENGTH_MSG = "pattern_normalizer changed a bracket class's length"
+
 
 def _normalize_class_body(body: str, normalize: Callable[[str], str]) -> str:
     """``normalize`` applied to a bracket class's body, one character at a time.
@@ -207,19 +211,47 @@ def _translate_class(
     #
     # Note the ordering: the class extent (j) is found on the *unfolded* text,
     # so a character the normalizer maps onto "[" or "]" (ascii_fold does map
-    # the fullwidth brackets U+FF3B/U+FF3D that way) lands inside this class
-    # as an ordinary member and cannot close it, and on glob_to_regex's
-    # literal path it cannot open one either, being regex-escaped like any
-    # other literal character. The whole-text-fold oracle would let it do
-    # both, so this is a deliberate, documented divergence: class delimiters
-    # are syntax and are read from what the user actually typed, which
-    # under-matches rather than silently building a different valid class.
-    # See DIVERGENCES.md entry 2's second qualification.
-    negated = pattern[i] == "!"
+    # the fullwidth brackets U+FF3B/U+FF3D that way) cannot end this class
+    # here, and on glob_to_regex's literal path it cannot open one either,
+    # being regex-escaped like any other literal character. The
+    # whole-text-fold oracle would let it do both, so this is a deliberate,
+    # documented divergence: class delimiters are syntax and are read from
+    # what the user actually typed. See DIVERGENCES.md entry 2's second
+    # qualification.
+    #
+    # Known gap, and NOT what the above claims: a normalizer-produced "]" is
+    # not an ordinary member on *output*. The escape loop below covers "[&~"
+    # but not "]", so a "]" folded out of U+FF3D is emitted bare and closes
+    # the emitted class early (a class body of "a", U+FF3D, "b" emits
+    # "[a]b]"). Predates this seam and is unchanged by it; recorded here
+    # rather than fixed, since fixing it changes emitted regexes and belongs
+    # with its own differential.
     stuff = pattern[i:j]
-    stuff = ("!" if negated else "") + _normalize_class_body(
-        stuff[1:] if negated else stuff, normalize
-    )
+    # Which characters are *term text* is a question about the pattern as
+    # typed: the "!" the user wrote is negation syntax, so it stays out of the
+    # fold and a normalizer never gets to un-negate a class.
+    fold_from = 1 if stuff.startswith("!") else 0
+    stuff = stuff[:fold_from] + _normalize_class_body(stuff[fold_from:], normalize)
+    if len(stuff) != j - i:  # pragma: no cover - guards an invariant of the fold
+        # Load-bearing for correctness rather than tidiness: every offset
+        # below is fnmatch's own, taken on the class as typed, so a fold that
+        # changed the length would silently shift the hyphen chunking against
+        # the text being chunked. _normalize_class_body guarantees this by
+        # construction (exactly one output character per input character);
+        # this is the seam that would go quiet if a later variant stopped.
+        raise AssertionError(_CLASS_FOLD_LENGTH_MSG)
+
+    # Whether the class is *negated* is a different question and takes a
+    # different answer: it is read off the folded text, because that is what
+    # the "^" rewrite further down reads, and the two have to agree. A
+    # normalizer mapping some character onto "!" (ascii_fold maps the
+    # fullwidth U+FF01) therefore negates a class the user did not, in both
+    # places at once. When these two disagreed, a class of U+FF01, "-", "-",
+    # "a" chunked its "-" as an ordinary member here while the rewrite below
+    # read the class as negated, emitting "[^-\-a]" (two literal characters)
+    # where fnmatch's whole-text fold gives "[^\--a]" (the range "-" through
+    # "a"): a different language, silently.
+    negated = stuff.startswith("!")
 
     if "-" not in stuff:
         stuff = stuff.replace("\\", r"\\")

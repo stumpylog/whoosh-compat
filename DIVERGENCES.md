@@ -46,6 +46,20 @@ parse, emit, search, `tests/emitter/test_acceptance_e2e.py`) test suites.
      under-matches or reads literally; it never silently becomes a
      different valid class.
 
+     One step further than "delimiters", but the same rule and the same
+     cause: fnmatch skips a leading `!` *before* applying its "a `]` in
+     first position is an ordinary member" rule, so a fold that produces
+     that `!` can move where the oracle thinks the class ends. `title:[！]`
+     (fullwidth `！`, which `ascii_fold` maps to `!`) is read here as the
+     class `[！]`, whose body folds to exactly `!`, which is fnmatch's
+     negated-empty class and matches any single character; the oracle folds
+     first, reads `[!]`, finds no closing `]` at all, and takes the whole
+     thing as the literal text `[!]`. That is the only shape where a
+     fold-created `!` diverges: everywhere else it negates the class in
+     both readings alike, fnmatch's "a `-` directly after the negation
+     marker is a literal member" offset rule included, which
+     `title:[！--a]` (the negated range `-` through `a`) exercises.
+
    A normalizer mapping a character onto `-` or `\` (`ascii_fold` maps the
    en/em dashes and the fullwidth `－`/`＼`) is *not* a qualification: it is
    allowed to apply, because the oracle's whole-text fold does exactly the

@@ -7,12 +7,15 @@ not by eyeballing the raw document text. See the module-level token map.
 """
 
 import fnmatch
+import functools
+import itertools
 import re
 import time
 from collections.abc import Callable
 
 import pytest
 import tantivy
+from hypothesis import assume
 from hypothesis import given
 from hypothesis import settings
 from hypothesis import strategies as st
@@ -507,6 +510,43 @@ def multichar_fold(text: str) -> str:
     return text.lower().replace("ß", "ss").replace("æ", "ae")
 
 
+# The fullwidth forms tantivy's ascii_fold maps onto class syntax. Named
+# rather than pasted: a literal one looks like its ASCII counterpart.
+FW_BANG = "\uff01"  # FULLWIDTH EXCLAMATION MARK, folds to "!"
+FW_DASH = "\uff0d"  # FULLWIDTH HYPHEN-MINUS, folds to "-"
+FW_BACKSLASH = "\uff3c"  # FULLWIDTH REVERSE SOLIDUS, folds to a backslash
+
+
+def syntax_creating_fold(text: str) -> str:
+    """The other half of the host's ``pattern_normalizer``, and the half every
+    equivalence check here used to miss.
+
+    tantivy's ascii_fold maps the fullwidth forms onto ASCII, and several of
+    those ASCII characters are class *syntax*: U+FF01 -> ``!``, U+FF0D ->
+    ``-``, U+FF3C -> ``\\``. A normalizer can therefore conjure
+    a negation marker, a range separator or an escape the user never typed,
+    which is a shape neither ``None`` nor ``str.lower`` can produce: under
+    those two, a pattern's syntax characters and its folded syntax characters
+    are always the same characters in the same places. That blind spot hid a
+    real bug (a class whose ``!`` came out of the fold had its hyphens chunked
+    as literals in one place while being read as negated in another), so the
+    equivalence tests below run under this normalizer too.
+
+    The fullwidth *delimiters* (U+FF3B/U+FF3D) are deliberately absent: the
+    emitter reads class delimiters from the pattern as typed, so under a fold
+    producing them it diverges from the whole-text-fold oracle on purpose
+    (DIVERGENCES.md entry 2's second qualification). They have their own
+    tests; folding them here would only re-assert that documented divergence
+    as a failure.
+
+    The fullwidth characters are spelled as escapes throughout this module,
+    like the emitter itself spells them: a literal one is indistinguishable
+    from its ASCII counterpart in most editors, which is precisely the
+    confusion these tests are about.
+    """
+    return text.lower().replace(FW_BANG, "!").replace(FW_DASH, "-").replace(FW_BACKSLASH, "\\")
+
+
 @pytest.mark.parametrize(
     ("pattern", "normalizer", "expected"),
     [
@@ -530,6 +570,27 @@ def multichar_fold(text: str) -> str:
         # so an expansion cannot be expressed here at all (see the comment on
         # _normalize_class_body); leaving it is the only non-corrupting choice.
         pytest.param("[aæ]x*", multichar_fold, "[aæ]x.*", id="multichar-fold-member-untouched"),
+        # A negation the *fold* produced (ascii_fold maps FW_BANG onto "!")
+        # has to be a negation to every rule that reads one, not just to the
+        # "!" -> "^" rewrite. fnmatch's "a hyphen right after the negation
+        # marker is a literal member" rule offsets by one more character for a
+        # negated class, so when only one of the two saw this "!" the range
+        # "-" through "a" came out as the two literals "-" and "a": the class
+        # still compiled, still looked plausible, and matched a different
+        # language. Oracle: fnmatch.translate(fold("[!--a]*")) == "[^\\--a].*".
+        pytest.param(
+            f"[{FW_BANG}--a]*", syntax_creating_fold, "[^\\--a].*", id="fold-creates-negation"
+        ),
+        # The same character mid-class is an ordinary member, and the hyphen
+        # after it is an ordinary range separator: the offset rule above must
+        # not fire for it.
+        pytest.param(
+            f"[a{FW_BANG}-z]*", syntax_creating_fold, "[a!-z].*", id="fold-creates-member"
+        ),
+        # A range separator out of the fold really does separate a range,
+        # exactly as the oracle's whole-text fold reads it (entry 2's
+        # non-qualification for "-" and "\\").
+        pytest.param(f"[A{FW_DASH}Z]*", syntax_creating_fold, "[a-z].*", id="fold-creates-range"),
     ],
 )
 def test_glob_to_regex_normalizes_class_bodies(
@@ -564,9 +625,15 @@ def test_class_body_is_normalized_end_to_end(
 # Glob syntax plus the characters that make fnmatch's bracket parser branch:
 # the negation "!", the literal-member "]", the range "-", the escape "\", and
 # the class-internal metacharacters "^&~[" the emitter has to escape for
-# tantivy's regex engine. Cased letters so the folded run is a real test.
-_GLOB_ALPHABET = "abZ*?[]!-\\^&~.0"
+# tantivy's regex engine. Cased letters so the folded run is a real test, and
+# the three fullwidth forms so that under syntax_creating_fold the *fold* can
+# put a negation, a range separator or an escape where the user typed none.
+_GLOB_ALPHABET = "abZ*?[]!-\\^&~.0" + FW_BANG + FW_DASH + FW_BACKSLASH
 _SUBJECTS = ["", "a", "Z", "z", "ab", "a-b", "a]b", "a!b", "a\\b", "[", "-", "abZ0"]
+
+# The one shape a fold-created "!" diverges on, excluded from both sweeps
+# below and pinned by its own test at the end of this section.
+_FOLD_CREATED_EMPTY_NEGATION = f"[{FW_BANG}]"
 
 
 def _accepts(regex: str | None, subject: str) -> bool:
@@ -577,7 +644,11 @@ def _accepts(regex: str | None, subject: str) -> bool:
     return re.match(regex + r"\Z", subject) is not None
 
 
-@pytest.mark.parametrize("normalizer", [None, str.lower], ids=["identity", "lowercase"])
+@pytest.mark.parametrize(
+    "normalizer",
+    [None, str.lower, syntax_creating_fold],
+    ids=["identity", "lowercase", "syntax-creating"],
+)
 @settings(max_examples=500, deadline=None)
 @given(pattern=st.text(alphabet=_GLOB_ALPHABET, min_size=1, max_size=8))
 def test_glob_to_regex_agrees_with_fnmatch(
@@ -589,13 +660,29 @@ def test_glob_to_regex_agrees_with_fnmatch(
     later rewrites of it.
 
     Under a normalizer the oracle is ``fnmatch.translate`` of the *whole*
-    folded pattern text, which is what real whoosh does. ``str.lower`` over
-    this ASCII-only alphabet is per-character-safe, so the emitter's
-    per-run/per-class-character application has to agree with it exactly. A
-    bulk version of this check (a quarter-million generated patterns) was run
-    by hand when the class-body fold landed; this is the version cheap enough
-    to keep in the suite.
+    folded pattern text, which is what real whoosh does. Both normalizers here
+    are per-character-safe over this alphabet (one output character per input
+    character, no multi-character expansions), so the emitter's
+    per-run/per-class-character application has to agree with them exactly.
+
+    ``syntax_creating_fold`` is the one that earns its keep: ``None`` and
+    ``str.lower`` leave a pattern's syntax characters exactly where they were,
+    so no amount of generated input under those two can produce a class whose
+    negation, range separator or escape came out of the *fold*. A performance
+    rewrite of this translation got that case wrong while remaining
+    byte-identical under the other two, which is why the sweep run by hand at
+    the time (a million-odd generated patterns) did not catch it either.
+
+    One family is assumed away rather than asserted on: a fold-created "!"
+    can move where the *oracle* thinks a class ends, and then the two read
+    different text entirely. That is a documented divergence with its own
+    test (test_fold_created_negation_cannot_move_the_class_extent), and it is
+    the only one -- verified exhaustively to length 4 over this alphabet
+    (111,113 patterns) and over 299,761 random patterns of length 5-8, zero
+    disagreements once it is excluded -- so this filter cannot be quietly
+    hiding a second family.
     """
+    assume(_FOLD_CREATED_EMPTY_NEGATION not in pattern)
     source = pattern if normalizer is None else normalizer(pattern)
     oracle = re.compile(fnmatch.translate(source))
     got = glob_to_regex(pattern, normalizer)
@@ -603,6 +690,72 @@ def test_glob_to_regex_agrees_with_fnmatch(
         assert _accepts(got, subject) == (oracle.match(subject) is not None), (
             f"{pattern!r} -> {got!r} disagrees with fnmatch on {subject!r}"
         )
+
+
+# Small and syntax-only on purpose: every character here is one fnmatch's
+# bracket parser branches on, so short patterns already cover the interesting
+# combinations, and length 6 is the shortest that can spell the shape the
+# random sweep above is unlikely to reach (FW_BANG, "-", "-", "a" inside a
+# class: a fold-created negation, then the hyphen whose reading depends on it).
+_SYNTAX_ALPHABET = "[]!-a" + FW_BANG
+_SYNTAX_SUBJECTS = ["", "a", "-", "!", "]", "-a"]
+
+
+def test_glob_to_regex_agrees_with_fnmatch_under_a_fold_that_creates_syntax() -> None:
+    """Exhaustive companion to the hypothesis check above, over a tiny
+    syntax-only alphabet under ``syntax_creating_fold``.
+
+    Exhaustive rather than generated because the bug this exists for needs six
+    specific characters in one order (``"[" + FW_BANG + "--a]"``), which 500
+    random draws from a 19-character alphabet will essentially never produce:
+    the sweep costs ~2 s and answers deterministically. On the implementation
+    that had the bug it reports exactly three failures, all of them that shape
+    with the final member varied; it has none now.
+    """
+    # Compiling the same oracle/emitted regex thousands of times is most of
+    # the cost otherwise.
+    oracle_for = functools.lru_cache(maxsize=None)(
+        lambda source: re.compile(fnmatch.translate(source))
+    )
+    checked = 0
+    for length in range(1, 7):
+        for chars in itertools.product(_SYNTAX_ALPHABET, repeat=length):
+            pattern = "".join(chars)
+            if _FOLD_CREATED_EMPTY_NEGATION in pattern:
+                continue
+            checked += 1
+            oracle = oracle_for(syntax_creating_fold(pattern))
+            got = glob_to_regex(pattern, syntax_creating_fold)
+            for subject in _SYNTAX_SUBJECTS:
+                assert _accepts(got, subject) == (oracle.match(subject) is not None), (
+                    f"{pattern!r} -> {got!r} disagrees with fnmatch on {subject!r}"
+                )
+    assert checked == 55_002
+
+
+def test_fold_created_negation_cannot_move_the_class_extent() -> None:
+    """Characterization of the family excluded above, so the exclusion is a
+    documented divergence rather than a hole in the sweep.
+
+    It is the same rule as DIVERGENCES.md entry 2's second qualification -- a
+    class's *syntax* is read from the pattern as typed -- reaching one step
+    further than that text spells out. fnmatch skips a leading "!" before
+    applying its "a ']' in first position is a member" rule, so in the folded
+    text "[!]" the "]" is a member, no close is ever found, and the whole
+    thing is literal. Here the extent is found before the fold, where the
+    first body character is FW_BANG and the "]" therefore closes the class: a
+    class whose body then folds to exactly "!", i.e. fnmatch's "negated empty
+    class", which matches any single character.
+
+    Unchanged by the linearity rewrites (identical on the implementations
+    before, during and after them), so it is recorded, not introduced.
+    """
+    pattern = _FOLD_CREATED_EMPTY_NEGATION
+    assert glob_to_regex(pattern, syntax_creating_fold) == "."
+    # The oracle's whole-text fold reads the same pattern as literal "[!]".
+    assert fnmatch.translate(syntax_creating_fold(pattern)) == r"(?s:\[!\])\z"
+    # Nothing exotic without the fold: an ordinary one-member class.
+    assert glob_to_regex(pattern, None) == pattern
 
 
 # -- linear-time translation -------------------------------------------------
