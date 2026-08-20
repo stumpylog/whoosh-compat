@@ -23,25 +23,41 @@ material; they are permanently documented, each with its rationale, in
   `PATTERN_ON_BOOLEAN_EXISTS`, and `PATTERN_ON_SUBPATH`, one per field kind
   a wildcard/prefix pattern cannot be honored against.
 - `DiagnosticKind.SCHEMA_FIELD_MISSING` (`Cause.MISCONFIGURED`) is split out
-  of `BACKEND_REJECTED`. A wildcard or prefix query on a field this
-  library's registry knows but the tantivy schema does not now reports the
-  mismatch as the operator's problem rather than as an internal error.
+  of `BACKEND_REJECTED`. A query on a field this library's registry knows
+  but the tantivy schema does not now reports the mismatch as the
+  operator's problem rather than as an internal error. This is the drift a
+  host gets when its field table and its schema builder fall out of step,
+  so it is a deployment fault, not a library one.
   `BACKEND_REJECTED` keeps `Cause.INTERNAL` and its original meaning:
-  tantivy-py refusing a query this emitter built, which is a defect in this
-  library, not a deployment fault. The split was necessary because
-  `cause_for()` is keyed only on `kind`, so one kind cannot carry different
-  causes at different raise sites. A host branching on `kind` should route
-  the new member; a host branching on `cause` alone sees this condition
-  move from `INTERNAL` to `MISCONFIGURED`. Note the same drift reached
-  through a plain (non-pattern) term still reports `BACKEND_REJECTED`,
-  because `emit`'s backstop sees only an exception type and has no field to
-  probe.
+  tantivy-py refusing a query this emitter built. The split was necessary
+  because `cause_for()` is keyed only on `kind`, so one kind cannot carry
+  different causes at different raise sites. A host branching on `kind`
+  should route the new member; a host branching on `cause` alone sees this
+  condition move from `INTERNAL` to `MISCONFIGURED`. Every leaf that
+  queries a resolved field reports it uniformly (term, phrase, prefix,
+  wildcard, numeric and date range, bare-`*` existence, BOOLEAN_EXISTS, and
+  JSON subpaths on both the direct and `parse_query` routes), because drift
+  is a property of the field rather than of the spelling that reaches it.
+  Only the confirmed missing-field condition is reclassified: any other
+  `ValueError` from tantivy-py still reaches `emit`'s backstop as
+  `BACKEND_REJECTED`, so a genuine library defect is not hidden behind a
+  400.
 - `Cause.MISCONFIGURED` is documented as requiring **both** an operator
   alert and an HTTP 400, not an alert alone. Every `MISCONFIGURED` kind is
   reachable from ordinary query text, so a request is always waiting on an
   answer the alert does not give it. No behavior changed, but the previous
   documentation named no status code at all, which left hosts unable to
   route it.
+
+### Fixed (contract)
+
+- A bare `field:*` existence query (and a `BOOLEAN_EXISTS` term resolving
+  to a fast target) on a field the registry knows but the index schema does
+  not used to build successfully and then raise a bare `ValueError` out of
+  the *searcher*, escaping `emit()`'s documented "returns a query or raises
+  `QueryError`" contract entirely. tantivy's `exists_query` takes no schema
+  and so validates nothing at build time; the schema is now probed up front
+  on that path and the drift reported as `SCHEMA_FIELD_MISSING`.
 
 ### Added
 

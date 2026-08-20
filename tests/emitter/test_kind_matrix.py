@@ -831,8 +831,23 @@ def test_json_bare_field_bare_star_existence(
         ),
         pytest.param(
             "ghost:alice",
-            Raises(DiagnosticKind.BACKEND_REJECTED, Cause.INTERNAL),
+            Raises(
+                DiagnosticKind.SCHEMA_FIELD_MISSING,
+                Cause.MISCONFIGURED,
+                FieldKind.TEXT,
+                FieldRef("ghost"),
+            ),
             id="bare",
+        ),
+        pytest.param(
+            'ghost:"alice smith"',
+            Raises(
+                DiagnosticKind.SCHEMA_FIELD_MISSING,
+                Cause.MISCONFIGURED,
+                FieldKind.TEXT,
+                FieldRef("ghost"),
+            ),
+            id="double-quoted",
         ),
     ],
 )
@@ -843,19 +858,18 @@ def test_field_absent_from_schema_is_a_misconfiguration(
     schema does not.
 
     This is the operator's problem, not the query text's and not a defect in
-    this library, so the pattern spellings, which resolve a field before
-    calling tantivy and can therefore probe the schema on failure, report it
-    as its own kind. ``cause`` is a pure function of ``kind``, so a separate
-    kind is the only way the condition can be routed apart from the bare
-    ``ValueError``/``TypeError`` tantivy-py raises when it rejects a query
-    this emitter built.
+    this library, so it gets its own kind. ``cause`` is a pure function of
+    ``kind``, so a separate kind is the only way the condition can be routed
+    apart from the bare ``ValueError``/``TypeError`` tantivy-py raises when
+    it rejects a query this emitter built.
 
-    The ``bare`` cell is the boundary, and it is deliberately asymmetric:
-    the same drift on a plain term surfaces only at ``emit``'s generic
-    backstop, which sees an exception type and no field, so it cannot tell
-    a missing field from any other tantivy-py rejection and still reports
-    ``BACKEND_REJECTED``/``INTERNAL``. Pinned here so that the asymmetry is
-    a recorded fact rather than something a host discovers in production.
+    The column is uniform on purpose: drift is a property of the field, not
+    of the spelling that reaches it, so a host routing on ``cause`` must not
+    see ``ghost:alice`` and ``ghost:ali*`` land on opposite sides of the
+    400/500 line for the same broken deployment. The rest of the leaf axis,
+    the negative branch (a tantivy-py rejection for any other reason stays
+    ``INTERNAL``) and the kind-independence of the schema probe are pinned
+    in ``test_schema_drift.py``.
     """
     broken = FieldRegistry([*ereg, FieldSpec("ghost", FieldKind.TEXT)])
     _run(qs, broken, tindex, outcome)

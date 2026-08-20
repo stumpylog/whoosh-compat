@@ -19,11 +19,11 @@ class Cause(Enum):
     and the index schema disagree, which only an operator can fix, so it
     must raise an operator alert *and* return a 400. The alert alone is not
     a complete response. Every ``MISCONFIGURED`` kind is reachable from
-    ordinary query text (``notes.user:*`` for ``EXISTS_REQUIRES_FAST``,
-    ``ghost:ali*`` for ``SCHEMA_FIELD_MISSING``), so a request is waiting on
-    an answer; the query cannot run whether or not anyone reads the alert,
-    and swallowing it into a 500 would claim a library defect that isn't
-    there.
+    ordinary query text (``notes.user:*`` for ``EXISTS_REQUIRES_FAST``, any
+    query naming a registered-but-unindexed field for
+    ``SCHEMA_FIELD_MISSING``), so a request is waiting on an answer; the
+    query cannot run whether or not anyone reads the alert, and swallowing
+    it into a 500 would claim a library defect that isn't there.
     """
 
     INVALID_INPUT = auto()

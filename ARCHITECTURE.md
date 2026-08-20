@@ -262,10 +262,22 @@ enum itself). Every member maps to a `Cause` (`INVALID_INPUT`/
 uses for coarse routing without knowing every `DiagnosticKind`. Because
 `cause_for()` is a lookup keyed only on `kind`, one kind has exactly one
 cause: two raise sites that need different causes need different kinds.
-That is why a registry/schema mismatch found by `_regex_query`'s schema
-probe reports `SCHEMA_FIELD_MISSING` (`MISCONFIGURED`) rather than sharing
-`BACKEND_REJECTED` (`INTERNAL`) with `emit`'s bare-`ValueError` backstop,
-which cannot identify the condition and keeps the `INTERNAL` reading.
+That is why a registry/schema mismatch reports `SCHEMA_FIELD_MISSING`
+(`MISCONFIGURED`) rather than sharing `BACKEND_REJECTED` (`INTERNAL`) with
+`emit`'s bare-`ValueError` backstop. Every leaf that queries a resolved
+field wraps its tantivy call in `TantivyEmitter._reporting_schema_drift`,
+which confirms the condition with `_field_in_schema` (a `.*` regex probe,
+the one construction that builds against a field of any kind and fails only
+on a missing name) and re-raises anything else, so the backstop's remaining
+`ValueError`s really are defects in this library. Drift is a property of the
+field, not of the leaf spelling, so the whole leaf axis agrees; a host
+routing on `cause` never sees `content:x` and `content:x*` land on opposite
+sides of the 400/500 line for one broken deployment. `_exists_query` is the
+one path that probes *up front* rather than on failure, because tantivy's
+`exists_query` takes no schema and validates nothing at build time: there is
+no build-time failure to catch, and without the probe a drifted field would
+build a well-formed query that dies in the searcher, outside `emit`'s
+`QueryError` contract.
 `field` and
 `raw_value` default to `None` and are populated wherever a `Diagnostic` is
 constructed against a known field (`DateParserPlugin._error()` in

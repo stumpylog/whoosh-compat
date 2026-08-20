@@ -20,9 +20,11 @@ dependency.
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import re
 from collections.abc import Callable
+from collections.abc import Iterator
 from datetime import UTC
 from datetime import datetime
 from typing import NoReturn
@@ -374,12 +376,14 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         rather than ``ValueError``, so a ``_fail`` from a nested visitor
         passes through both handlers with its own kind intact.
 
-        This last cell is a coarse one: a registry/schema mismatch on a
-        plain term also surfaces as a bare ``ValueError`` here, and lands on
-        ``BACKEND_REJECTED`` with it, because the backstop sees only an
-        exception type and has no field to probe. ``_regex_query`` does have
-        one and reports that condition precisely, as
-        ``SCHEMA_FIELD_MISSING``.
+        That last cell stays genuinely internal because the one condition
+        that would otherwise land in it wrongly is peeled off before it gets
+        here: every leaf that queries a resolved field wraps its tantivy
+        call in ``_reporting_schema_drift``, which reclassifies a *missing
+        field* as ``SCHEMA_FIELD_MISSING`` (the operator's problem) and
+        re-raises everything else. So a ``ValueError`` reaching this
+        backstop has already been shown not to be registry/schema drift,
+        which is what makes reporting it as a defect in this library sound.
         """
         try:
             analyzed = ast.analyze(ast.normalize(node), self.registry, default_mode=Multitoken.AND)
@@ -496,7 +500,9 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                     self._json_paths_ok = False
         return self._json_paths_ok
 
-    def _emit_json_term(self, resolved: ResolvedField, text: object) -> tantivy.Query:
+    def _emit_json_term(
+        self, resolved: ResolvedField, text: object, node: ast.Node
+    ) -> tantivy.Query:
         """Emit a term query for a JSON subpath (``resolved.dotted_name``).
 
         For a ``Term`` node's value only; a ``Phrase`` node uses the separate
@@ -525,12 +531,18 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         token = str(text)
 
         if self._json_paths_supported():
-            return tantivy.Query.term_query(self.schema, full, token)
+            # The probe inside targets resolved.spec.name (the JSON field
+            # itself), not `full`: a dotted subpath is never a schema field
+            # in its own right, so it can only answer the base field's
+            # presence, which is exactly the drift condition.
+            with self._reporting_schema_drift(resolved, node):
+                return tantivy.Query.term_query(self.schema, full, token)
 
         escaped = token.replace("\\", "\\\\").replace('"', '\\"')
-        return self.index.parse_query(
-            f'{full}:"{escaped}"', default_field_names=[resolved.spec.name]
-        )
+        with self._reporting_schema_drift(resolved, node):
+            return self.index.parse_query(
+                f'{full}:"{escaped}"', default_field_names=[resolved.spec.name]
+            )
 
     def _emit_json_phrase(self, resolved: ResolvedField, node: ast.Phrase) -> tantivy.Query:
         """Emit a phrase query for a JSON subpath (``resolved.dotted_name``).
@@ -560,16 +572,19 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             if len(words) == 1:
                 # tantivy rejects a single-word phrase query; a term query is
                 # the exact equivalent anyway (mirrors the plain-field path).
-                return tantivy.Query.term_query(self.schema, full, words[0])
+                with self._reporting_schema_drift(resolved, node):
+                    return tantivy.Query.term_query(self.schema, full, words[0])
             mapped_slop = max(node.slop - 1, 0)
             w: list[str | tuple[int, str]] = list(words)
-            return tantivy.Query.phrase_query(self.schema, full, w, slop=mapped_slop)
+            with self._reporting_schema_drift(resolved, node):
+                return tantivy.Query.phrase_query(self.schema, full, w, slop=mapped_slop)
 
         query_text = " ".join(words)
         escaped = query_text.replace("\\", "\\\\").replace('"', '\\"')
-        return self.index.parse_query(
-            f'{full}:"{escaped}"', default_field_names=[resolved.spec.name]
-        )
+        with self._reporting_schema_drift(resolved, node):
+            return self.index.parse_query(
+                f'{full}:"{escaped}"', default_field_names=[resolved.spec.name]
+            )
 
     # -- leaves --------------------------------------------------------
 
@@ -604,6 +619,24 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         """
         spec = resolved.spec
         strategy = self.registry.exists_strategy(spec)
+        # tantivy's exists_query takes no schema and so validates nothing at
+        # build time: against a drifted registry the two strategies that use
+        # it build a perfectly well-formed query that raises a bare
+        # ValueError out of the *searcher*, escaping emit() and its
+        # QueryError contract entirely. That is the same "dies at tantivy
+        # search time rather than emit time" failure the no-strategy branch
+        # below refuses to cause, so the probe runs up front here rather
+        # than in a failure path that does not exist.
+        if strategy in (
+            ExistsStrategy.FAST_FIELD,
+            ExistsStrategy.FAST_JSON_FIELD,
+        ) and not self._field_in_schema(spec.name):
+            self._fail(
+                DiagnosticKind.SCHEMA_FIELD_MISSING,
+                message=f"field {spec.name!r} is not defined in the index schema",
+                node=node,
+                resolved=resolved,
+            )
         if strategy is ExistsStrategy.FAST_FIELD:
             # exists_query is a cheap fast-field presence check.
             return tantivy.Query.exists_query(spec.name)
@@ -621,8 +654,11 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             return tantivy.Query.exists_query(spec.name, json_subpaths=True)
         if strategy is ExistsStrategy.TERM_SCAN:
             # Non-fast TEXT/KEYWORD fields: "has any term at all" via a
-            # regex that matches every term in the field's dictionary.
-            return tantivy.Query.regex_query(self.schema, spec.name, ".*")
+            # regex that matches every term in the field's dictionary. This
+            # one does take a schema, so drift surfaces as a build-time
+            # ValueError and the shared wrapper classifies it.
+            with self._reporting_schema_drift(resolved, node):
+                return tantivy.Query.regex_query(self.schema, spec.name, ".*")
         # No resolved strategy (a non-fast field of any other kind, e.g.
         # U64, DATE, DATETIME, BOOLEAN_EXISTS, a non-fast JSON subpath, ...):
         # regex_query only matches against a tantivy text/string field, so a
@@ -664,7 +700,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         if node.field is not None and node.field.json_path is not None:
             resolved = self.registry.resolve(node.field)
             if resolved is not None:
-                return self._emit_json_term(resolved, node.text)
+                return self._emit_json_term(resolved, node.text, node)
             # Falls through to _resolve below, which raises "unknown field"
             # for an invalid subpath reference instead of silently treating
             # it as a plain field.
@@ -680,7 +716,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # multi-token value was already resolved into And/Or/Phrase per
             # its field's Multitoken policy). This method has no tokenizing
             # or drop decision left to make.
-            return tantivy.Query.term_query(self.schema, spec.name, str(node.text))
+            with self._reporting_schema_drift(resolved, node):
+                return tantivy.Query.term_query(self.schema, spec.name, str(node.text))
 
         if spec.kind is FieldKind.U64:
             try:
@@ -693,7 +730,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                     resolved=resolved,
                     raw_value=str(node.text),
                 )
-            return tantivy.Query.term_query(self.schema, spec.name, value)
+            with self._reporting_schema_drift(resolved, node):
+                return tantivy.Query.term_query(self.schema, spec.name, value)
 
         if spec.kind is FieldKind.BOOLEAN_EXISTS:
             # FieldRegistry's third pass validates exists_target only as
@@ -755,12 +793,14 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             if len(words) == 1:
                 # tantivy rejects a single-word phrase query; a term query is
                 # the exact equivalent anyway.
-                return tantivy.Query.term_query(self.schema, spec.name, words[0])
+                with self._reporting_schema_drift(resolved, node):
+                    return tantivy.Query.term_query(self.schema, spec.name, words[0])
             # whoosh's slop counts *positions spanned* (slop=1 means
             # adjacent); tantivy's counts *gaps allowed* (slop=0 adjacent).
             slop = max(node.slop - 1, 0)
             w: list[str | tuple[int, str]] = list(words)
-            return tantivy.Query.phrase_query(self.schema, spec.name, w, slop=slop)
+            with self._reporting_schema_drift(resolved, node):
+                return tantivy.Query.phrase_query(self.schema, spec.name, w, slop=slop)
 
         if spec.kind is FieldKind.U64:
             if node.text == "*":
@@ -790,7 +830,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                     resolved=resolved,
                     raw_value=str(node.text),
                 )
-            return tantivy.Query.term_query(self.schema, spec.name, value)
+            with self._reporting_schema_drift(resolved, node):
+                return tantivy.Query.term_query(self.schema, spec.name, value)
 
         if spec.kind is FieldKind.BOOLEAN_EXISTS:
             # FieldRegistry's third pass validates exists_target only as
@@ -855,8 +896,9 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
         Only the two pattern visitors route through here. The fixed ``.*``
         that ``_exists_query`` compiles for a TERM_SCAN field carries no
-        user input and cannot hit the cap, so a failure there stays a
-        genuine backend rejection.
+        user input and cannot hit the cap, so it calls ``regex_query``
+        directly under the shared drift wrapper instead of coming through
+        this method and risking a bogus ``PATTERN_TOO_COMPLEX``.
 
         The cap is not the only thing ``Query.regex_query`` reports as a
         bare ``ValueError``, though: a field this library's registry knows
@@ -864,21 +906,22 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         registry/schema mismatch, an operator's problem and not the query
         text's, so it gets ``SCHEMA_FIELD_MISSING`` (``MISCONFIGURED``)
         rather than being frozen into ``PATTERN_TOO_COMPLEX`` forever or
-        blamed on this library as a ``BACKEND_REJECTED`` 500. The two are
-        told apart by probing the schema, which tantivy-py exposes no
-        introspection for, only in the failure path so the common case
-        stays a single call.
+        blamed on this library as a ``BACKEND_REJECTED`` 500. That split is
+        ``_reporting_schema_drift``'s job, shared with every other leaf
+        that queries a resolved field, so the paths cannot drift in what
+        they consider "missing". The probe runs only in the failure path,
+        so the common case stays a single call.
+
+        What is left once the drift case is peeled off really is the state
+        cap, which is why this method's own handler can name it directly.
         """
         try:
-            return tantivy.Query.regex_query(self.schema, resolved.spec.name, regex)
+            with self._reporting_schema_drift(resolved, node):
+                return tantivy.Query.regex_query(self.schema, resolved.spec.name, regex)
         except ValueError as exc:
-            if not self._field_in_schema(resolved.spec.name):
-                self._fail(
-                    DiagnosticKind.SCHEMA_FIELD_MISSING,
-                    message=f"cannot emit query: {exc}",
-                    node=node,
-                    resolved=resolved,
-                )
+            # Only reached when the drift probe said the field IS present,
+            # since _reporting_schema_drift raises QueryError (not a
+            # ValueError) when it isn't.
             self._fail(
                 DiagnosticKind.PATTERN_TOO_COMPLEX,
                 message=f"pattern is too complex for the backend to compile: {exc}",
@@ -890,19 +933,71 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         """Whether ``name`` is a field of the index's tantivy schema.
 
         ``tantivy.Schema`` exposes no introspection at all on the pinned
-        version, so the cheapest available probe is a query construction
-        that only the missing-field condition rejects: an empty-string term
-        query builds fine against any text or string field and raises
-        ``ValueError`` when the field is absent. Only ``_regex_query``'s
-        failure path calls this, where the field is already known to be
-        TEXT or KEYWORD (``_reject_pattern_incompatible_kind`` closed the
-        kind axis before it), so no other rejection reason applies.
+        version, so the only available probe is a query construction that
+        the missing-field condition rejects and nothing else does. A
+        ``.*`` regex query is that construction: it builds against a field
+        of *any* kind (tantivy is happy to compile a regex over a numeric
+        or date column's encoded term bytes, which is why ``_exists_query``
+        can use the same call for a TERM_SCAN existence check) and raises
+        ``ValueError`` only when the field name is absent.
+
+        The kind-independence is load-bearing, because every caller passes
+        a field whose kind it has not constrained. An empty-string *term*
+        query would not do: it succeeds only on a text or string field and
+        raises a *type* error on a U64, DATE or JSON one, so it would
+        report a field that is present as missing and relabel a genuine
+        library defect as the operator's problem.
+
+        ``name`` must be a canonical spec name, never a JSON dotted path: a
+        subpath is not a schema field in its own right (``notes.user``
+        probes as absent even when ``notes`` is present), so passing one
+        would report every JSON subpath query as schema drift.
         """
         try:
-            tantivy.Query.term_query(self.schema, name, "")
+            tantivy.Query.regex_query(self.schema, name, ".*")
         except ValueError:
             return False
         return True
+
+    @contextlib.contextmanager
+    def _reporting_schema_drift(
+        self, resolved: ResolvedField, node: ast.Node | None = None
+    ) -> Iterator[None]:
+        """Translate a missing-field ``ValueError`` from tantivy-py into
+        ``SCHEMA_FIELD_MISSING``, and let every other one through.
+
+        Wraps the individual tantivy call, never a whole visitor body, so
+        the only exceptions it can see come from tantivy itself and not
+        from this emitter's own value coercion.
+
+        A registry that knows a field the schema does not is drift the
+        operator can fix, and it is by far the most likely way this
+        condition arises in a real deployment: a host's field table and its
+        schema builder are separate declarations that can fall out of step.
+        Reaching ``emit``'s generic backstop instead would report it as
+        ``BACKEND_REJECTED``/``INTERNAL`` and blame this library for the
+        host's configuration.
+
+        The narrowness matters as much as the coverage. Only the condition
+        the schema probe actually confirms is reclassified; any other
+        ``ValueError`` from the same call is re-raised untouched and still
+        reaches the backstop as ``BACKEND_REJECTED``, because tantivy-py
+        rejecting a query this emitter built for any *other* reason really
+        is a defect here. Swallowing those into ``MISCONFIGURED`` would
+        hide library bugs behind a 400, which is worse than the gap this
+        closes.
+        """
+        try:
+            yield
+        except ValueError as exc:
+            if not self._field_in_schema(resolved.spec.name):
+                self._fail(
+                    DiagnosticKind.SCHEMA_FIELD_MISSING,
+                    message=f"cannot emit query: {exc}",
+                    node=node,
+                    resolved=resolved,
+                )
+            raise
 
     def _reject_pattern_incompatible_kind(self, resolved: ResolvedField) -> None:
         """Backstop for a hand-built ``Prefix``/``Wildcard`` node whose
@@ -1035,15 +1130,16 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         spec = resolved.spec
         if lo is None and hi is None:
             return self._exists_query(resolved, node=node)
-        return tantivy.Query.range_query(
-            self.schema,
-            spec.name,
-            field_type,
-            lower_bound=lo,
-            upper_bound=hi,
-            include_lower=True if lo is None else node.incl_lo,
-            include_upper=True if hi is None else node.incl_hi,
-        )
+        with self._reporting_schema_drift(resolved, node):
+            return tantivy.Query.range_query(
+                self.schema,
+                spec.name,
+                field_type,
+                lower_bound=lo,
+                upper_bound=hi,
+                include_lower=True if lo is None else node.incl_lo,
+                include_upper=True if hi is None else node.incl_hi,
+            )
 
     def visit_numericrange(self, node: ast.NumericRange) -> tantivy.Query:
         resolved = self._resolve(node.field)

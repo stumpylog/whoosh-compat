@@ -145,11 +145,21 @@ a host can use for routing without knowing every `DiagnosticKind`:
 `MISCONFIGURED` is the one cause that is two responses rather than one. It
 means the registry and the index schema disagree, which only an operator can
 fix, so it must raise an alert. But every `MISCONFIGURED` kind is reachable
-from ordinary query text (`notes.user:*` for `EXISTS_REQUIRES_FAST`,
-`ghost:ali*` for `SCHEMA_FIELD_MISSING`), so a request is waiting on an
-answer that the alert does not provide. The query cannot run whether or not
-anyone reads the alert, and reporting it as a 500 would claim a defect in
-this library that isn't there, so the request gets a 400.
+from ordinary query text (`notes.user:*` for `EXISTS_REQUIRES_FAST`, and any
+query naming a field the registry knows and the index schema does not for
+`SCHEMA_FIELD_MISSING`), so a request is waiting on an answer that the alert
+does not provide. The query cannot run whether or not anyone reads the
+alert, and reporting it as a 500 would claim a defect in this library that
+isn't there, so the request gets a 400.
+
+`SCHEMA_FIELD_MISSING` is reported uniformly by every leaf that queries a
+resolved field (term, phrase, prefix, wildcard, numeric and date range,
+bare-`*` existence, and JSON subpaths): the drift is a property of the
+field, not of the spelling that reaches it, so `content:x` and `content:x*`
+never land on opposite sides of the 400/500 line for the same broken
+deployment. Only the confirmed missing-field condition is reclassified; any
+other refusal from tantivy-py remains `BACKEND_REJECTED`/`INTERNAL`, so a
+genuine defect in this library is never hidden behind a 400.
 
 `Diagnostic.message` (and the `QueryError` exception message, which is the
 same string) carries no stability guarantee and may reword without notice.

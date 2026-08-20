@@ -444,14 +444,14 @@ def test_pattern_on_field_absent_from_schema_reports_the_mismatch(
     assert d.field == FieldRef("ghost")
     assert d.field_kind is FieldKind.TEXT
 
-    # The sibling cell, and the boundary this split does not cross: the same
-    # drift on a plain term reaches only emit()'s generic backstop, which has
-    # an exception type and no field to probe, so it stays INTERNAL.
+    # The sibling cell: a plain term on the same broken field must agree,
+    # because drift is a property of the field and not of the spelling that
+    # reaches it. Full leaf-axis coverage lives in test_schema_drift.py.
     with pytest.raises(QueryError) as term_exc:
         emit_ast(ast.Term(field=FieldRef("ghost"), text="alice"), tindex, broken)
     term_d = term_exc.value.diagnostic
-    assert term_d.kind is DiagnosticKind.BACKEND_REJECTED
-    assert term_d.cause is Cause.INTERNAL
+    assert term_d.kind is d.kind
+    assert term_d.cause is d.cause
 
 
 def test_pattern_over_the_cap_on_a_real_field_is_still_unsupported(
