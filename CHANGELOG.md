@@ -28,12 +28,12 @@ material; they are permanently documented, each with its rationale, in
   operator's problem rather than as an internal error. This is the drift a
   host gets when its field table and its schema builder fall out of step,
   so it is a deployment fault, not a library one.
-  `BACKEND_REJECTED` keeps `Cause.INTERNAL` and its original meaning:
+  `BACKEND_REJECTED` keeps `Cause.INTERNAL` and its narrower meaning:
   tantivy-py refusing a query this emitter built. The split was necessary
   because `cause_for()` is keyed only on `kind`, so one kind cannot carry
   different causes at different raise sites. A host branching on `kind`
-  should route the new member; a host branching on `cause` alone sees this
-  condition move from `INTERNAL` to `MISCONFIGURED`. Every leaf that
+  should route both members; a host branching on `cause` alone sees a
+  schema mismatch as `MISCONFIGURED` rather than `INTERNAL`. Every leaf that
   queries a resolved field reports it uniformly (term, phrase, prefix,
   wildcard, numeric and date range, bare-`*` existence, BOOLEAN_EXISTS, and
   JSON subpaths on both the direct and `parse_query` routes), because drift
@@ -89,6 +89,17 @@ material; they are permanently documented, each with its rationale, in
 
 ### Added
 
+- `PARSE_KINDS` and `EMIT_KINDS` are exported from the package root. They
+  partition `DiagnosticKind` into the members `parse()` can produce and the
+  members `emit()` can produce, so a host can route on the phase without
+  enumerating members itself.
+- New `DiagnosticKind` members, beyond the splits listed under Breaking:
+  `PATTERN_TOO_COMPLEX`, `EXISTS_REQUIRES_FAST`, `TEXT_RANGE`,
+  `BACKEND_REJECTED`, and the `AST_*` family reporting a tree the emitter
+  cannot execute
+  (`AST_UNFIELDED_TERM`, `AST_UNKNOWN_FIELD`, `AST_JSON_NEEDS_SUBPATH`,
+  `AST_BAD_NUMBER`, `AST_BAD_DATE`, `AST_PATTERN_ON_KIND`,
+  `AST_KIND_NOT_IMPLEMENTED`, `AST_INVALID_SHAPE`).
 - The six multi-word date keywords (`previous week`, `previous month`,
   `previous quarter`, `previous year`, `this month`, `this year`) parse
   without quotes on a date field: `added:previous month` now resolves
@@ -341,9 +352,12 @@ material; they are permanently documented, each with its rationale, in
   that fixes paperless-ngx#13568 (`DIVERGENCES.md` entry 13), and sharing
   one implementation is what keeps that true.
 
-## [0.1.0] - 2026-08-18
+## [0.1.0] - unreleased
 
-Initial release.
+Never published: no PyPI release and no tag. The section below records what
+the 0.1.0 source tree contained, and is what the 0.2.0 "Breaking" entries
+above are written against, for anyone who installed from git at that point.
+0.2.0 is the first published release.
 
 ### Added
 
