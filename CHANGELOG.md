@@ -182,13 +182,22 @@ material; they are permanently documented, each with its rationale, in
   traversal's work stack has no way to reach inside a `set`'s own hash
   call. A sibling that is deep rather than wide (a long `Not` chain
   standing next to an ordinary term, say) could still `RecursionError` out
-  of `normalize()`. Only reachable from a **caller-built** AST: the
-  parser's own nesting caps keep every tree `parse()` produces well under
-  the depth this needs, so `whoosh_compat.parse()` was never affected, and
-  neither was any query built from ordinary text. A caller invoking
-  `ast.normalize()` or `emit()` directly on a hand-built tree could still
-  hit it. The dedupe key is now computed by an iterative traversal instead
-  of relying on `__hash__`, with the same node-equality semantics.
+  of `normalize()`, contradicting `normalize()`'s own docstring, which
+  already promised an iterative, `RecursionError`-proof traversal. This is
+  an invariant repair, not the closing of a live host-facing hole: nothing
+  observable changes for `whoosh_compat.parse()` (the parser's own nesting
+  caps keep every parsed tree well under the depth this needs, so it was
+  never reachable that way) or for `TantivyEmitter.emit()` (its own `try`
+  around `ast.analyze(ast.normalize(node), ...)` already caught
+  `RecursionError` by name and converted it to the same
+  `QueryError(AST_INVALID_SHAPE)` its still-recursive visitor stage
+  converts a too-deep hand-built tree to anyway, so a caller going through
+  `emit()` saw a `QueryError` before this fix and still does). The only
+  place this changes observable behavior is a caller invoking
+  `ast.normalize()`/`ast.analyze()` directly on a hand-built tree and using
+  the result for something other than `emit()`. The dedupe key is now
+  computed by an iterative traversal instead of relying on `__hash__`,
+  with the same node-equality semantics.
 - `added:"previous week 3pm"` raised `AttributeError` out of `parse()`
   (a period keyword denotes a span, so a time-of-day on it names nothing,
   and the merging pass got a timespan where it expected a datetime). Both

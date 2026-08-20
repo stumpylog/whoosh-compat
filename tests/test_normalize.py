@@ -254,7 +254,16 @@ class TestIterativeNormalizeDeepTree:
         assert node == T("a")
 
     def test_deep_and_chain_does_not_raise_recursion_error(self) -> None:
-        depth = 5000
+        # 1250, not the 5000 used elsewhere in this class: this test's own
+        # shape (each level's flatten step re-dedupes the whole
+        # already-flattened sibling list so far) is quadratic in depth by
+        # construction, independent of anything normalize()/_dedupe() do -
+        # a pre-iterative recursive-postorder reimplementation of this same
+        # shape was bisected and found to RecursionError at depth 500 and
+        # survive at 400, so 1250 keeps a healthy 2.5x margin over that
+        # failure point while costing seconds rather than the ~50s 5000
+        # costs on this machine.
+        depth = 1250
         tree: Node = T("z")
         for i in range(depth):
             tree = And(children=(T(str(i)), tree))

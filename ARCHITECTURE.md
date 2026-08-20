@@ -623,14 +623,27 @@ which hashes it with the frozen dataclasses' generated `__hash__` -
 recursing through that sibling's *own* subtree in native Python frames no
 matter how the traversal that called it is shaped. A sibling that is
 itself deep rather than wide (a long `Not` chain standing next to an
-ordinary term) could still `RecursionError` there. `parse()`'s own depth
-caps keep every parsed tree well under the depth this needs, so this was
-reachable only from a hand-built AST passed directly to `ast.normalize()`
-or `emit()` - the same audience the paragraph above already scopes this
-section to. `_dedupe` now computes its key with its own iterative,
+ordinary term) could still `RecursionError` there, contradicting the
+"an explicit work stack ... so a pathologically deep or wide tree costs
+heap, not Python call-stack frames" guarantee `normalize()`'s own
+docstring already made. This is an invariant repair, not the closing of a
+live host-facing hole. `parse()`'s own depth caps keep every parsed tree
+well under the depth this needs, so it was never reachable that way, and
+`TantivyEmitter.emit()` (`emitters/tantivy_.py`) was never exposed to it
+either: its `try` around `ast.analyze(ast.normalize(node), ...)` already
+caught `RecursionError` by name and converted it to the same
+`QueryError(AST_INVALID_SHAPE)` its own still-recursive `visit_*` chain
+(`visit_not` calling `self.visit(node.child)`, and so on) converts a
+too-deep hand-built tree to anyway - so a caller going through `emit()`
+saw a `QueryError` for this shape before the fix and still does after it;
+nothing changed there. The only place this fix changes observable
+behavior is a caller invoking `ast.normalize()`/`ast.analyze()` directly
+on a hand-built tree and using the result for something other than
+`emit()`. `_dedupe` now computes its key with its own iterative,
 memoized traversal (matching the same node-equality semantics, including
-the `Phrase.words`/`analyzed` extension described on its docstring)
-instead of relying on `__hash__`.
+the `Phrase.words`/`analyzed` extension described on its docstring, and
+the numeric-tower/NaN quirks `Boosted.boost` raises for a string-based
+key - see `_encode_field`'s docstring) instead of relying on `__hash__`.
 
 The cap bounds recursion depth, not CPU time: parse time is still
 quadratic in the length of a long unmatched word-character run (the

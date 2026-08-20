@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -253,6 +255,13 @@ def _dedupe_key_children(node: Node) -> tuple[Node, ...]:
     return tuple(children)
 
 
+# Every NaN encoded by _encode_field draws a fresh tag from here: a NaN
+# never `==`-compares equal to anything, including another NaN with the
+# identical value, so no two NaN encodings may ever be allowed to collide
+# (see _encode_field's docstring for why this can't just key off id()).
+_NAN_TAGS: itertools.count[int] = itertools.count()
+
+
 def _encode_field(value: object, memo: dict[int, str]) -> str:
     """Encodes one already-normalized field value of a node into a string
     fragment, for :func:`_structural_key` to assemble.
@@ -262,16 +271,72 @@ def _encode_field(value: object, memo: dict[int, str]) -> str:
     contributes each element's encoding, length-prefixed and joined, so a
     tuple boundary can never be confused with a field-value boundary (a
     field value that happens to contain the joining character does not
-    create a false split); anything else contributes its type name and
-    ``repr()``, which is enough to distinguish it from a different type
-    with a colliding ``repr()`` (e.g. the string ``"1"`` vs the int
-    ``1``).
+    create a false split).
+
+    Anything else - the atomic-leaf fallback - must produce equal strings
+    for values that compare ``==`` and different strings for values that
+    do not, matching whatever the dataclass-generated field comparison
+    would have done, not just "looks distinguishable": a bare
+    ``f"{type(value).__name__}:{value!r}"`` gets this wrong two ways for
+    the numeric tower (``int``/``float``/``bool`` all compare across
+    types: ``2 == 2.0``, ``True == 1``), which is the one place in this
+    AST an atomic (non-``Node``) field sits directly on a composite node
+    (``Boosted.boost``) rather than being handled by :func:`_leaf_key`'s
+    fast path:
+
+    * Two values that compare equal but type-and-repr differently
+      (``2`` vs ``2.0``) would encode as different strings and wrongly be
+      kept as distinct siblings (under-dedupe: benign, just misses a
+      merge real ``==``-based dedupe would have made).
+    * Two NaN floats, which never compare equal to *anything* via a bare
+      ``==`` - not even to themselves, field-for-field, as confirmed
+      below - both ``repr()`` as ``"nan"`` and would wrongly encode as
+      the *same* string, merging two nodes real node-equality treats as
+      distinct (over-dedupe: silently drops one - the actual correctness
+      risk this module's recursive-``__hash__`` fix was about, just
+      relocated to a coarser key instead of eliminated).
+
+    A third, smaller case is the same family of bug: ``-0.0`` and ``0.0``
+    compare equal (``-0.0 == 0.0``) but ``repr()`` differently, so they
+    would wrongly encode as distinct without an explicit normalization
+    step too.
+
+    All three are handled explicitly. A NaN float draws a fresh tag from
+    ``_NAN_TAGS`` every time, so no two NaN encodings ever collide, no
+    matter what: this deliberately does *not* key off ``id(value)`` the
+    way ``__eq__`` gets to for a top-level "is this literally the same
+    node" check (:func:`_dedupe` has its own such check, for that
+    reason - see its docstring), because the field-level comparison a
+    NaN participates in here never gets that shortcut. The dataclasses'
+    own generated ``__eq__`` for a composite node compares
+    ``self.boost == other.boost`` directly, a bare ``float.__eq__`` call
+    with no identity fast path, so even the *same* NaN object nested
+    inside two otherwise-identical composite nodes compares unequal
+    (confirmed against this codebase's actual generated ``__eq__``, not
+    assumed); an ``id(value)``-based tag would have wrongly collapsed
+    that case back into a false collision one level down from the bug
+    just fixed. A zero of either sign is normalized to plain ``0.0``; and
+    any other ``int``/``float``/``bool`` is canonicalized through
+    ``float()`` so cross-type-but-equal values encode identically. Every
+    other atomic type actually reachable here (``str``, ``None``,
+    ``datetime``, ``FieldRef``, ``Diagnostic``) has no such quirk: its
+    ``repr()`` is unambiguous and equality-preserving, so the original
+    type-plus-``repr()`` fallback is kept for them. A future atomic field
+    added to a composite ``Node`` with a type not covered by either branch
+    would need the same scrutiny this docstring gives ``float``.
     """
     if isinstance(value, Node):
         return memo[id(value)]
     if isinstance(value, tuple):
         parts = [_encode_field(v, memo) for v in value]
         return "(" + "|".join(f"{len(p)}:{p}" for p in parts) + ")"
+    if isinstance(value, (int, float)):
+        as_float = float(value)
+        if math.isnan(as_float):  # NaN: never `==`-equal to anything, not even itself
+            return f"nan:{next(_NAN_TAGS)}"
+        if as_float == 0.0:  # normalize -0.0 to 0.0: they compare equal but repr differently
+            as_float = 0.0
+        return f"num:{as_float!r}"
     return f"{type(value).__name__}:{value!r}"
 
 
@@ -281,15 +346,18 @@ def _leaf_key(node: Node) -> tuple[object, ...]:
     field values, built directly rather than by routing through
     :func:`_structural_key`'s stack/string machinery.
 
-    Safe for the same reason :func:`_structural_key` needs that machinery
-    in the first place is absent here: nothing in this tuple is itself a
-    ``Node``, so there is no subtree to recurse through, no matter how
-    deep this leaf's *siblings* happen to be. This is the overwhelmingly
-    common case :func:`_dedupe` sees in practice (a run of ``Term``/
-    ``Phrase``/etc. siblings, not a hand-built pathologically deep
-    chain), so skipping the string serialization for it matters for the
-    normal case's performance even though correctness only requires it
-    for the composite case.
+    Safe because nothing in this tuple is itself a ``Node``: there is no
+    subtree here for :func:`_structural_key`'s string flattening to
+    protect against, no matter how deep this leaf's *siblings* happen to
+    be. It is also more exact than :func:`_encode_field`'s fallback would
+    be for the same fields, not just faster: the raw values go straight
+    into the tuple, so Python's own ``==``/``hash`` resolve numeric-tower
+    and NaN equality correctly with no canonicalization needed at all.
+    This is the overwhelmingly common case :func:`_dedupe` sees in
+    practice (a run of ``Term``/``Phrase``/etc. siblings, not a
+    hand-built pathologically deep chain), so skipping the string
+    serialization for it matters for the normal case's performance even
+    though correctness only requires it for the composite case.
     """
     return (type(node), *(getattr(node, f.name) for f in dataclass_fields(node) if f.compare))
 
@@ -298,7 +366,12 @@ def _structural_key(root: Node) -> str:
     """Computes a string that is equal for two nodes precisely when their
     ``compare=True`` fields are, at every depth - the same information
     the dataclasses' generated ``__eq__``/``__hash__`` uses - without ever
-    calling either.
+    calling either. This holds for every atomic field type actually
+    reachable in this AST (see :func:`_encode_field`'s docstring for the
+    numeric-tower/NaN handling that makes it hold for ``float``
+    specifically); a hypothetical future atomic field type outside what
+    :func:`_encode_field` already special-cases would need the same
+    scrutiny before this claim would still be true of it.
 
     Traverses iteratively (an explicit work stack, keyed by node identity,
     mirroring :func:`normalize`'s own traversal), so a node that is itself
@@ -317,6 +390,17 @@ def _structural_key(root: Node) -> str:
     string - is asked to recurse through the tree's structure again: a
     string's own equality and hashing are computed over its flat
     character content, not over whatever tree shape produced it.
+
+    ``memo`` entries are dropped as soon as their parent has folded them
+    into its own string (every child is consumed exactly once, right
+    after ``kids`` is computed for its parent): a level's string embeds
+    its entire subtree's text, so keeping every level's copy alive at
+    once, all the way up a deep chain, would cost memory quadratic in
+    depth (a still-heap-only, but still real, echo of the same "one
+    sibling deep enough defeats the safeguard" shape this function exists
+    to avoid on the call-stack side). Discarding a child's entry once
+    consumed bounds the live set to the current root-to-frontier path,
+    making peak memory linear in depth instead.
     """
     memo: dict[int, str] = {}
     stack: list[tuple[Node, bool]] = [(root, False)]
@@ -330,6 +414,8 @@ def _structural_key(root: Node) -> str:
                     continue
                 parts.append(_encode_field(getattr(current, f.name), memo))
             memo[id(current)] = "|".join(f"{len(p)}:{p}" for p in parts)
+            for k in kids:
+                memo.pop(id(k), None)
         else:
             stack.append((current, True))
             for k in kids:
@@ -367,10 +453,33 @@ def _dedupe(nodes: tuple[Node, ...]) -> tuple[Node, ...]:
     and a node deep enough on its own (not wide - depth, as a single
     sibling) defeats that work stack by recursing inside the ``set``
     operation instead of inside ``normalize``'s own traversal.
+
+    A same-object identity check runs first, ahead of (and independent
+    of) that key: this codebase's generated ``__eq__`` short-circuits to
+    ``True`` when ``self is other``, before comparing any field - the one
+    place real node equality treats two nodes as interchangeable *without
+    consulting field values at all*. A structural key built from field
+    values alone cannot reproduce that shortcut for a sibling that
+    contains a NaN (:func:`_encode_field` deliberately makes every NaN
+    encoding unique, since NaN never compares ``==`` to anything else,
+    including a second occurrence of the identical float object nested
+    inside two otherwise-identical composite nodes - see its docstring),
+    so without this check, the exact same node object listed twice as a
+    sibling would wrongly be kept as two "distinct" entries whenever it
+    contains a NaN anywhere in its subtree. Every other case this check
+    also short-circuits (an ordinary duplicate object reference with no
+    NaN in it) was already being caught correctly by the key alone; this
+    only changes NaN-bearing duplicates, and only in the narrow direction
+    of restoring the merge real equality already grants them via
+    ``self is other``.
     """
     seen: set[tuple[object, tuple[str, ...] | None, bool | None]] = set()
+    seen_ids: set[int] = set()
     result: list[Node] = []
     for n in nodes:
+        if id(n) in seen_ids:
+            continue
+        seen_ids.add(id(n))
         base: object = _leaf_key(n) if not _dedupe_key_children(n) else _structural_key(n)
         key: tuple[object, tuple[str, ...] | None, bool | None]
         if isinstance(n, Phrase):
