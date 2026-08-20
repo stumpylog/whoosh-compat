@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
+from dataclasses import fields as dataclass_fields
 from datetime import datetime
 from typing import Generic
 from typing import TypeVar
@@ -227,6 +228,115 @@ class ErrorLeaf(Node):
     diagnostic: Diagnostic
 
 
+def _dedupe_key_children(node: Node) -> tuple[Node, ...]:
+    """Returns the ``Node`` values among ``node``'s own ``compare=True``
+    dataclass fields, in field-declaration order: exactly the fields the
+    auto-generated ``__eq__``/``__hash__`` actually looks at, whether held
+    directly (``Not.child``) or inside a tuple (``And.children``).
+
+    Generic across every ``Node`` subclass (unlike ``_child_nodes``, which
+    only covers the container types ``normalize`` itself walks): this also
+    descends into leaf-adjacent fields like ``Boosted.child`` for the same
+    reason, and is what lets :func:`_structural_key` build a subtree's key
+    bottom-up without relying on the dataclasses' own recursive
+    ``__hash__``.
+    """
+    children: list[Node] = []
+    for f in dataclass_fields(node):
+        if not f.compare:
+            continue
+        value = getattr(node, f.name)
+        if isinstance(value, Node):
+            children.append(value)
+        elif isinstance(value, tuple):
+            children.extend(v for v in value if isinstance(v, Node))
+    return tuple(children)
+
+
+def _encode_field(value: object, memo: dict[int, str]) -> str:
+    """Encodes one already-normalized field value of a node into a string
+    fragment, for :func:`_structural_key` to assemble.
+
+    A ``Node`` value contributes its own already-computed entry from
+    ``memo`` (populated bottom-up, never recomputed here); a tuple
+    contributes each element's encoding, length-prefixed and joined, so a
+    tuple boundary can never be confused with a field-value boundary (a
+    field value that happens to contain the joining character does not
+    create a false split); anything else contributes its type name and
+    ``repr()``, which is enough to distinguish it from a different type
+    with a colliding ``repr()`` (e.g. the string ``"1"`` vs the int
+    ``1``).
+    """
+    if isinstance(value, Node):
+        return memo[id(value)]
+    if isinstance(value, tuple):
+        parts = [_encode_field(v, memo) for v in value]
+        return "(" + "|".join(f"{len(p)}:{p}" for p in parts) + ")"
+    return f"{type(value).__name__}:{value!r}"
+
+
+def _leaf_key(node: Node) -> tuple[object, ...]:
+    """Fast path for a node with no ``Node``-valued ``compare=True`` field
+    (``_dedupe_key_children(node) == ()``): a plain tuple of its own
+    field values, built directly rather than by routing through
+    :func:`_structural_key`'s stack/string machinery.
+
+    Safe for the same reason :func:`_structural_key` needs that machinery
+    in the first place is absent here: nothing in this tuple is itself a
+    ``Node``, so there is no subtree to recurse through, no matter how
+    deep this leaf's *siblings* happen to be. This is the overwhelmingly
+    common case :func:`_dedupe` sees in practice (a run of ``Term``/
+    ``Phrase``/etc. siblings, not a hand-built pathologically deep
+    chain), so skipping the string serialization for it matters for the
+    normal case's performance even though correctness only requires it
+    for the composite case.
+    """
+    return (type(node), *(getattr(node, f.name) for f in dataclass_fields(node) if f.compare))
+
+
+def _structural_key(root: Node) -> str:
+    """Computes a string that is equal for two nodes precisely when their
+    ``compare=True`` fields are, at every depth - the same information
+    the dataclasses' generated ``__eq__``/``__hash__`` uses - without ever
+    calling either.
+
+    Traverses iteratively (an explicit work stack, keyed by node identity,
+    mirroring :func:`normalize`'s own traversal), so a node that is itself
+    deep (e.g. a long ``Not`` chain appearing as one sibling among several)
+    costs heap, not Python call-stack frames. This is what a call to
+    ``hash(node)`` or ``node in some_set`` does not give you: the
+    dataclasses' generated ``__hash__`` recurses through the whole subtree
+    in native Python frames to compute a single int, so a sibling deep
+    enough on its own can exceed the recursion limit even though nothing
+    else in the same traversal is recursive.
+
+    Each node's contribution is built as a single flat, length-prefixed
+    string from its own fields plus its already-computed children's
+    strings (not their nodes, and not nested containers of them), so no
+    step here - construction or, later, hashing/comparing the final
+    string - is asked to recurse through the tree's structure again: a
+    string's own equality and hashing are computed over its flat
+    character content, not over whatever tree shape produced it.
+    """
+    memo: dict[int, str] = {}
+    stack: list[tuple[Node, bool]] = [(root, False)]
+    while stack:
+        current, children_ready = stack.pop()
+        kids = _dedupe_key_children(current)
+        if children_ready or not kids:
+            parts = [type(current).__name__]
+            for f in dataclass_fields(current):
+                if not f.compare:
+                    continue
+                parts.append(_encode_field(getattr(current, f.name), memo))
+            memo[id(current)] = "|".join(f"{len(p)}:{p}" for p in parts)
+        else:
+            stack.append((current, True))
+            for k in kids:
+                stack.append((k, False))
+    return memo[id(root)]
+
+
 def _dedupe(nodes: tuple[Node, ...]) -> tuple[Node, ...]:
     """Remove duplicate nodes, preserving first-seen order.
 
@@ -248,17 +358,27 @@ def _dedupe(nodes: tuple[Node, ...]) -> tuple[Node, ...]:
     all-analyzed), so that half only guards hand-built trees. The dedupe
     key therefore extends node equality with ``(words, analyzed)``,
     leaving the equality contract itself unchanged.
+
+    The key is computed via :func:`_structural_key` (or, for a childless
+    leaf, the cheaper :func:`_leaf_key`) rather than by putting ``n``
+    itself into the set: a plain ``set`` would hash ``n`` with the
+    dataclasses' generated (recursive) ``__hash__``, which is exactly the
+    recursion :func:`normalize`'s explicit work stack exists to avoid,
+    and a node deep enough on its own (not wide - depth, as a single
+    sibling) defeats that work stack by recursing inside the ``set``
+    operation instead of inside ``normalize``'s own traversal.
     """
-    seen: set[tuple[Node, tuple[str, ...] | None, bool | None]] = set()
+    seen: set[tuple[object, tuple[str, ...] | None, bool | None]] = set()
     result: list[Node] = []
     for n in nodes:
-        key: tuple[Node, tuple[str, ...] | None, bool | None]
+        base: object = _leaf_key(n) if not _dedupe_key_children(n) else _structural_key(n)
+        key: tuple[object, tuple[str, ...] | None, bool | None]
         if isinstance(n, Phrase):
-            key = (n, n.words, n.analyzed)
+            key = (base, n.words, n.analyzed)
         elif isinstance(n, Term):
-            key = (n, None, n.analyzed)
+            key = (base, None, n.analyzed)
         else:
-            key = (n, None, None)
+            key = (base, None, None)
         if key not in seen:
             seen.add(key)
             result.append(n)

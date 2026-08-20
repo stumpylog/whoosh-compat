@@ -175,6 +175,20 @@ material; they are permanently documented, each with its rationale, in
   parenthesization cap could not see, so a long chain raised
   `RecursionError` out of `parse()`. The depth cap now covers
   operator-built nesting too, and reports `DiagnosticKind.TOO_DEEP` instead.
+- `ast.normalize()`'s dedupe step put sibling nodes into a `set`, which
+  hashes each one with the frozen dataclasses' generated (recursive)
+  `__hash__` -- recursing through the whole subtree in native Python
+  frames regardless of `normalize()`'s own iterative traversal, since that
+  traversal's work stack has no way to reach inside a `set`'s own hash
+  call. A sibling that is deep rather than wide (a long `Not` chain
+  standing next to an ordinary term, say) could still `RecursionError` out
+  of `normalize()`. Only reachable from a **caller-built** AST: the
+  parser's own nesting caps keep every tree `parse()` produces well under
+  the depth this needs, so `whoosh_compat.parse()` was never affected, and
+  neither was any query built from ordinary text. A caller invoking
+  `ast.normalize()` or `emit()` directly on a hand-built tree could still
+  hit it. The dedupe key is now computed by an iterative traversal instead
+  of relying on `__hash__`, with the same node-equality semantics.
 - `added:"previous week 3pm"` raised `AttributeError` out of `parse()`
   (a period keyword denotes a span, so a time-of-day on it names nothing,
   and the merging pass got a timespan where it expected a datetime). Both

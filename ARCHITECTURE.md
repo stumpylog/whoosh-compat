@@ -617,6 +617,21 @@ parse-time cap to rely on, and previously cost two stack frames per nesting
 level on top of whatever the parser itself had already used, roughly
 halving the tolerated depth versus the raw parse.
 
+That iterative traversal had a gap a work stack alone cannot see: its
+duplicate-sibling dedupe step (`_dedupe`) put each sibling into a `set`,
+which hashes it with the frozen dataclasses' generated `__hash__` -
+recursing through that sibling's *own* subtree in native Python frames no
+matter how the traversal that called it is shaped. A sibling that is
+itself deep rather than wide (a long `Not` chain standing next to an
+ordinary term) could still `RecursionError` there. `parse()`'s own depth
+caps keep every parsed tree well under the depth this needs, so this was
+reachable only from a hand-built AST passed directly to `ast.normalize()`
+or `emit()` - the same audience the paragraph above already scopes this
+section to. `_dedupe` now computes its key with its own iterative,
+memoized traversal (matching the same node-equality semantics, including
+the `Phrase.words`/`analyzed` extension described on its docstring)
+instead of relying on `__hash__`.
+
 The cap bounds recursion depth, not CPU time: parse time is still
 quadratic in the length of a long unmatched word-character run (the
 fieldname tagger's regex scans to end-of-input at each successive tag

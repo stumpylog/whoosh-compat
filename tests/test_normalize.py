@@ -264,3 +264,29 @@ class TestIterativeNormalizeDeepTree:
         # depth, not just raw traversal.
         assert isinstance(result, And)
         assert len(result.children) == depth + 1
+
+    def test_deep_chain_as_sibling_does_not_raise_recursion_error(self) -> None:
+        # The previous two tests are wide (many shallow siblings); this one
+        # is the orthogonal shape: a single 2000-deep Not chain sitting
+        # *beside* another sibling in an And. normalize()'s own traversal
+        # is iterative and handles this fine, but _dedupe puts each sibling
+        # into a set, and a frozen dataclass's generated __hash__ recurses
+        # through the whole subtree in native Python frames to compute it -
+        # so hashing the deep sibling alone can blow the recursion limit,
+        # independent of normalize()'s own traversal being iterative.
+        depth = 2000
+        deep: Node = T("a")
+        for _ in range(depth):
+            deep = Not(child=deep)
+        tree = And(children=(deep, T("b")))
+        result = normalize(tree)
+        assert isinstance(result, And)
+        assert len(result.children) == 2
+        assert result.children[1] == T("b")
+        count = 0
+        node = result.children[0]
+        while isinstance(node, Not):
+            count += 1
+            node = node.child
+        assert count == depth
+        assert node == T("a")
