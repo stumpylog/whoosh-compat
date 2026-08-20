@@ -387,6 +387,17 @@ all-stopword value) drops the term from its enclosing group rather than
 producing an unsatisfiable clause, via `analyze()`'s own re-normalization,
 not a per-visit drop check.
 
+**Polarity is a pre-`analyze()` property.** `analyze()`'s zero-token drop is
+deliberately blind to *which* operand dropped (DIVERGENCES.md entry 23's
+uniform survivor rule), so an `AndNot` whose *positive* side analyzed away
+leaves its negative side standing alone as an ordinary positive node. The
+analyzed tree therefore cannot be asked "did the user exclude this?", and
+any API answering a question about intent rather than about matching must
+walk the normalized-but-unanalyzed tree and analyze whichever leaves it
+decides to keep, one leaf at a time. `ast.free_text_tokens()` is the one
+such API today and does exactly that (`_leaf_analyzed_texts`); it is the
+model for any future one.
+
 **The analyzer contract carries no positions.** `FieldSpec.analyzer` is typed
 `Callable[[str], list[str]] | None`: it returns tokens in order, with no
 positional metadata attached to any of them. This is not a parity gap, it

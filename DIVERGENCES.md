@@ -856,6 +856,28 @@ parse-then-emit pipeline).
     `tests/emitter/test_acceptance_property.py`'s
     `test_andnot_zero_token_positive_matches_everything_here`.
 
+    **Consequence for anything that reads polarity: read it before
+    analysis, not after.** The survivor rule above is polarity-blind by
+    construction, and it has to be (which side dropped is exactly what it
+    refuses to care about). So an `AndNot` whose *positive* side analyzed
+    to nothing leaves its `negative` side standing alone as an ordinary
+    positive node, with nothing in the resulting tree recording that the
+    user had excluded it. That is right for matching (the whole point of
+    the rule) and wrong for any consumer asking "what did this query ask
+    FOR?": `whoosh_compat.ast.free_text_tokens()` used to walk the analyzed
+    tree, and so returned `('secret',)` for `the ANDNOT secret` when `the`
+    was a stopword, contradicting its own first documented rule and handing
+    a host a term to search for that the user had explicitly excluded. It
+    now walks the normalized-but-unanalyzed tree and analyzes each
+    contributing leaf on its own, so polarity comes from the query as
+    written and no analysis outcome can reintroduce a negated term. Any
+    future API answering a question about polarity, intent, or "which words
+    did the user type" must take the same route: the analyzed tree cannot
+    answer those questions, and it is not going to be changed so that it
+    can, since that would mean giving up the timing-independence this entry
+    chose. Test reference: `tests/test_free_text_tokens.py`'s
+    `test_negated_terms_never_survive_an_analysis_collapse`.
+
 24. **An all-zero-token quoted phrase parses to a real empty-words `Phrase`
     object in real whoosh, but is dropped entirely by whoosh-compat's
     emit-time analysis (design, found by the grammar-aware fuzzer).** Real

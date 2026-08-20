@@ -194,6 +194,19 @@ onto several default fields counts once. Tokens are the field analyzer's
 output verbatim, never re-split; see the function's docstring for the
 full contract.
 
+Pass `analyzed=False` to get the raw text each contributing leaf was
+parsed from instead of the analyzer's output. Do that whenever the tokens
+are going back into a parser that will analyze them again: analysis is
+not generally idempotent (a stemmer maps `universities` to `univers` and
+then `univers` to `univ`), so re-analyzing analyzed output searches for
+something the index does not contain. In that mode the analyzer is never
+consulted, so a value the analyzer would drop entirely (an all-stopword
+term) still contributes its raw text, and the text can contain characters
+a *re-parse* would read as grammar (a colon, a bracket) even though the
+query grammar around them is gone: quote or escape before re-parsing.
+Every other rule, negation included, is structural and identical in both
+modes.
+
 **Cap query length at the host boundary.** Parse time is quadratic in the
 length of a long run of word characters containing no `:` (the fieldname
 tagger's regex, `[\w.]+:`, scans toward end-of-input and fails at each

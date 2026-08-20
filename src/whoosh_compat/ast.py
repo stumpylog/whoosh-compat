@@ -828,11 +828,49 @@ class Visitor(Generic[T]):
         raise NotImplementedError(f"No visitor method for {type(node).__name__}")
 
 
+def _leaf_analyzed_texts(leaf: Term | Phrase, registry: FieldRegistry) -> tuple[str, ...]:
+    """The analyzed token texts a single ``Term``/``Phrase`` leaf contributes.
+
+    Runs the very same per-leaf rewrite :func:`analyze` runs (``analyzed``
+    re-entry guard, zero-token drop, ``Multitoken`` handling included), one
+    leaf at a time, and reads the tokens back out of the result. Analysing
+    per leaf rather than whole-tree is what lets :func:`free_text_tokens`
+    keep the *pre-analysis* structure, whose polarity analysis deliberately
+    destroys (DIVERGENCES.md entry 23).
+
+    The ``Multitoken.AND`` context passed here is not the enclosing group's
+    combinator, which a per-leaf call cannot know. It does not need to be:
+    context only picks between ``And`` and ``Or`` for a
+    ``Multitoken.DEFAULT`` field, and both carry the identical token set.
+    The context-independent modes (``FIRST``, ``PHRASE``, explicit
+    ``AND``/``OR``) come from the field's own spec and are unaffected.
+    """
+    analyzed = (
+        _analyze_term(leaf, registry, Multitoken.AND)
+        if isinstance(leaf, Term)
+        else _analyze_phrase(leaf, registry)
+    )
+    if isinstance(analyzed, Term):
+        # A non-str text (a numeric or boolean term value) is never free
+        # text, whatever field it sits on.
+        return (analyzed.text,) if isinstance(analyzed.text, str) else ()
+    if isinstance(analyzed, Phrase):
+        return analyzed.words or ()
+    if isinstance(analyzed, (And, Or)):
+        return tuple(
+            child.text
+            for child in analyzed.children
+            if isinstance(child, Term) and isinstance(child.text, str)
+        )
+    return ()  # Nothing(): the analyzer consumed every token.
+
+
 def free_text_tokens(
     node: Node,
     *,
     registry: FieldRegistry,
     fields: Sequence[str],
+    analyzed: bool = True,
 ) -> tuple[str, ...]:
     """Collect the free-text word tokens of ``node``, in first-appearance
     order, deduplicated.
@@ -842,9 +880,10 @@ def free_text_tokens(
     motivating case: a fuzzy-matching blend that re-parses a word string
     through a backend's own query parser and must never receive query
     grammar). Only ``Term``/``Phrase`` leaves on the requested ``fields``
-    contribute, and what they contribute is the field analyzer's output,
-    verbatim (the tree is passed through :func:`normalize` and
-    :func:`analyze` first, both no-ops on already-processed trees). No
+    contribute, and what they contribute is by default the field analyzer's
+    output, verbatim (each contributing leaf is analyzed on its own, exactly
+    as :func:`analyze` would analyze it, after the tree is passed through
+    :func:`normalize`; both are no-ops on already-processed leaves). No
     query GRAMMAR survives into the result: no field prefixes, ranges,
     brackets, quotes or patterns. Token text itself is whatever the
     analyzer emits, never re-split here (an analyzer whose tokens contain
@@ -856,7 +895,13 @@ def free_text_tokens(
     rather than everything it mentions:
 
     * ``Not`` subtrees and ``AndNot`` negative sides contribute nothing: a
-      term the user excluded must not resurface in a matching clause.
+      term the user excluded must not resurface in a matching clause. This
+      holds unconditionally, which is why the walk runs on the tree as
+      parsed and analyzes leaf by leaf instead of analyzing the tree first:
+      whole-tree :func:`analyze` drops an operand whose every token the
+      analyzer consumed (DIVERGENCES.md entry 23), so an ``AndNot`` whose
+      positive side was all stopwords would collapse to its own *negative*
+      side and hand back a bare positive term the user had excluded.
     * ``AndMaybe`` and ``Require`` contribute both sides (both express
       positive intent, whether or not they score).
     * ``Boosted`` is transparent; ``And``/``Or`` recurse.
@@ -875,6 +920,34 @@ def free_text_tokens(
             free text. Must be non-empty, and every name must resolve to a
             plain (non-subpath) TEXT or KEYWORD field; anything else is a
             host configuration error.
+        analyzed: when ``True`` (the default), a contributing leaf yields
+            the field analyzer's output. When ``False``, it yields the raw
+            text it was parsed from, and the analyzer is never consulted at
+            all. Pass ``False`` when the tokens are going back into a parser
+            that will analyze them itself: analysis is not generally
+            idempotent (a stemmer maps ``universities`` to ``univers`` and
+            ``univers`` to ``univ``), so re-analyzing analyzed output
+            searches for something the index does not contain. Two
+            consequences follow from "the analyzer is never consulted",
+            and both are deliberate:
+
+            * A leaf whose analysis would be empty (an all-stopword value)
+              still contributes its raw text. Deciding *membership* by the
+              analyzer while refusing its *output* would be a half-analysis
+              that this mode's whole contract denies, and it would make the
+              result depend on a stopword list the caller opted out of. The
+              re-parse downstream applies that list once, in its own index's
+              terms, which is where it belongs. This is the only rule above
+              that ``analyzed=False`` changes; polarity, patterns, kinds and
+              dedupe are all structural and behave identically.
+            * Raw text has not been through tokenization, so unlike the
+              analyzed mode it can still contain characters (a colon, a
+              hyphen, a bracket) that a *re-parse* would read as grammar,
+              even though the query grammar around them is gone. A caller
+              feeding these to another parser must quote or escape them.
+
+            Dedupe applies to whatever is emitted, so two spellings that
+            analyze to one token stay two entries here.
 
     Raises:
         ValueError: ``fields`` is empty, names an unknown field or subpath,
@@ -926,8 +999,11 @@ def free_text_tokens(
 
     # Iterative left-to-right preorder (matching normalize()'s heap-not-
     # stack-frames rationale for pathologically deep trees): children are
-    # pushed reversed so pops keep textual order.
-    stack: list[Node] = [analyze(normalize(node), registry)]
+    # pushed reversed so pops keep textual order. The walk is over the
+    # normalized but UNANALYZED tree, so the structural rules above read the
+    # polarity the user wrote; analysis happens per contributing leaf, in
+    # _leaf_analyzed_texts.
+    stack: list[Node] = [normalize(node)]
     while stack:
         current = stack.pop()
         if isinstance(current, (And, Or)):
@@ -942,14 +1018,19 @@ def free_text_tokens(
         elif isinstance(current, Require):
             stack.append(current.filter_only)
             stack.append(current.scored)
-        elif isinstance(current, Term):
-            # A non-str text (a numeric or boolean term value) is never
-            # free text, whatever field it sits on.
-            if is_wanted(current.field) and isinstance(current.text, str):
+        elif isinstance(current, (Term, Phrase)) and is_wanted(current.field):
+            if analyzed:
+                for token in _leaf_analyzed_texts(current, registry):
+                    add(token)
+            elif isinstance(current, Phrase):
+                # The phrase's raw text, as one entry: splitting it into
+                # words here would be this function tokenizing, which is
+                # exactly what the unanalyzed mode was asked not to do.
                 add(current.text)
-        elif isinstance(current, Phrase) and is_wanted(current.field) and current.words:
-            for word in current.words:
-                add(word)
+            elif isinstance(current.text, str):
+                # A non-str text (a numeric or boolean term value) is never
+                # free text, whatever field it sits on.
+                add(current.text)
         # Not, Prefix/Wildcard, ranges, Every, Nothing, ErrorLeaf:
         # contribute nothing, deliberately (see the docstring's rules).
     return tuple(out)

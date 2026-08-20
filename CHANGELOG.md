@@ -96,9 +96,33 @@ material; they are permanently documented, each with its rationale, in
   seeing a bare `RecursionError` from a pathologically nested query.
   Configuration mistakes passed to `parse()` still raise `ValueError`
   eagerly, unchanged.
+- `free_text_tokens(..., analyzed=False)` returns the raw text each
+  contributing leaf was parsed from instead of the field analyzer's output.
+  Use it whenever the tokens go back into a parser that analyzes them
+  again: analysis is not generally idempotent (a stemmer maps
+  `universities` to `univers` and `univers` to `univ`), so re-analyzing
+  analyzed output searches a stem the index does not contain. The mode
+  never consults the analyzer, so a value the analyzer would drop entirely
+  (an all-stopword term) still contributes its raw text, and that text can
+  contain characters a re-parse would read as grammar (a colon, a bracket)
+  even though the query grammar around them is gone: quote or escape before
+  re-parsing. Every other rule, negation included, is structural and
+  identical in both modes. The default is `analyzed=True`, so existing
+  callers are unaffected.
 
 ### Fixed
 
+- `free_text_tokens()` returned a term the user had **excluded** when the
+  other side of the exclusion analyzed to nothing: `the ANDNOT secret`
+  yielded `('secret',)` with `the` a stopword, contradicting the function's
+  own first documented rule. It walked the tree *after* `analyze()`, and
+  `analyze()`'s zero-token drop is deliberately blind to which operand
+  dropped (`DIVERGENCES.md` entry 23), so the `AndNot` had already collapsed
+  to its negative side standing alone as an ordinary positive node. It now
+  walks the normalized-but-unanalyzed tree and analyzes each contributing
+  leaf on its own, so polarity comes from the query as written. A host
+  building a secondary matching clause from these tokens was showing
+  documents the user had asked to exclude.
 - `FieldSpec(subpaths=...)` rejects a sequence that is neither a tuple nor a
   mapping instead of passing it to `dict()`. A list of names was read as a
   sequence of key/value pairs, so `subpaths=['ab', 'cd']` silently became
