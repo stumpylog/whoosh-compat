@@ -475,6 +475,7 @@ class GroupPlugin(Plugin):
 
         return top
 
+
 class EveryPlugin(TaggingPlugin):
     expr = rcompile("[*]:[*]")
     priority = priorities.TAG_EVERY
