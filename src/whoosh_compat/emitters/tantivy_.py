@@ -112,6 +112,28 @@ def _normalize_class_body(body: str, normalize: Callable[[str], str]) -> str:
     therefore leave the character as the user typed it: that can lose a match
     the host's folded index would have had, which is a bounded and honest
     outcome, where a corrupted class is silently the wrong query.
+
+    A *single*-character remap onto class syntax ("-" or "\\") is allowed to
+    apply, and that is a decision rather than an oversight. It is reachable,
+    not exotic: tantivy's ascii_fold (which the host composes into its
+    ``pattern_normalizer``) maps the whole dash family and the fullwidth forms
+    onto their ASCII counterparts (U+2010..U+2015 and U+FF0D become "-",
+    U+FF3C becomes "\\"), so a range whose hyphen is an en dash really does
+    become the ASCII range ``[a-z]`` here. Suppressing that would *diverge
+    from the oracle*: real whoosh folds the whole pattern text before handing
+    it to fnmatch, so fnmatch reads the folded "-" as a range separator too,
+    and agreeing with fnmatch is the entire contract of this translation (see
+    ``glob_to_regex``).
+
+    Measured under the host's real ``ascii_fold(str.lower)`` over every
+    pattern up to length 4 in an alphabet of ASCII and fullwidth class
+    characters: with the fullwidth *delimiters* excluded, 16,104 patterns and
+    zero disagreements with ``fnmatch.translate(fold(pattern))``; the
+    delimiters are a separate, documented qualification (see
+    ``_translate_class`` below and DIVERGENCES.md entry 2). Across the whole
+    30,940-pattern alphabet tantivy's Rust regex engine refused nothing,
+    including the sharp shapes a remap can build ("[]a]", "x[a]b]y",
+    "[a\\b]"), so a remap cannot reach PATTERN_TOO_COMPLEX either.
     """
     out: list[str] = []
     for ch in body:
@@ -158,6 +180,17 @@ def _translate_class(
     # valid and the rest of this function is fnmatch's algorithm verbatim. A
     # leading "!" is negation syntax rather than a term character, so it is
     # left out of the fold and keeps its meaning below.
+    #
+    # Note the ordering: the class extent (j) is found on the *unfolded* text,
+    # so a character the normalizer maps onto "[" or "]" (ascii_fold does map
+    # the fullwidth brackets U+FF3B/U+FF3D that way) lands inside this class
+    # as an ordinary member and cannot close it, and on glob_to_regex's
+    # literal path it cannot open one either, being regex-escaped like any
+    # other literal character. The whole-text-fold oracle would let it do
+    # both, so this is a deliberate, documented divergence: class delimiters
+    # are syntax and are read from what the user actually typed, which
+    # under-matches rather than silently building a different valid class.
+    # See DIVERGENCES.md entry 2's second qualification.
     body_start = i + 1 if pattern[i] == "!" else i
     pattern = (
         pattern[:body_start] + _normalize_class_body(pattern[body_start:j], normalize) + pattern[j:]

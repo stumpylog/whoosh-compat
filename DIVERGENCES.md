@@ -22,16 +22,41 @@ parse, emit, search, `tests/emitter/test_acceptance_e2e.py`) test suites.
    character of the pattern, literal runs and bracket-class bodies alike
    (`title:BILL[I]NG*` matches whatever `title:BILLING*` matches), matching
    real whoosh's model of folding the whole pattern text before handing it
-   to fnmatch. One qualification, and it is the only one: a
-   `pattern_normalizer` that expands a single character into several
-   (paperless-ngx supplies `ascii_fold(text.lower())`, which maps `ß` ->
-   `ss` and `æ` -> `ae`) cannot be applied inside a bracket class, because a
-   class matches exactly one character and a range endpoint of `[ss-z]` is
-   not a range at all. Those characters are left as typed, so `[aß]` keeps
-   looking for a literal `ß` that a folded index will not contain; the
-   pattern under-matches rather than silently meaning something else.
-   Outside a class the same character folds normally, since a literal run
-   has room for the expansion.
+   to fnmatch. Two qualifications, both inside a bracket class, and both
+   erring toward reading the pattern as typed:
+
+   - A `pattern_normalizer` that expands a single character into several
+     (paperless-ngx supplies `ascii_fold(text.lower())`, which maps `ß` ->
+     `ss` and `æ` -> `ae`) is not applied inside a class, because a class
+     matches exactly one character and a range endpoint of `[ss-z]` is not a
+     range at all. Those characters are left as typed, so `[aß]` keeps
+     looking for a literal `ß` that a folded index will not contain; the
+     pattern under-matches rather than silently meaning something else.
+     Outside a class the same character folds normally, since a literal run
+     has room for the expansion.
+   - The class's extent is found *before* the fold, so a character the
+     normalizer maps onto `[` or `]` (`ascii_fold` maps the fullwidth `［`
+     and `］` that way) can neither open a class nor close one; it is only
+     ever an ordinary member of a class the user opened with a real `[`.
+     The whole-pattern-text fold the oracle performs would let it do both:
+     `title:[a］*` and `title:［a]*` are the literal text `[a]` followed by
+     anything here, where the oracle reads the class `{a}` followed by
+     anything. Class delimiters are syntax rather than term characters, so
+     they are read from what the user actually typed. The result
+     under-matches or reads literally; it never silently becomes a
+     different valid class.
+
+   A normalizer mapping a character onto `-` or `\` (`ascii_fold` maps the
+   en/em dashes and the fullwidth `－`/`＼`) is *not* a qualification: it is
+   allowed to apply, because the oracle's whole-text fold does exactly the
+   same thing, and agreeing with fnmatch is this translation's contract.
+   `title:[a–z]*` with an en dash is the range `[a-z]` in both. Measured
+   over every pattern up to length 4 in an alphabet of the fullwidth and
+   ASCII class characters under the host's real `ascii_fold(str.lower)`:
+   with the fullwidth delimiters excluded, 16,104 patterns and zero
+   disagreements with the oracle; with them included, every one of the 459
+   disagreements involves `［` or `］`, i.e. the qualification above and
+   nothing else. Every emitted regex compiled in tantivy in both runs.
 3. Date-node boosts are preserved (whoosh silently dropped them).
 4. Stopwords are not removed (a policy choice: whoosh-compat takes no
    position on stopwords, it uses whatever tokens the host's `analyzer`
