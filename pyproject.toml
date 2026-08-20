@@ -30,6 +30,15 @@ Repository = "https://github.com/stumpylog/whoosh-compat"
 [project.optional-dependencies]
 tantivy = ["tantivy>=0.26.0"]
 
+[tool.hatch.build.targets.sdist]
+# `.superpowers/` holds AI-workflow scratch (task briefs, reports, raw review
+# diffs) that has no business in a published sdist. It is also gitignored, but
+# hatchling only reads the repository-root ignore file - the nested
+# `.superpowers/sdd/.gitignore` that git honors is invisible to it, and no
+# ignore file at all applies when building from an unpacked tree rather than a
+# checkout. This exclude is what holds in every case.
+exclude = [".superpowers"]
+
 [dependency-groups]
 dev = [
   "pytest>=8",
