@@ -528,11 +528,17 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # Real whoosh swallows the dangling separator and reads the fragment
     # as a whole, shorter date (the August-2026 month window), ANDing the
     # rest of the timestamp on as free text with no diagnostic;
-    # whoosh-compat rejects the half-consumed value as BAD_DATE. In
-    # practice every query this pattern matches today therefore takes the
+    # whoosh-compat rejects the half-consumed value as BAD_DATE. Every
+    # COLON-BEARING query this pattern matches today therefore takes the
     # entry-6 diagnostic skip before this entry's DivergenceKind is ever
-    # consulted; the pattern is kept for any future shape it matches that
-    # does NOT diagnose (see this module's docstring). Ordered BEFORE the
+    # consulted. The pattern deliberately also admits the colon-less
+    # spelling ("added:2026-08-04T10", a T-fused value with no clock
+    # time), which nothing splits and which therefore diagnoses nothing:
+    # it parses to an hour-precision DateRange against whoosh's
+    # _NullQuery, entry 48's compat-favorable shape without the quotes.
+    # The reason string covers both faces because either can reach it (no
+    # corpus line uses the colon-less spelling today, so which face fires
+    # is currently theoretical, but a wrong reason is not). Ordered BEFORE the
     # entry-18 bare-ISO entry, whose fully-parses-numerically-correct
     # prose describes neither the truncation nor the rejection. No quote
     # after the colon: the quoted spellings belong to entries 48 (single)
@@ -543,10 +549,13 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):\d{{4}}-\d\d(?:-\d\d)?[Tt]"),
         (
             "whoosh-bug (DIVERGENCES.md entry 54, superseding DIVERGENCES.md"
-            " entry 49): a bare unquoted T-separated datetime value is cut"
-            " mid-token by the colon tokenizer; whoosh silently reads the"
-            " fragment as a shorter whole date and ANDs the remainder on as"
-            " text, whoosh-compat diagnoses BAD_DATE"
+            " entry 49): a bare unquoted T-separated datetime value. With a"
+            " clock time, its colons cut the value mid-token: whoosh silently"
+            " reads the fragment as a shorter whole date and ANDs the"
+            " remainder on as text, whoosh-compat diagnoses BAD_DATE. Without"
+            " one there is nothing to cut: whoosh reads the whole value as"
+            " _NullQuery, whoosh-compat as the DateRange meant (entry 48's"
+            " shape, unquoted)"
         ),
         DivergenceKind.MISMATCH,
     ),

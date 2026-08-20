@@ -280,18 +280,25 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
     # time tokens onto it, so it silently returns nothing (or, when a
     # document happens to carry one of those tokens, a hit from a window
     # the user never named); whoosh-compat runs no query at all for this
-    # spelling, diagnosing BAD_DATE instead. Ordered before the entry-15
-    # dashed-token pattern, whose TEXT-multitoken framing does not
-    # describe the date-value rejection. The optional day group admits
-    # the no-day spelling ("2026-06T10:30"), cut to "2026-" by the same
+    # spelling, diagnosing BAD_DATE instead. That face needs the clock
+    # time: the colon-less spelling this pattern also admits
+    # ("added:2026-06-15T10") is never cut, and diverges the other way
+    # (whoosh returns nothing from a _NullQuery, whoosh-compat returns
+    # the hour the user meant), so the reason string carries both. Ordered
+    # before the entry-15 dashed-token pattern, whose TEXT-multitoken
+    # framing does not describe either. The optional day group admits the
+    # no-day spelling ("2026-06T10:30"), cut to "2026-" by the same
     # mechanism.
     (
         re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):\d{{4}}-\d\d(?:-\d\d)?[Tt]"),
         (
             "whoosh-bug (DIVERGENCES.md entry 54, superseding DIVERGENCES.md"
-            " entry 49): a bare unquoted T-separated datetime value silently"
-            " searches a truncated period ANDed with the leftover time tokens"
-            " in whoosh; whoosh-compat diagnoses BAD_DATE and searches nothing"
+            " entry 49): a bare unquoted T-separated datetime value. With a"
+            " clock time, whoosh silently searches a truncated period ANDed"
+            " with the leftover time tokens while whoosh-compat diagnoses"
+            " BAD_DATE and searches nothing. Without one, whoosh searches"
+            " nothing (_NullQuery) while whoosh-compat returns the documents"
+            " in the window meant (entry 48's shape, unquoted)"
         ),
     ),
     # whoosh-bug (DIVERGENCES.md entry 50): a no-separator T-fused value

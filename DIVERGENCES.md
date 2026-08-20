@@ -2083,10 +2083,16 @@ parse-then-emit pipeline).
     lines; `tests/emitter/test_acceptance_property.py`'s
     `test_quoted_rfc3339_value_is_a_result_level_divergence`.
 
-49. **A bare unquoted `T`-separated datetime value truncated to a
-    month-precision date on BOTH sides; whoosh-compat now rejects it as a
-    bad date instead (superseded by entry 54, which generalizes the rule
-    to any half-consumed date value).** The unquoted sibling of entry 48's
+49. **A bare unquoted `T`-separated datetime value carrying a clock
+    time (`added:2026-08-04T10:30:00`, i.e. one whose colons make the
+    tokenizer split it) truncated to a month-precision date on BOTH
+    sides; whoosh-compat now rejects it as a bad date instead (superseded
+    by entry 54, which generalizes the rule to any half-consumed date
+    value).** The colon is what makes this entry's shape: the same
+    spelling without one (`added:2026-08-04T10`) is never split, parses
+    cleanly to an hour-precision `DateRange` here and to `_NullQuery` in
+    whoosh, which is entry 48's compat-favorable shape without the
+    quotes, not this truncation. The unquoted sibling of entry 48's
     single-quoted spelling: the query tokenizer splits
     `added:2026-08-04T10:30:00` at its colons before any date grammar
     runs, so the date parser on each side sees only `2026-08-04T10` (or
@@ -2161,9 +2167,13 @@ parse-then-emit pipeline).
     the inner-colon spelling (`added:2026T10:30`) the tokenizer splits
     at the colon and whoosh-compat's date parser joins the adjacent
     tokens into a single day-precision `2026-10-30` reading, still
-    against whoosh's `_NullQuery`. Unlike entry 49's dashed spellings
-    there is no truncation parity to preserve here: whoosh produces
-    nothing at all, the same compat-favorable shape as entry 48.
+    against whoosh's `_NullQuery`. Unlike entry 49's dashed spellings,
+    whoosh reads nothing at all here rather than a truncated period, so
+    there is no half-consumed value for entry 54's rule to reject either
+    (that rule needs a dangling separator, and `2026T10` ends on a date
+    component): the outcome is the compat-favorable shape of entry 48.
+    Entry 49's own truncation is no longer matched for parity, see
+    entry 54.
 
     Sibling cells, each already ending in a documented outcome: the
     double-quoted spelling is entry 45's search-time Phrase crash (that
