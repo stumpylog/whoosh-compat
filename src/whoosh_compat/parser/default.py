@@ -74,6 +74,16 @@ class QueryParser:
     You can use the ``plugins`` argument when creating the object to override
     the default list of plug-ins, and/or use ``add_plugin()`` and/or
     ``remove_plugin_class()`` to change the plug-ins included in the parser.
+
+    **Reuse and thread safety.** An instance is safe to call ``parse()`` on
+    repeatedly, one call at a time: ``diagnostics`` is reset at the start of
+    each ``parse()``, so a bad query on one call cannot leak diagnostics into
+    a later, clean call on the same instance. It is *not* safe to call
+    ``parse()`` concurrently from multiple threads on one instance: the reset
+    and the accumulation into ``diagnostics`` during a parse are not
+    synchronized, so two overlapping calls can interleave and each see a mix
+    of the other's diagnostics. Give each thread (or each request) its own
+    instance, which is what :func:`whoosh_compat.parse` does internally.
     """
 
     def __init__(
@@ -299,6 +309,13 @@ class QueryParser:
 
         :param text: the string to parse.
         """
+
+        # Reset per-call so diagnostics from a previous parse() on this same
+        # instance never leak into this one. This closes the sequential-reuse
+        # case only: two threads calling parse() concurrently on one instance
+        # can still interleave (one thread's reset or read racing another's
+        # append), see the class docstring.
+        self.diagnostics = []
 
         nodes = self.process(text, debug=debug)
         if debug:
@@ -651,6 +668,10 @@ class MultifieldParser(QueryParser):
     ``fieldboosts`` applies *only* to the per-field copies created by this
     expansion: an explicitly-fielded term (``f1:hello``) is never boosted
     by ``fieldboosts``, matching whoosh's ``MultifieldPlugin`` semantics.
+
+    See :class:`QueryParser` for the reuse and thread-safety note: safe to
+    call ``parse()`` on repeatedly from one thread, not safe to call
+    concurrently from multiple threads on the same instance.
     """
 
     def __init__(

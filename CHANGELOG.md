@@ -231,6 +231,16 @@ material; they are permanently documented, each with its rationale, in
   Query *parsing* remains quadratic in a long unmatched word-character run
   (see `ARCHITECTURE.md`); hosts must cap query length at their own
   boundary.
+- `QueryParser.parse()`/`MultifieldParser.parse()` never reset
+  `self.diagnostics`, so a bad query permanently poisoned every later
+  `parse()` call on the same instance: `asn:notanumber` followed by `alpha`
+  on one parser still reported the earlier `BAD_NUMBER`. Masked in
+  `whoosh_compat.parse()` itself, which builds a fresh parser per call, so
+  this only bit a host reusing a `QueryParser`/`MultifieldParser` instance
+  directly across multiple queries. `diagnostics` is now cleared at the
+  start of every `parse()`. This closes sequential reuse on one thread; it
+  does not make one instance safe to call `parse()` on concurrently from
+  multiple threads, which the class docstrings now say explicitly.
 
 ### Internal
 

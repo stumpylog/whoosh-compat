@@ -343,7 +343,10 @@ exception (e.g. paperless-ngx's `InvalidDateQuery(field, value)`) reads
 notice; a host that just wants the field's display name calls
 `str(diag.field)`. Parsing never raises for bad input:
 `QueryParser` accumulates `Diagnostic`s onto `self.diagnostics` as it goes
-(see `default.py`'s `report()`), and bad fragments become
+(see `default.py`'s `report()`), reset at the start of each `parse()` call so
+one instance's diagnostics never leak from one query into the next (not
+thread-safe across concurrent calls on the same instance, see the class
+docstring), and bad fragments become
 `ast.ErrorLeaf(diagnostic)` nodes in the tree rather than raising. This
 mirrors Whoosh's own leniency, where an unparseable date became a null query
 rather than an exception. `whoosh_compat.parse()` surfaces the accumulated
