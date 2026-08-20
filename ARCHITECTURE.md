@@ -183,9 +183,11 @@ BOOLEAN_EXISTS, JSON), `Multitoken` (how multi-token field values combine:
 DEFAULT/AND/OR/PHRASE/FIRST), `FieldSpec` (one field's parse/emit
 characteristics: name, kind, aliases, `comma_values`, `analyzer`,
 `pattern_normalizer`, `multitoken`, `exists_target`, `subpaths`,
-`date_only`, `fast`), `FieldRef` (a typed, canonical reference to a field,
-carrying an optional JSON subpath), and `FieldRegistry` (validates and
-indexes a collection of specs by canonical name and alias). This is the
+`date_only`, `fast`), `PatternNormalizer` (the exported type alias for a
+`pattern_normalizer` callable, `Callable[[str], str | Sequence[str]]`),
+`FieldRef` (a typed, canonical reference to a field, carrying an optional
+JSON subpath), and `FieldRegistry` (validates and indexes a collection of
+specs by canonical name and alias). This is the
 host-integration seam: nothing in `parser/` or `emitters/` hard-codes field
 names or behavior, it all comes from the registry a caller constructs.
 

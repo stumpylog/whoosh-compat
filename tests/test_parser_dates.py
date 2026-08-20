@@ -1262,7 +1262,7 @@ def test_range_both_sides_are_periods_cannot_combine(reg: FieldRegistry) -> None
 
 
 @pytest.mark.parametrize(
-    ("query", "expected_lo"),
+    ("query", "expected_lo", "expected_hi"),
     [
         # A year plus a colon-separated time is ambiguous. The separated-date
         # grammar alternative accepts ":" as a separator and is tried first,
@@ -1270,19 +1270,37 @@ def test_range_both_sides_are_periods_cannot_combine(reg: FieldRegistry) -> None
         # DIVERGENCES.md entry 21.
         # Berlin is UTC+1 in December, so the day starts at 23:00 the day before.
         pytest.param(
-            "added:'2020 12:30'", datetime(2020, 12, 29, 23, 0), id="year-plus-time-is-a-date"
+            "added:'2020 12:30'",
+            datetime(2020, 12, 29, 23, 0),
+            datetime(2020, 12, 30, 23, 0),
+            id="year-plus-time-is-a-date",
         ),
         # A time the separated-date alternative cannot match still reads as a
         # time on every day of the year, matching whoosh.
         pytest.param(
-            "added:'2020 5pm'", datetime(2020, 1, 1, 16, 0), id="year-plus-meridiem-is-a-time"
+            "added:'2020 5pm'",
+            datetime(2020, 1, 1, 16, 0),
+            datetime(2020, 12, 31, 17, 0),
+            id="year-plus-meridiem-is-a-time",
         ),
     ],
 )
-def test_year_followed_by_time(reg: FieldRegistry, query: str, expected_lo: datetime) -> None:
+def test_year_followed_by_time(
+    reg: FieldRegistry, query: str, expected_lo: datetime, expected_hi: datetime
+) -> None:
+    # The upper bound is what tells the two readings apart, so it is pinned
+    # per param rather than left to the lower bound alone: the date reading
+    # is one calendar day wide, while the time reading spans the whole year
+    # with its edges on the 5pm hour (measured: 2020-01-01 16:00Z through
+    # 2020-12-31 17:00Z, i.e. 5pm local on the year's first day to 6pm local
+    # on its last). A lower bound alone is equally consistent with an
+    # instant, which is neither reading.
     r = dparse(query, reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == expected_lo.replace(tzinfo=UTC)
+    assert r.hi == expected_hi.replace(tzinfo=UTC)
+    assert r.incl_lo
+    assert not r.incl_hi
 
 
 @pytest.mark.parametrize(

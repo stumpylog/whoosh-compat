@@ -572,9 +572,10 @@ def test_bare_rfc3339_value_is_a_result_level_divergence() -> None:
         return search_ids(tix, emit_(result.ast, index=tix, registry=_PROP_REGISTRY))
 
     # The no-day spelling exercises the year-window face of the same
-    # entry: the fragment left behind is "2026-"-shaped rather than
-    # "2026-08-"-shaped, and whoosh reads it as the whole of 2020, which
-    # the document also sits inside.
+    # entry: the fragment left behind is "2020-"-shaped rather than
+    # "2020-06-"-shaped (measured: added:2020-06T10:30 diagnoses on
+    # "2020-", the other two on "2020-06-"), and whoosh reads it as the
+    # whole of 2020, which the document also sits inside.
     for q in (
         "added:2020-06-15T10:30:00",
         "added:2020-06-15T10:30:00Z",

@@ -50,15 +50,24 @@ parse, emit, search, `tests/emitter/test_acceptance_e2e.py`) test suites.
      pattern under-matches rather than silently meaning something else.
      Outside a class the same character folds normally, since a literal run
      has room for the expansion.
-   - A normalizer offering *several* alternatives for a character (or none)
-     is likewise not applied inside a class, for the same reason and with
-     the same outcome: a class position matches exactly one character, so an
-     alternation cannot live there, and adding or dropping members would
-     change the body's length, which every fnmatch offset in the translation
-     is taken against. Only a single one-character alternative applies. A
-     stemmer leaves single characters alone, so this qualification costs a
-     realistic host nothing; the pattern under-matches rather than silently
-     meaning something else.
+   - A normalizer offering *several* alternatives for a character, or none
+     at all, is likewise not applied inside a class, for the same reason: a
+     class position matches exactly one character, so an alternation cannot
+     live there, and adding or dropping members would change the body's
+     length, which every fnmatch offset in the translation is taken against.
+     Only a single one-character alternative applies. A stemmer leaves
+     single characters alone, so this qualification costs a realistic host
+     nothing. The two ignored answers err in *opposite* directions, though,
+     and only the first under-matches: against several alternatives the
+     class accepts the character as typed and not the other forms, so it
+     matches less than the answer offered; against an empty answer it
+     matches **more**, because "no term can match this fragment" is honored
+     outside a class (`glob_to_regex("ab", lambda _t: ())` is `None`) but
+     not inside one, where the character stays as typed
+     (`glob_to_regex("[ab]", lambda _t: ())` is `"[ab]"`, which still
+     matches `a` or `b`). Both are pinned in
+     `tests/emitter/test_pattern_alternates.py`. What neither does is
+     silently mean a different valid class.
    - The class's extent is found *before* the fold, so a character the
      normalizer maps onto `[` or `]` (`ascii_fold` maps the fullwidth `［`
      and `］` that way) can neither open a class nor close one; it is only
@@ -1066,7 +1075,7 @@ parse-then-emit pipeline).
 
     Test references: `tests/differential/allowlist.py`'s bare-relative-
     date-offset entry; `tests/differential/strategies.py`'s
-    `_DATE_RELATIVE` (the relative-offset vocabulary the grammar-aware
+    `DATE_RELATIVE` (the relative-offset vocabulary the grammar-aware
     fuzzer draws bare date values from).
 
 26. **Phrase slop diverges from `~2` upward (design, mapping left
@@ -2458,6 +2467,21 @@ parse-then-emit pipeline).
     fragment ending in a dangling `-`/`:`/`/`/`.`/`T` therefore no longer
     matches to the end of its text, `ToEnd` rejects it, and the value
     diagnoses `BAD_DATE` naming the field and the offending text.
+
+    What `raw_value` carries, since it is the one string here that can
+    reach an end user: it is **the fragment the tokenizer handed the date
+    field, not the text the user typed**. For `added:2005-01-01T00:00:00Z`
+    it is `2005-01-` (measured), because the colons split the value before
+    any date parsing happens, as described above -- the rest of the
+    timestamp never reaches this diagnostic at all. A host quoting
+    `raw_value` back in an error message is therefore quoting something
+    nobody wrote, and should say what it wants the user to do (quote the
+    timestamp, per entry 48) in its own words rather than presenting the
+    fragment as the offending input. Pinned in
+    `tests/test_parser_dates.py`'s
+    `test_bare_unquoted_t_value_is_rejected_not_truncated`, which asserts
+    the exact fragment per spelling (`2026-08-` for a full date,
+    `2026-` when the day is absent).
 
     The boundary, deliberately drawn where it is. A remainder that is a
     *clean token boundary* is still a term, not part of the value:

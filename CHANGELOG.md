@@ -113,6 +113,30 @@ matter only to someone who installed from a git revision before this release
   `FieldRegistry.resolve()` on the same registry), but the contract itself
   changed (`None` in one case is now a raise), so it is listed here rather
   than under Fixed, for the same reason as the `date_only` entry above.
+- A date value the grammar can only *half*-consume now reports
+  `DiagnosticKind.BAD_DATE` instead of quietly searching the fragment
+  before the cut. The shape that matters in practice is a bare, unquoted
+  RFC3339 timestamp: `added:2005-01-01T00:00:00Z` used to parse as all of
+  January 2005 ANDed with the leftovers `00` and `00z` as free-text terms
+  on every default field -- a query the user did not write, an empty result
+  set, and no diagnostic anywhere -- and is now refused. This is the most
+  consumer-visible change in this release: a host mapping `BAD_DATE` to
+  HTTP 400 (the documented routing for `Cause.INVALID_INPUT`) turns a
+  request that used to return 200-with-nothing into a 400, so a host with
+  tests pinning the old empty result set must invert them.
+  The colon-splitting itself is unchanged and is not the bug: colons
+  separate a field name from its value, which is the same rule that makes
+  `added:"-1 week"` and `added:"next monday"` need their quotes. The
+  quoted spelling (`added:"2005-01-01T00:00:00Z"`) and the bracketed-range
+  spelling both keep the whole timestamp and are unaffected; quoting is
+  the fix to recommend to a user who hits the new diagnostic.
+  One detail for anyone building that message: the diagnostic's
+  `raw_value` is the fragment the tokenizer left behind (`2005-01-`), not
+  the text the user typed, so quoting it back reads as an error about
+  something nobody wrote. Real whoosh degrades the same way, measured
+  against the pinned oracle; this is diverged from anyway under the rule
+  that parity never means reproducing a silent wrong answer.
+  `DIVERGENCES.md` entry 54.
 - `Cause.MISCONFIGURED` is documented as requiring **both** an operator
   alert and an HTTP 400, not an alert alone. Every `MISCONFIGURED` kind is
   reachable from ordinary query text, so a request is always waiting on an
@@ -350,6 +374,24 @@ matter only to someone who installed from a git revision before this release
   does not make one instance safe to call `parse()` on concurrently from
   multiple threads, which the class docstrings now say explicitly.
 
+- A reversed *relative* date range now swaps its bounds instead of pushing
+  the upper bound into the next day. `added:[now+1h TO now-1h]` resolves to
+  the same two-hour window as `added:[now-1h TO now+1h]` (measured at
+  basedate 2026-08-04 10:30 Europe/Berlin: both give 07:30Z .. 09:30Z);
+  before, the reversed spelling gave roughly twenty-two hours. Real whoosh
+  produces that same 22-hour window for the equivalent bare-offset spelling
+  it can parse (measured directly against a
+  `whoosh.qparser.dateparse.DateParserPlugin`: `added:[-1h TO +1h]` is 2
+  hours, `added:[+1h TO -1h]` is 22), so this is a deliberate divergence
+  rather than a parity repair: a written-backwards window silently becoming
+  eleven times wider, with no diagnostic, is the same silent-wrong-answer
+  shape the project treats as a defect. The day-bump itself is kept where
+  it belongs, disambiguating a bare, ambiguous time of day
+  (`added:[9pm TO 5am]` stays an overnight reading), and the swap is
+  narrower than "any two unambiguous instants": an explicitly spelled
+  absolute datetime or RFC3339 bound is still an `adatetime` and still
+  day-bumps. A host with a test pinning the old wide window will see it
+  narrow. `DIVERGENCES.md` entry 53.
 - A backwards date range with two explicit years swaps its bounds in the
   joint-disambiguation step (`parser/dateparse.py`, whoosh's own range
   heuristic), and each bound's timezone was already carried across that
