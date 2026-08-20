@@ -329,23 +329,56 @@ def test_dayname_keywords(reg: FieldRegistry, query: str, expected_date: datetim
 
 
 @pytest.mark.parametrize(
-    ("query", "hour", "minute", "second"),
+    ("query", "lo_local", "hi_local"),
     [
-        pytest.param("added:'3pm'", 15, 0, 0, id="3pm-bare-hour"),
-        pytest.param("added:'12am'", 0, 0, 0, id="12am-is-midnight-hour"),
-        pytest.param("added:'12pm'", 12, 0, 0, id="12pm-is-noon-hour"),
-        pytest.param("added:'5:30am'", 5, 30, 0, id="5-30am-with-minutes"),
-        pytest.param("added:'5:30:15pm'", 17, 30, 15, id="5-30-15pm-with-seconds"),
+        pytest.param(
+            "added:'3pm'",
+            datetime(2026, 8, 4, 15, 0, 0),
+            datetime(2026, 8, 4, 16, 0, 0),
+            id="3pm-bare-hour",
+        ),
+        pytest.param(
+            "added:'12am'",
+            datetime(2026, 8, 4, 0, 0, 0),
+            datetime(2026, 8, 4, 1, 0, 0),
+            id="12am-is-midnight-hour",
+        ),
+        pytest.param(
+            "added:'12pm'",
+            datetime(2026, 8, 4, 12, 0, 0),
+            datetime(2026, 8, 4, 13, 0, 0),
+            id="12pm-is-noon-hour",
+        ),
+        pytest.param(
+            "added:'5:30am'",
+            datetime(2026, 8, 4, 5, 30, 0),
+            datetime(2026, 8, 4, 5, 31, 0),
+            id="5-30am-with-minutes",
+        ),
+        pytest.param(
+            "added:'5:30:15pm'",
+            datetime(2026, 8, 4, 17, 30, 15),
+            datetime(2026, 8, 4, 17, 30, 16),
+            id="5-30-15pm-with-seconds",
+        ),
     ],
 )
 def test_time12_keywords(
-    reg: FieldRegistry, query: str, hour: int, minute: int, second: int
+    reg: FieldRegistry, query: str, lo_local: datetime, hi_local: datetime
 ) -> None:
+    # A time of day is a window as wide as the precision typed, not an
+    # instant: a bare hour spans the hour, "5:30am" the minute it names and
+    # "5:30:15pm" the second. The three widths are why each param carries its
+    # own upper bound instead of the test deriving one -- and why asserting
+    # only the lower bound could not tell any of them from an instant. The
+    # date comes from the basedate (2026-08-04), which is what "a time with
+    # no date" resolves against.
     r = dparse(query, reg).ast
     assert isinstance(r, ast.DateRange)
-    assert r.lo is not None
-    lo_local = r.lo.astimezone(BERLIN)
-    assert (lo_local.hour, lo_local.minute, lo_local.second) == (hour, minute, second)
+    assert r.lo == lo_local.replace(tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == hi_local.replace(tzinfo=BERLIN).astimezone(UTC)
+    assert r.incl_lo
+    assert not r.incl_hi
 
 
 # --- Other relative-calendar keywords ---------------------------------------
@@ -464,21 +497,67 @@ def test_tomorrow(reg: FieldRegistry) -> None:
 
 
 @pytest.mark.parametrize(
-    "query",
+    ("query", "lo", "hi"),
     [
-        pytest.param("created:'4 august 2020'", id="day-month-year"),
-        pytest.param("created:'august 4 2020'", id="month-day-year"),
-        pytest.param("created:'2020 august 4'", id="year-month-day"),
-        pytest.param("created:'2020 4 august'", id="year-day-month"),
-        pytest.param("created:'4 august'", id="day-month-no-year-uses-basedate"),
-        pytest.param("created:'august 4'", id="month-day-no-year-uses-basedate"),
-        pytest.param("created:'august 2020'", id="month-year"),
+        pytest.param(
+            "created:'4 august 2020'",
+            datetime(2020, 8, 4),
+            datetime(2020, 8, 5),
+            id="day-month-year",
+        ),
+        pytest.param(
+            "created:'august 4 2020'",
+            datetime(2020, 8, 4),
+            datetime(2020, 8, 5),
+            id="month-day-year",
+        ),
+        pytest.param(
+            "created:'2020 august 4'",
+            datetime(2020, 8, 4),
+            datetime(2020, 8, 5),
+            id="year-month-day",
+        ),
+        pytest.param(
+            "created:'2020 4 august'",
+            datetime(2020, 8, 4),
+            datetime(2020, 8, 5),
+            id="year-day-month",
+        ),
+        pytest.param(
+            "created:'4 august'",
+            datetime(2026, 8, 4),
+            datetime(2026, 8, 5),
+            id="day-month-no-year-uses-basedate",
+        ),
+        pytest.param(
+            "created:'august 4'",
+            datetime(2026, 8, 4),
+            datetime(2026, 8, 5),
+            id="month-day-no-year-uses-basedate",
+        ),
+        pytest.param(
+            "created:'august 2020'",
+            datetime(2020, 8, 1),
+            datetime(2020, 9, 1),
+            id="month-year",
+        ),
     ],
 )
-def test_named_month_sequences(reg: FieldRegistry, query: str) -> None:
+def test_named_month_sequences(reg: FieldRegistry, query: str, lo: datetime, hi: datetime) -> None:
+    # Both bounds per param, because the widths differ and because the old
+    # "lo is not None" shape passed for any parse that returned a range at
+    # all, including one that read the components in the wrong order. The
+    # four full-date spellings name the same day whatever the component
+    # order; the two without a year take the basedate's year (2026); the
+    # month+year spelling is a whole month. "created" is date_only, so its
+    # bounds are plain UTC midnights with no local-tz conversion (the same
+    # convention as test_month_alone below).
     r = dparse(query, reg).ast
     assert isinstance(r, ast.DateRange)
-    assert r.lo is not None
+    assert r.lo == lo.replace(tzinfo=UTC)
+    assert r.hi == hi.replace(tzinfo=UTC)
+    assert r.incl_lo
+    assert not r.incl_hi
 
 
 def test_month_alone(reg: FieldRegistry) -> None:
