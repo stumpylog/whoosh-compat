@@ -211,6 +211,58 @@ def test_timestamp_spellings_the_grammar_can_consume_whole_still_parse(
     assert (r.lo, r.hi) == (lo, hi)
 
 
+def test_double_quoted_range_bound_is_a_bad_date_not_a_widening(reg: FieldRegistry) -> None:
+    # A user who has just learned "double-quote a timestamp to protect it"
+    # (test_timestamp_spellings_the_grammar_can_consume_whole_still_parse
+    # above) will reasonably try the same thing inside a bracketed range
+    # and gets a rejection instead. That asymmetry is inherited from real
+    # whoosh, not introduced here: RangePlugin's tagging regex
+    # (parser/plugins.py, ported verbatim from whoosh/qparser/plugins.py)
+    # only ever strips SINGLE quotes from a bound
+    # ("('[^']*?'\\s+)"/"(\\s+'[^']*?')"); a double-quoted bound keeps its
+    # literal `"` characters and is handed to the date grammar as
+    # '"2005-01-01T00:00:00Z"', which the grammar cannot read as a date
+    # (leading `"` matches none of its start productions) any more than
+    # whoosh-compat's grammar can. Confirmed directly against real whoosh
+    # (../whoosh, DateParserPlugin/QueryParser): the same query there also
+    # fails to build a query object (`int('"200')` inside
+    # Field._parse_datestring), it just surfaces as an uncaught
+    # ValueError instead of a structured diagnostic -- whoosh-compat's
+    # BAD_DATE is a strictly friendlier report of the identical rejection,
+    # not a new restriction. Widening to accept double-quoted bounds would
+    # therefore be a pure whoosh-compat addition with no whoosh precedent,
+    # weighed against here and declined: matching whoosh's syntax for
+    # "what a bracket bound may look like" keeps one quoting rule instead
+    # of two, and the loud BAD_DATE (not a silent wrong answer) is exactly
+    # the failure mode the "don't reproduce a whoosh bug" carve-out does
+    # NOT apply to, since this isn't a bug, just a documented quirk of
+    # where each quote character is meaningful. paperless-ngx documents
+    # this asymmetry explicitly on the host side.
+    res = dparse('added:["2005-01-01T00:00:00Z" to "2006-01-01T00:00:00Z"]', reg)
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics[0].field == FieldRef("added")
+    assert not any(isinstance(n, ast.DateRange) for n in _nodes(res.ast))
+
+
+def test_single_quoted_range_bound_works_like_an_unquoted_one(reg: FieldRegistry) -> None:
+    # The other half of the same RangePlugin regex: SINGLE quotes ARE
+    # stripped from a bound before it reaches the date grammar, so
+    # `added:['-1 week' to now]` (single-quoted, needed only to protect the
+    # embedded space -- an unquoted "-1 week" would otherwise split on
+    # whitespace like any other range bound) parses exactly like its
+    # unquoted equivalent. This is whoosh's own escape hatch for a
+    # space-containing bound, distinct from -- and not a substitute for --
+    # the double-quote convention used everywhere else in the query
+    # language; see the rejection test above for the quote character that
+    # does NOT get this treatment inside brackets.
+    quoted = dparse("added:['-1 week' to now]", reg)
+    unquoted = dparse("added:[-1 week to now]", reg)
+    assert not quoted.diagnostics
+    assert not unquoted.diagnostics
+    assert quoted.ast == unquoted.ast
+
+
 @pytest.mark.parametrize(
     ("query", "text"),
     [
