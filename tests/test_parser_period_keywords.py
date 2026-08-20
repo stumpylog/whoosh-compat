@@ -72,6 +72,13 @@ PREDAWN = datetime(2026, 8, 19, 1, 41, tzinfo=UTC)
         'added:"previous quarter noon"',
         'added:"3pm previous week"',
         "added:[previous week 3pm TO 2021]",
+        # The same values written without quotes, which the date grammar now
+        # accepts (see test_parser_date_phrases.py). Quoting is a spelling,
+        # not a semantic: the rejection cannot depend on it, or the unquoted
+        # spelling would silently answer a question the quoted one refuses.
+        "added:previous week 3pm",
+        "added:previous quarter noon",
+        "added:3pm previous week",
     ],
 )
 def test_period_keyword_with_a_time_is_a_bad_date(registry: FieldRegistry, q: str) -> None:
@@ -82,6 +89,25 @@ def test_period_keyword_with_a_time_is_a_bad_date(registry: FieldRegistry, q: st
     """
     result = _parse(registry, q)
     assert [d.kind for d in result.diagnostics] == [DiagnosticKind.BAD_DATE]
+
+
+def test_calendar_unit_keyword_still_takes_a_time(registry: FieldRegistry) -> None:
+    """The counterweight to the rejection above: only the keywords resolving
+    to a span refuse a time. "previous month" resolves to a calendar unit (an
+    adatetime), which a time of day narrows coherently. The unquoted spelling
+    must land on the same side of that line as the quoted one.
+
+    The resolved bounds (the 15:00-16:00 hour of the first and last day of
+    the previous month) are the inherited floor()/ceil() behavior of a
+    month-precision adatetime with an hour filled in, pinned here only so
+    that "unquoted matches quoted" cannot be satisfied by both spellings
+    breaking together.
+    """
+    quoted = _date_range(registry, 'added:"previous month 3pm"', basedate=AFTERNOON)
+    unquoted = _date_range(registry, "added:previous month 3pm", basedate=AFTERNOON)
+    assert unquoted == quoted
+    assert quoted.lo == datetime(2026, 7, 1, 15, 0, tzinfo=UTC)
+    assert quoted.hi == datetime(2026, 7, 31, 16, 0, tzinfo=UTC)
 
 
 @pytest.mark.parametrize(

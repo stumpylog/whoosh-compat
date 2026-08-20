@@ -19,6 +19,12 @@ FILTER_WILDCARDS = 50
 FILTER_ALIASES = 90
 FILTER_GTLT = 99
 FILTER_FIELDNAMES = 100
+# Joining an unquoted multi-word date keyword phrase (DateParserPlugin's
+# do_date_phrases) needs the field names already assigned (100), and needs
+# the phrase's words still to be separate unfielded word nodes with the
+# whitespace between them intact: before MultifieldPlugin (110) rewrites an
+# unfielded node into a group, and well before whitespace removal (500).
+FILTER_DATE_PHRASES = 101
 FILTER_COMMA_VALUES = 105
 FILTER_MULTIFIELD = 110
 FILTER_DATES = 110

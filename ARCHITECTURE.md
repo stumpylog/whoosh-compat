@@ -142,7 +142,15 @@ forked from in turn. Within the forked pipeline:
 - **`parser/dateparse.py` + `parser/times.py`**: the natural-language date
   grammar (`Sequence`/`Combo`/`Choice`/`Bag`/`Regex` parser-combinator
   elements feeding `adatetime`/`timespan`) ported structurally unchanged.
-  What's downstream of a successful date parse is new (see §4).
+  What's downstream of a successful date parse is new (see §4). One thing
+  *upstream* of it is new too: `DateParserPlugin.do_date_phrases`, a filter
+  running just after fieldname assignment that joins an unquoted multi-word
+  date keyword (`added:previous month`) back into a single value node before
+  the grammar sees it. In Whoosh a value always ends at the first space, so
+  this is a deliberate widening, confined to the six known phrases (plus an
+  adjacent time of day) on an explicitly named date field so that no other
+  date value becomes whitespace-greedy; `DIVERGENCES.md` entry 19 records
+  what it does and does not cover.
 
 **`ast.py`**: frozen dataclasses (`Term`, `And`, `Or`, `Not`, `AndNot`,
 `AndMaybe`, `Require`, `Phrase`, `Prefix`, `Wildcard`, `TermRange`,

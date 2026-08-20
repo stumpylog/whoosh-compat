@@ -254,20 +254,16 @@ created:[2025 TO 2020]
 # inclusive-both); whoosh-compat honors them on exact bounds like now.
 added:{now TO now}
 
-# --- KNOWN DIVERGENCE (design, allowlist.py): unquoted multi-word natural-
-# date keywords. Real paperless v2 rewrites these via an *app-level* regex
-# (rewrite_natural_date_keywords, index.py) before whoosh ever parses the
-# string: whoosh's own grammar has no native "previous week" support at
-# all. whoosh-compat instead adds these directly to its own date grammar,
-# usable the same way any other multi-word value is (quoted:
-# created:"previous week"); the app-level rewrite hack is paperless-specific
-# host-integration behavior, out of scope for whoosh-compat's parser. The
-# oracle harness replicates the app-level rewrite (oracle.py), so the
-# *quoted* form is NOT in this section: only unquoted forms, which the
-# static corpus below preserves faithfully as extracted from
-# TestMultiWordDateKeywords/TestKeywordDateResolution (those tests exercise
-# the *scanner* layer, not whoosh's qparser, so their unquoted strings never
-# reached real whoosh's own grammar in production either way).
+# --- Unquoted multi-word natural-date keywords, extracted faithfully from
+# TestMultiWordDateKeywords/TestKeywordDateResolution. Real paperless v2
+# rewrites these via an *app-level* regex (rewrite_natural_date_keywords,
+# index.py) before whoosh ever parses the string, because whoosh's own
+# grammar has no native "previous week" support at all; the oracle harness
+# replicates that rewrite. whoosh-compat's own date grammar joins the six
+# phrases itself (DateParserPlugin.do_date_phrases), so these compare
+# equal on both sides and are ordinary corpus lines, not a divergence
+# section. The remaining difference is against *stock* whoosh, which this
+# harness (rewrite and all) cannot express: DIVERGENCES.md entry 19.
 created:previous week
 created:this month
 created:previous month

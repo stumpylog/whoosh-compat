@@ -53,10 +53,10 @@ from whoosh.qparser import QueryParser
 from whoosh.query import QueryError as WhooshQueryError
 from whoosh.support.charset import accent_map
 
+from tests.differential.oracle import _rewrite_natural_date_keywords
 from tests.differential.oracle import oracle_schema
 from whoosh_compat import parse as wc_parse
 from whoosh_compat.emitters.tantivy_ import emit as emit_
-from whoosh_compat.errors import QueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -182,12 +182,12 @@ SCENARIOS_EQUAL = [
         [1],
         id="quoted-natural-date-keyword",
         # basedate is 2020-04-15 (BASE); "previous month" == March 2020,
-        # which is doc 1's `created` date. Quoted so whoosh-compat's own
-        # grammar (which requires quoting for multi-word date keywords,
-        # unlike the app-level string-rewrite the real oracle harness
-        # replicates: see allowlist.py's "design:" entry) parses it at
-        # all; see test_created_previous_month_unquoted_is_a_documented_divergence
-        # for the unquoted form.
+        # which is doc 1's `created` date. The quoted spelling is the one
+        # both grammars can express directly; the unquoted spelling reaches
+        # the same documents but only whoosh-compat parses it (whoosh needs
+        # paperless's app-level string rewrite), so it is asserted
+        # side-by-side in
+        # test_created_previous_month_unquoted_needs_no_app_level_rewrite.
     ),
     pytest.param("tag:billing,urgent", [1], id="keyword-comma-list-unquoted"),
     pytest.param(
@@ -268,26 +268,41 @@ def test_scenario_equal(
 # ---------------------------------------------------------------------------
 
 
-def test_created_previous_month_unquoted_is_a_documented_divergence(
+def test_created_previous_month_unquoted_needs_no_app_level_rewrite(
     windex: WhooshIndex, tindex: TIndex, ereg: FieldRegistry
 ) -> None:
-    """design (allowlist.py): an *unquoted* multi-word natural-date keyword
-     needs paperless-ngx's app-level ``rewrite_natural_date_keywords`` string
-     rewrite (which the oracle harness replicates, ``oracle._rewrite_natural_date_keywords``)
-    : real whoosh's own grammar has no native "previous month" support at
-     all. whoosh-compat's date grammar only recognizes the multi-word
-     keywords when quoted (see test_scenario_equal's quoted counterpart);
-     unquoted, "previous" is parsed as an ordinary (invalid) date attempt.
+    """design (DIVERGENCES.md entry 19): an *unquoted* multi-word
+    natural-date keyword reaches the same documents on both sides, but only
+    one side parses it. Real whoosh's grammar has no "previous month" in any
+    spelling: the oracle answers this query only because paperless-ngx's
+    app-level string rewrite runs first and replaces it with an explicit
+    bracket range (the harness replicates that rewrite). whoosh-compat's own
+    grammar joins the phrase, so the unquoted spelling parses to exactly the
+    same value as the quoted one with no rewriting anywhere.
+
+    Both halves are asserted: that the oracle's answer depends on the
+    rewrite, and that whoosh-compat's does not need it. Equal results alone
+    would not distinguish the two.
     """
 
     q = "created:previous month"
+    assert _rewrite_natural_date_keywords(q, BASE, BERLIN) != q, (
+        "the oracle's whoosh parse of this query is only meaningful because"
+        " the app-level rewrite rewrote it first"
+    )
     assert whoosh_search_ids(windex, q, BASE, BERLIN) == [1]
 
     result = wc_parse(q, registry=ereg, default_fields=DEFAULT_FIELDS, basedate=BASE, tz=BERLIN)
-    assert result.diagnostics, "expected a diagnostic for the unparseable 'previous' date token"
-    with pytest.raises(QueryError) as exc:
-        emit_(result.ast, index=tindex[0], registry=ereg)
-    assert exc.value.diagnostic is result.diagnostics[0]
+    assert not result.diagnostics
+    quoted = wc_parse(
+        'created:"previous month"',
+        registry=ereg,
+        default_fields=DEFAULT_FIELDS,
+        basedate=BASE,
+        tz=BERLIN,
+    )
+    assert result.ast == quoted.ast
+    assert tantivy_search_ids(tindex, ereg, q) == [1]
 
 
 def test_exclusive_exact_date_range_is_a_documented_divergence(

@@ -57,8 +57,10 @@ a successful parse:
 * Three extensions to ``English``: relative-calendar keywords (``today``,
   ``yesterday``, ``this month``, ``previous month``, ``previous week``,
   ``previous quarter``, ``this year``, ``previous year``, ported from
-  paperless's ``_dates.py:_keyword_bounds``), a compact ``now±<n><unit>``
-  form (``NowCompact``, alongside the existing ``PlusMinus``/``plusdate``
+  paperless's ``_dates.py:_keyword_bounds``; the multi-word ones are also
+  accepted unquoted, which whoosh's "a value ends at the first space" rule
+  cannot express, see :meth:`DateParserPlugin.do_date_phrases`), a compact
+  ``now±<n><unit>`` form (``NowCompact``, alongside the existing ``PlusMinus``/``plusdate``
   element that already gives us whoosh's ``-1 week`` syntax "for free"),
   and an RFC3339 ``T``/``Z`` datetime separator (``simple``'s separator
   character class also accepts ``T``; a trailing ``Z`` is recognized and
@@ -874,7 +876,9 @@ class DateParserPlugin(Plugin):
     "free" undelimited-date tagging mode (``date:last tuesday`` without
     quotes): paperless v2 never used it (``free=False``), and the
     ambiguity/complexity it adds isn't worth carrying for a feature nothing
-    exercises.
+    exercises. :meth:`do_date_phrases` is not that mode returning by another
+    name: it joins a closed list of six two-word keywords (and a time of day
+    adjacent to one of them), never an open-ended run of date words.
     """
 
     def __init__(self, basedate: datetime, tz: tzinfo, dateparser: DateParser | None = None) -> None:
@@ -908,7 +912,8 @@ class DateParserPlugin(Plugin):
 
     def filters(self, parser: Any) -> list[tuple[Any, int]]:
         # Run after FieldsPlugin (100) has assigned field names.
-        return [(self.do_dates, priorities.FILTER_DATES)]
+        return [(self.do_date_phrases, priorities.FILTER_DATE_PHRASES),
+                (self.do_dates, priorities.FILTER_DATES)]
 
     # -- time helpers --------------------------------------------------
 
@@ -998,7 +1003,150 @@ class DateParserPlugin(Plugin):
         )
         return DateErrorNode(diagnostic)
 
-    # -- filter ----------------------------------------------------------
+    # -- filters ---------------------------------------------------------
+
+    @staticmethod
+    def _date_spec(registry: Any, fname: str | None) -> FieldSpec | None:
+        """The :class:`FieldSpec` ``fname`` names, if it is a date field."""
+
+        if fname is None:
+            return None
+        ref = registry.make_ref(fname)
+        resolved = registry.resolve(ref) if ref is not None else None
+        if resolved is None or resolved.spec.kind not in (FieldKind.DATE, FieldKind.DATETIME):
+            return None
+        spec: FieldSpec = resolved.spec
+        return spec
+
+    # The multi-word keyword phrases English.setup() adds to the grammar,
+    # as {first word: allowed second words}. Whoosh's own grammar has no
+    # multi-word *value* concept at all (a value ends at the first space),
+    # so these are only reachable as a quoted value unless something joins
+    # the words back together first: which is what do_date_phrases below
+    # does, for these six spellings only. Deliberately not derived from the
+    # grammar objects: the grammar is a tree of opaque regex elements with
+    # no notion of "how many words is this keyword", and a general
+    # whitespace-greedy date value would swallow the token after any date
+    # field. See DIVERGENCES.md entry 19.
+    _KEYWORD_PHRASES: ClassVar[dict[str, frozenset[str]]] = {
+        "previous": frozenset({"week", "month", "quarter", "year"}),
+        "this": frozenset({"month", "year"}),
+    }
+
+    def _is_time_of_day(self, text: str) -> bool:
+        """Whether ``text`` alone is a time of day the grammar recognizes
+        ("3pm", "13:45", "noon", "midnight", "now").
+        """
+
+        element = getattr(self.dateparser, "time", None)
+        if element is None:  # a custom DateParser without English's `time`
+            return False
+        try:
+            at, _ = ToEnd(element).parse(text, self._local_now())
+        except (ValueError, OverflowError, TimeError):
+            # parse() reports bad input through diagnostics and never
+            # raises; a value that blows up here simply isn't a time.
+            return False
+        return at is not None
+
+    def _phrase_words(self, group: syntax.GroupNode, i: int, limit: int) -> list[int]:
+        """Indices of up to ``limit`` plain unfielded word nodes following
+        ``group[i]``, separated from it and each other by whitespace only.
+
+        Anything else (an operator, a group, a wildcard/prefix/phrase node,
+        a word carrying its own field name) ends the run, so only words that
+        would otherwise have become default-field terms are candidates for
+        joining onto the date value.
+        """
+
+        found: list[int] = []
+        j = i + 1
+        while len(found) < limit and j < len(group):
+            node = group[j]
+            if node.is_ws():
+                j += 1
+                continue
+            if type(node) is not syntax.WordNode or node.fieldname is not None:
+                break
+            found.append(j)
+            j += 1
+        return found
+
+    def _phrase_run(self, group: syntax.GroupNode, i: int) -> list[int] | None:
+        """The indices of the nodes making up an unquoted date keyword
+        phrase starting at ``group[i]``, or None if there isn't one.
+
+        The phrase is two words (``previous month``), optionally with a time
+        of day on either side of it (``previous week 3pm``,
+        ``3pm previous week``). The time is part of the run so that the
+        unquoted spelling reaches the grammar as the same value the quoted
+        spelling would; the grammar, not this join, decides what that value
+        means (for the span-valued keywords, that a time on a period is an
+        unusable date).
+        """
+
+        # Three words is the longest run that can exist: the two-word phrase
+        # plus one adjacent time. A fourth word is never part of the value.
+        idxs = [i, *self._phrase_words(group, i, limit=2)]
+        words = [cast(str, group[j].text).lower() for j in idxs]
+
+        for start in (0, 1):
+            if len(words) < start + 2:
+                break
+            if words[start + 1] not in self._KEYWORD_PHRASES.get(words[start], ()):
+                continue
+            if start == 1 and not self._is_time_of_day(words[0]):
+                # A leading word that isn't a time isn't part of the value:
+                # `added:invoice previous month` keeps "invoice" a term.
+                continue
+            end = start + 2
+            if start == 0 and len(words) > end and self._is_time_of_day(words[end]):
+                end += 1
+            return idxs[:end]
+
+        return None
+
+    def do_date_phrases(self, parser: Any, group: syntax.GroupNode) -> syntax.GroupNode:
+        """Join an unquoted multi-word date keyword phrase on a date field
+        back into a single value node, so ``added:previous month`` resolves
+        exactly like ``added:"previous month"``.
+
+        The join is limited to the phrases in ``_KEYWORD_PHRASES`` (plus an
+        adjacent time of day, see :meth:`_phrase_run`) on a field explicitly
+        named in the query: everything else about date-field parsing keeps
+        ending at the first space, as whoosh's grammar does.
+        """
+
+        registry = parser.registry
+
+        for i, node in enumerate(group):
+            if isinstance(node, syntax.GroupNode):
+                group[i] = self.do_date_phrases(parser, node)
+
+        i = 0
+        while i < len(group):
+            head = group[i]
+            # An explicitly fielded bare word only: reaching a phrase through
+            # the *default* field would mean joining words that carry no date
+            # field of their own, a much wider claim on the query than "the
+            # user wrote added: in front of it".
+            if (type(head) is syntax.WordNode
+                    and head.fieldname is not None
+                    and self._date_spec(registry, head.fieldname) is not None):
+                idxs = self._phrase_run(group, i)
+                if idxs is not None:
+                    last = group[idxs[-1]]
+                    joined = syntax.WordNode(
+                        " ".join(cast(str, group[j].text) for j in idxs)
+                    )
+                    joined.set_fieldname(head.fieldname)
+                    joined.set_boost(head.boost)
+                    joined.startchar = head.startchar
+                    joined.endchar = last.endchar
+                    group[i:idxs[-1] + 1] = [joined]
+            i += 1
+
+        return group
 
     def do_dates(self, parser: Any, group: syntax.GroupNode) -> syntax.GroupNode:
         registry = parser.registry
@@ -1009,14 +1157,9 @@ class DateParserPlugin(Plugin):
                 continue
 
             fname = (node.fieldname if node.has_fieldname else None) or parser.fieldname
-            if fname is None:
+            spec = self._date_spec(registry, fname)
+            if spec is None:
                 continue
-
-            ref = registry.make_ref(fname)
-            resolved = registry.resolve(ref) if ref is not None else None
-            if resolved is None or resolved.spec.kind not in (FieldKind.DATE, FieldKind.DATETIME):
-                continue
-            spec = resolved.spec
 
             new_node: syntax.SyntaxNode
             if isinstance(node, syntax.RangeNode):

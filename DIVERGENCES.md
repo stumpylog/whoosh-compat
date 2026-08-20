@@ -478,30 +478,45 @@ parse-then-emit pipeline).
     (direct unit coverage of whoosh-compat's own corrected value, decoupled
     from the oracle comparison).
 
-19. **Unquoted multi-word natural-date keywords (`created:previous month`)
-    are out of whoosh-compat's parser scope (design).** whoosh-compat's
-    date grammar adds new keywords (`previous week`/`month`/`quarter`/
-    `year`) directly to the English grammar, usable as a single quoted
-    phrase value like whoosh's own multi-word values always require
-    (`created:"previous week"`). Real paperless-ngx v2 instead relied on an
-    *app-level* regex preprocessing pass in `DelayedFullTextQuery`
-    (`rewrite_natural_date_keywords`, `index.py`) that rewrites e.g.
-    `created:previous week` (unquoted) into an explicit bracket range
-    *before* whoosh ever sees the string; real whoosh's own grammar has no
-    native "previous week" support at all (not a whoosh bug: it never
-    claimed to have this feature). That preprocessing hack is
-    paperless-app-specific, not part of whoosh's (or whoosh-compat's)
-    parser proper, so it is out of scope for whoosh-compat's `parse()`:
-    unquoted multi-word keywords behave like any other unquoted
-    multi-word value (split at the first whitespace, one token per field).
-    The README's syntax table documents only the quoted form
-    (`created:'previous month'`) for exactly this reason.
+19. **Multi-word natural-date keywords parse *unquoted*
+    (`created:previous month`), which no whoosh grammar accepts
+    (design).** whoosh-compat's date grammar adds keywords whoosh does not
+    have (`previous week`/`month`/`quarter`/`year`, plus whoosh's own
+    `this month`/`this year`), and accepts all six as a bare value on a
+    date field as well as as a quoted one: `DateParserPlugin`'s
+    `do_date_phrases` filter joins the two words (and an adjacent time of
+    day, if any) back into a single value before the grammar sees them, so
+    `created:previous month` resolves exactly like
+    `created:"previous month"`. In whoosh a value always ends at the first
+    space, so the unquoted spelling would be a date attempt on `previous`
+    plus a stray default-field term `month`. Real paperless-ngx v2 worked
+    around that with an *app-level* regex preprocessing pass in
+    `DelayedFullTextQuery` (`rewrite_natural_date_keywords`, `index.py`)
+    that rewrote the phrase into an explicit bracket range before whoosh
+    ever saw the string; a string rewrite cannot tell a value from the
+    inside of a quoted phrase, so `title:"see created:previous month
+    notes"` was corrupted by it. Owning the widening in the grammar, where
+    quoting is already known, removes that failure mode rather than
+    narrowing it.
 
-    Test references: `tests/differential/allowlist.py`'s
-    `previous (?:week|month|quarter|year)|this (?:month|year)` entry (the
-    oracle harness replicates the app-level rewrite, so only the
-    *unquoted* form is allowlisted; the quoted form is directly compared
-    and passes); `README.md`'s date syntax row.
+    The widening is confined to those six phrases on an explicitly named
+    date field. Nothing else about a date value becomes whitespace-greedy:
+    `created:previous week AND title:foo`, `created:previous week invoice`,
+    `title:previous month` (a TEXT field) and `created:this week` (not a
+    keyword in any spelling) are all unchanged. A time of day adjacent to
+    one of the six *is* joined on, in both word orders, so that the
+    unquoted spelling reaches the grammar as the value the quoted spelling
+    would: entry 52's rejection of a time on a period keyword therefore
+    holds for `created:previous week 3pm` exactly as for
+    `created:"previous week 3pm"`.
+
+    Test references: `tests/test_parser_date_phrases.py` (the whole file);
+    `tests/test_parser_period_keywords.py`'s
+    `test_period_keyword_with_a_time_is_a_bad_date` and
+    `test_calendar_unit_keyword_still_takes_a_time` (unquoted cases);
+    `tests/emitter/test_acceptance_e2e.py`'s
+    `test_created_previous_month_unquoted_needs_no_app_level_rewrite`;
+    `README.md`'s date syntax row.
 
 20. **A bare `field:*` wildcard simplifies to `Every(field)` rather than a
     literal `Wildcard('*')` (design).** whoosh-compat's
@@ -2161,9 +2176,13 @@ parse-then-emit pipeline).
     a time the ordinary way. A bare period keyword (`added:"previous week"`)
     is entirely unaffected. Real whoosh has no equivalent behavior to
     diverge from here -- it has no `previous week` or `previous quarter` at
-    all (entry 19) -- so this constrains only whoosh-compat's own extension;
-    the rejected spellings number four, and paperless-ngx's auto-quoting
-    never generates any of them.
+    all (entry 19) -- so this constrains only whoosh-compat's own
+    extension. The rejection is on the *value*, not on how it was spelled:
+    since entry 19 accepts the phrases unquoted too, `added:previous week
+    3pm` and `added:3pm previous week` are diagnosed exactly like their
+    quoted counterparts above (before that, the unquoted spellings were
+    rejected for the unrelated reason that a bare `previous` is not a
+    date).
 
     Test references: `tests/test_parser_period_keywords.py` (whole file);
     `tests/test_times.py`'s

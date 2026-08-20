@@ -137,9 +137,15 @@ def test_diagnostic_skip_count_matches_corpus() -> None:
     # three corpus queries containing a "...T...Z" bracketed date-range
     # bound used to fail to parse (BAD_DATE) on the whoosh-compat side and
     # now parse cleanly, so they no longer take this diagnostic skip.
-    assert count == 23, (
+    #
+    # Dropped again from 23 to 8 by DateParserPlugin.do_date_phrases: the
+    # fifteen corpus lines spelling a multi-word date keyword unquoted
+    # (`created:previous month`, ...) used to diagnose BAD_DATE on the bare
+    # "previous"/"this" token, and now parse as the phrase they name, so
+    # they are compared against the oracle instead of skipped.
+    assert count == 8, (
         f"{count} corpus queries now take the DIVERGENCES.md entry 6 diagnostic skip,"
-        " expected 23; if this is an intentional parser change (diagnosing a new"
+        " expected 8; if this is an intentional parser change (diagnosing a new"
         " shape, or fixing one that used to diagnose), update this pinned count and"
         " say so in the commit message, don't just silently adjust the number"
     )

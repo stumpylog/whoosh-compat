@@ -610,36 +610,14 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         ),
         DivergenceKind.MISMATCH,
     ),
-    # design: whoosh-compat's date grammar adds new keywords (previous week/
-    # month/quarter/year) directly to the English grammar (see
-    # parser.dateparse module docstring), usable as a single quoted phrase
-    # value like whoosh's own multi-word values always require
-    # (`created:"previous week"`). Real paperless v2 instead relied on an
-    # *app-level* regex preprocessing pass in DelayedFullTextQuery
-    # (`rewrite_natural_date_keywords`, index.py) that rewrites e.g.
-    # `created:previous week` (unquoted) into an explicit bracket range
-    # *before* whoosh ever sees the string; real whoosh's own grammar has no
-    # native "previous week" support at all (not a bug, it never claimed to
-    # have this feature). That preprocessing hack is paperless-app-specific,
-    # not part of whoosh's (or whoosh-compat's) parser proper, so it's out of
-    # scope for whoosh-compat's `parse()`: unquoted multi-word keywords
-    # behave like any other unquoted multi-word value (split at the first
-    # whitespace, one token per field). The oracle harness replicates the
-    # app-level rewrite (see oracle._rewrite_natural_date_keywords) so the
-    # *quoted* form (`created:"previous week"`) matches; only the unquoted
-    # form is allowlisted here.
-    (
-        re.compile(
-            r"\b(?:created|modified|added):"
-            r"(?:previous (?:week|month|quarter|year)|this (?:month|year))\b"
-        ),
-        (
-            "DIVERGENCES.md entry 19: unquoted multi-word date keywords need"
-            " paperless's app-level rewrite_natural_date_keywords"
-            " preprocessing, out of whoosh-compat's parser scope"
-        ),
-        DivergenceKind.MISMATCH,
-    ),
+    # NOTE: the unquoted multi-word date keywords (`created:previous month`)
+    # used to be allowlisted here, because whoosh-compat's grammar only
+    # recognized them quoted while the oracle harness replicated paperless's
+    # app-level rewrite. whoosh-compat's date grammar now joins those six
+    # phrases itself (DateParserPlugin.do_date_phrases), so both sides agree
+    # and there is nothing left to allowlist: the remaining difference is
+    # against *stock* whoosh, which cannot parse them in any spelling and so
+    # is not reachable through this harness (DIVERGENCES.md entry 19).
     # design: a bare "*" wildcard on a field (`title:*`) whoosh-compat
     # simplifies to Every(field) (see QueryParser.wildcard_query's
     # docstring: "the text is exactly '*' -> Every"); real whoosh's

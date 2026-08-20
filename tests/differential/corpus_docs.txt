@@ -64,8 +64,9 @@ created:[2020 to]
 added:[now-7d TO now]
 added:[-1 week to now]
 
-# --- KNOWN DIVERGENCE (design, allowlist.py): unquoted multi-word
-# natural-date keyword (see corpus_paperless.txt's matching section).
+# --- Unquoted multi-word natural-date keyword: an ordinary compared line
+# since whoosh-compat's grammar joins the phrase itself (see
+# corpus_paperless.txt's matching section).
 created:previous month
 
 # --- KNOWN DIVERGENCE (design, allowlist.py): JSON dotted-path fields.
