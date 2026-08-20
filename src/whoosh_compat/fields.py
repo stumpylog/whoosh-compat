@@ -255,10 +255,21 @@ class FieldSpec:
         which case a bare mention of this field resolves to nothing at all
         (``FieldRegistry.make_ref`` returns ``None`` and
         ``FieldRegistry.is_bare_json_field`` returns True).
-        ``FieldRegistry.__init__`` rejects a spec declaring more than one,
-        so "the" default is well defined for any registered spec; an
-        unregistered spec with several returns the first in iteration
-        order.
+        Only meaningful on a *registered* spec. A ``FieldSpec`` on its own
+        is normalized but not validated: ``__post_init__`` settles the
+        container's shape and nothing else, while everything about the
+        subpaths themselves is checked by ``FieldRegistry.__init__``, the
+        only supported way to put a spec into use. So on a spec that has
+        never been registered this property answers from unvalidated data
+        and inherits exactly the two failure modes registration would have
+        rejected: several subpaths declaring ``default=True`` returns the
+        first in iteration order rather than raising, and a subpath mapped
+        to something that is not a ``SubpathSpec`` at all raises
+        ``AttributeError`` from the ``.default`` read (e.g.
+        ``FieldSpec("n", FieldKind.JSON, subpaths={"a": "x"})``). Both are
+        ``ValueError`` at registry construction; neither is reachable
+        through a registry, which is where this property is read from
+        (``make_ref``/``is_bare_json_field``).
         """
         subpaths = cast("Mapping[str, SubpathSpec]", self.subpaths)
         for path, subspec in subpaths.items():

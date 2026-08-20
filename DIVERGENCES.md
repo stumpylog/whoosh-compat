@@ -302,7 +302,9 @@ parse-then-emit pipeline).
 
     A second, independent trigger pathway to the identical mechanism was
     also confirmed: a bare (subpath-less) registered-JSON-field value
-    (entry 29's demotion) can itself analyze to more than one token.
+    (entry 29's demotion; the field must declare no default subpath, or the
+    bare name resolves and never demotes, see entry 20) can itself analyze
+    to more than one token.
     `attrs:END` demotes to the literal unfielded text `attrs:END` on both
     sides (entry 29), which `StandardAnalyzer` then tokenizes into two
     surviving tokens, `attrs` and `end` (the colon is a token boundary);
@@ -563,18 +565,39 @@ parse-then-emit pipeline).
     `test_validation_boolean_exists_target_unsupported_kind_rejected` and
     `test_validation_boolean_exists_target_keyword_is_valid`.
 
-    A bare JSON field name (no subpath) is addressed via the same
+    A bare JSON field name (no subpath) *whose spec declares no default
+    subpath* is addressed via the same
     `field:*` -> `Every(field)` path when the query is exactly the
     existence check, even though the same bare name demotes to a text
     search for any other term/pattern: the parser's
     `FieldsPlugin.do_fieldnames` carves the "*"-alone shape out of that
     demotion before it applies, using the same `text == "*"` detection
     `QueryParser.wildcard_query` already uses for the general case here.
+
+    A JSON field that *does* declare a default subpath
+    (`SubpathSpec(default=True)`, 0.2.0) is outside this paragraph
+    entirely, in both directions: its bare name resolves like any ordinary
+    field, so nothing about it is demoted and the carve-out is never
+    consulted for it. `notes:*` is then an ordinary recognized-field
+    existence check on `FieldRef("notes", "note")`, which for a *fast* JSON
+    field narrows the answer from "any subpath has a value"
+    (`exists_query(name, json_subpaths=True)`) to the default subpath's own
+    column, and for a non-fast one is the same `EXISTS_REQUIRES_FAST` /
+    `Cause.MISCONFIGURED` refusal as before, differing only in naming
+    `'notes.note'` where it used to name `'notes'`. Both are exactly what a
+    host-side `notes:` -> `notes.note:` query-text rewrite produced, which
+    is the point of the feature. See entry 30 for the other shapes a
+    defaulted bare name now reaches.
     Test references: `tests/test_parser_fields.py`'s
     `test_json_bare_field_name_bare_star_is_existence_not_demoted` and
     `test_json_subpath_bare_star_unaffected_by_bare_name_carve_out`;
     `tests/emitter/test_kind_matrix.py`'s
-    `test_json_bare_field_bare_star_existence`.
+    `test_json_bare_field_bare_star_existence`;
+    `tests/test_default_subpath.py`'s
+    `test_bare_star_existence_targets_the_default_subpath` and
+    `test_bare_star_on_a_field_without_a_default_is_unchanged`;
+    `tests/emitter/test_emit_default_subpath.py`'s
+    `test_bare_star_existence_narrows_to_the_default_subpath`.
 
 21. **A year followed by a colon-separated time reads as a calendar date
     (design).** Value text like `added:'2020 12:30'` is ambiguous: the
@@ -1109,6 +1132,20 @@ parse-then-emit pipeline).
     at parse time. Entry 5 stays scoped to the TEXT/KEYWORD ranges that
     worked in whoosh; a subpath range never did, because whoosh has no JSON
     field concept to have supported it.
+
+    Both halves of this entry are reachable through a *bare* JSON field
+    name when its spec declares a default subpath
+    (`SubpathSpec(default=True)`, 0.2.0), because the bare name then
+    resolves to a subpath like any dotted one: `notes:fo*` reports
+    `PATTERN_ON_SUBPATH` at parse time and `notes:[a TO b]` builds a
+    `TermRange` on `FieldRef("notes", "note")` that `visit_termrange`
+    refuses at emit. Without a default, both of those spellings are
+    unrecognized field prefixes and demote to a silent default-field text
+    search instead (entry 20), so declaring a default converts two silently
+    wrong searches into honest diagnostics. That is the same answer a
+    host-side `notes:` -> `notes.note:` query-text rewrite produced, so it
+    is not a new refusal for a host migrating off one, but it is a real
+    behavior change for anyone adopting a default without such a rewrite.
 
     A bare `field.subpath:*` (the "*"-alone existence-match special case,
     entries 20 and 29) is unaffected: it never reaches

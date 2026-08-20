@@ -246,11 +246,18 @@ existence-check special case, not a term to demote, and still reaches
 DIVERGENCES.md entry 20). A declared default subpath moves the field out of
 that demotion path entirely: `notes:` is then an ordinary recognized field
 prefix, so the carve-out is never consulted for it and `notes:*` is an
-ordinary recognized-field existence check. That is the one emit-side
-consequence of declaring a default: `notes:*` narrows from the whole-field
-question `exists_query(name, json_subpaths=True)` to the default subpath's
-own column, which is exactly what a `notes:` → `notes.note:` rewrite in the
-host would have produced. Once a `FieldRef` exists, `FieldRegistry.resolve(ref) -> ResolvedField
+ordinary recognized-field existence check. Everything that follows from
+declaring a default follows from that one resolution change, and three
+shapes are worth naming: `notes:*` narrows from the whole-field question
+`exists_query(name, json_subpaths=True)` to the default subpath's own
+column (result-changing on a fast JSON field; on a non-fast one it is the
+same `EXISTS_REQUIRES_FAST` refusal either way, naming the dotted form
+instead of the bare one), `notes:fo*` becomes a parse-time
+`PATTERN_ON_SUBPATH` diagnostic, and `notes:[a TO b]` an emit-time
+`TEXT_RANGE` refusal, the latter two where the bare name previously demoted
+to a silent default-field text search (DIVERGENCES.md entries 20 and 30).
+All three are exactly what a `notes:` → `notes.note:` rewrite in the host
+would have produced. Once a `FieldRef` exists, `FieldRegistry.resolve(ref) -> ResolvedField
 | None` is the single resolver for it, plain or JSON subpath alike: nothing
 downstream of `make_ref`, including the emitter, inspects a field name for a
 literal `.` again. A registered *plain* field whose own name happens to

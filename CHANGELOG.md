@@ -76,9 +76,18 @@ material; they are permanently documented, each with its rationale, in
   where those characters are ordinary text and not a field prefix. Opt-in
   per field: with no default declared, a bare JSON field name stays
   unresolvable and demotes to text, exactly as before.
-  One behavior follows for a field that declares a default: `notes:*`
-  narrows from a whole-field existence check to the default subpath's own
-  column, matching what the host-side rewrite it replaces produced.
+  Adopting a default changes what the bare name does in three ways, all of
+  them matching what the host-side rewrite it replaces already produced.
+  `notes:*` becomes an existence check on the default subpath's own column
+  rather than on the whole field: result-changing on a *fast* JSON field,
+  while on a non-fast one it is the same `EXISTS_REQUIRES_FAST` /
+  `Cause.MISCONFIGURED` refusal as before, naming `'notes.note'` instead of
+  `'notes'`. A wildcard or prefix on the bare name (`notes:fo*`) becomes a
+  parse-time `PATTERN_ON_SUBPATH` diagnostic, and a range (`notes:[a TO b]`)
+  an emit-time `TEXT_RANGE` `QueryError`, where both previously demoted to a
+  silent default-field text search: honest refusals replacing wrong
+  searches, but hard errors where there were none (`DIVERGENCES.md`
+  entries 20 and 30).
 - `parse()` now guarantees the exception type it can raise: the parse
   pipeline is wrapped in a backstop that converts any unexpected exception
   into `QueryParserError`, chaining the original as `__cause__`. It never

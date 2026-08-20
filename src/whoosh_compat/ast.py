@@ -898,8 +898,13 @@ def free_text_tokens(
                 )
             raise ValueError(f"fields names unknown field {name!r}")
         if ref.json_path is not None:
+            # Named by what it resolves to, not only by what was typed: a
+            # JSON field declaring a default subpath reaches here under its
+            # bare name (``notes`` -> ``notes.note``), and calling that bare
+            # name itself "a JSON subpath" would say something untrue.
             raise ValueError(
-                f"fields names JSON subpath {name!r}, which is not a free-text (TEXT/KEYWORD) field"
+                f"fields names {name!r}, which resolves to JSON subpath {str(ref)!r},"
+                " not a free-text (TEXT/KEYWORD) field"
             )
         resolved = registry.resolve(ref)
         if resolved is None or resolved.spec.kind not in (FieldKind.TEXT, FieldKind.KEYWORD):
