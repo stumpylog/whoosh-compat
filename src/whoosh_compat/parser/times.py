@@ -394,16 +394,9 @@ class timespan:
 
         if start.date() == end.date() and start.time() > end.time():
             if isinstance(self.start, datetime) and isinstance(self.end, datetime):
-                # Both bounds were already fully-resolved, unambiguous
-                # instants (e.g. "now-1h"/"now+1h", or whoosh's own bare
-                # "-1h"/"+1h" offset syntax) rather than a bare/ambiguous
-                # time of day (e.g. "9pm to 5am", meant as an overnight
-                # span -- see the day-bump below). For a concrete instant
-                # pair, out-of-order almost always means the user wrote the
-                # bounds in the wrong order, not "wrap to tomorrow", so
-                # normalize it the same way an out-of-order absolute range
-                # is normalized above: swap instead of pushing the upper
-                # bound into the next day (see DIVERGENCES.md entry 53).
+                # Both bounds arrived as plain datetime, not adatetime (the
+                # now/PlusMinus offset family): swap instead of day-bumping.
+                # See DIVERGENCES.md entry 53.
                 start, end = end, start
                 swapped = True
             else:

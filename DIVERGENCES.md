@@ -1025,15 +1025,25 @@ parse-then-emit pipeline).
     is documented directly in README.md's syntax table, which lists
     `created:now-7d` as a bare example, not just something usable inside a
     bracketed range's bounds. Real whoosh's date grammar only recognizes
-    this relative-offset syntax (`now-7d`, `-1 week`, etc.) as a *range
-    bound*; a bare, non-bracketed value in this shape fails to parse as a
-    date on the real-whoosh side and falls back to `NullQuery`. Confirmed
-    directly against the pinned oracle:
-    `oracle_parse("created:now-7d", ...)` returns `NullQuery`, while
-    `oracle_parse("created:[now-7d TO now]", ...)` parses the identical
-    relative-offset text correctly as a range bound. Not a bug on either
-    side: whoosh-compat's single-value date grammar simply accepts a syntax
-    real whoosh's does too, just only in the other position.
+    this relative-offset syntax (`-1 week`, etc.) as a *range bound*; a
+    bare, non-bracketed value in this shape fails to parse as a date on the
+    real-whoosh side and falls back to `NullQuery`. Confirmed directly
+    against the pinned oracle: `oracle_parse("created:now-7d", ...)`
+    returns `NullQuery`. Not a bug on either side: whoosh-compat's
+    single-value date grammar simply accepts a syntax real whoosh's does
+    too, just only in the other position.
+
+    Correction: an earlier version of this entry additionally claimed
+    `oracle_parse("created:[now-7d TO now]", ...)` "parses the identical
+    relative-offset text correctly as a range bound." That was wrong, and
+    is corrected here rather than left standing: real whoosh has no
+    `now±<n><unit>` grammar at all (entry 53), so as a *range bound* too,
+    `created:[now-7d TO now]` silently drops the `-7d` offset and resolves
+    to a degenerate zero-width `now`-to-`now` range (confirmed directly
+    against the pinned oracle). Only the *spaced* relative-offset spelling
+    (`created:['-7 days' TO now]`) parses as a range bound on the
+    real-whoosh side; `now-7d` does not parse correctly in either
+    position.
 
     A relative offset written with a space (`created:-1 week`, unquoted)
     fails to parse as a single token on whoosh-compat's side too (it splits
@@ -2318,25 +2328,41 @@ parse-then-emit pipeline).
     reading that is a real, useful convention — confirmed separately
     against real whoosh, which resolves it to a sensible ~9-hour span). But
     `timespan.disambiguated()` (`parser/times.py`) applies the same
-    same-day/time-reversed check uniformly to that case AND to a pair of
-    already-fully-resolved, unambiguous instants (a `now`-relative offset,
-    or any other concrete `datetime` on both sides) that merely happen to
-    land on the same calendar day. For the latter, "the user wrote the
-    bounds backwards" is overwhelmingly the more likely reading than
-    "wrap to tomorrow" — nobody has a working query that depends on a
-    written-backwards 2-hour window silently becoming a 22-hour one, and
-    there is no diagnostic to warn them it happened. That is exactly the
-    "silent wrong answer with no diagnostic" shape the project's own
-    parity rule treats as a defect rather than a convention, so this
-    fork's `timespan.disambiguated()` now checks whether both original
-    bounds were already plain `datetime` instances (as opposed to
-    ambiguous `adatetime`s, i.e. bare times of day) before choosing between
-    the two branches: concrete-on-both-sides swaps (matching the existing,
-    already-whoosh-matching swap used for a same-shape reversed *absolute*
-    range, e.g. `added:[2020-01-01 TO 2019-01-01]`), anything else still
-    day-bumps. Real whoosh's own reversed-instant-range behavior is left
-    unfixed in `../whoosh`; only this fork's copy in `parser/times.py`
-    changes.
+    same-day/time-reversed check uniformly to that case AND to the `now`/
+    `now±offset`/bare `±offset` family, whose grammar elements (`PlusMinus`,
+    the bare `now` regex) return a plain `datetime` directly rather than an
+    `adatetime`, and which happen to land on the same calendar day. For
+    that family, "the user wrote the bounds backwards" is overwhelmingly
+    the more likely reading than "wrap to tomorrow" — nobody has a working
+    query that depends on a written-backwards 2-hour window silently
+    becoming a 22-hour one, and there is no diagnostic to warn them it
+    happened. That is exactly the "silent wrong answer with no diagnostic"
+    shape the project's own parity rule treats as a defect rather than a
+    convention, so this fork's `timespan.disambiguated()` now checks
+    whether both original bounds were already plain `datetime` instances
+    (as opposed to `adatetime`, whether or not the `adatetime` happens to
+    be fully specified) before choosing between the two branches: plain-
+    `datetime`-on-both-sides swaps (matching the existing, already-whoosh-
+    matching swap used for a same-shape reversed *absolute* range, e.g.
+    `added:[2020-01-01 TO 2019-01-01]`), anything else still day-bumps.
+
+    That representational check is narrower than "any pair of unambiguous
+    instants": an explicit, fully-specified absolute datetime
+    (`added:[20200101210000 TO 20200101050000]`) or an RFC3339 bound
+    (`added:[2020-01-01T21:00:00 TO 2020-01-01T05:00:00]`) is still an
+    `adatetime` object even when every unit is set, so a reversed range in
+    either of those spellings, or a reversed range mixing one such bound
+    with a `now`-family one, still day-bumps rather than swapping (measured
+    at basedate 2026-08-04 10:30 Europe/Berlin:
+    `added:[20200101210000 TO 20200101050000]` and
+    `added:[2020-01-01T21:00:00 TO 2020-01-01T05:00:00]` both give an 8-hour
+    day-bumped span; `added:['2026-08-04T10:00:00Z' TO now-3h]` gives
+    19h30m; `added:[now+1h TO '2026-08-04T09:00:00Z']` gives 23h30m). That
+    remains whoosh-parity (real whoosh day-bumps those shapes too, by the
+    same `adatetime`-vs-`datetime` split) and is out of this task's scope;
+    only the `now`/offset family, the shape the brief measured, is fixed
+    here. Real whoosh's own reversed-instant-range behavior is left unfixed
+    in `../whoosh`; only this fork's copy in `parser/times.py` changes.
 
     `tests/differential/corpus_paperless.txt`'s `added:[now+1h TO now-1h]`
     line already exercises this exact query shape, but does not
@@ -2353,7 +2379,9 @@ parse-then-emit pipeline).
     already matches; the direct-instantiation check against
     `whoosh.qparser.dateparse.DateParserPlugin` above, not this corpus
     line, is what actually establishes whoosh's own reversed-instant-range
-    behavior.
+    behavior. No new pattern was added to the differential AST-level
+    allowlist module for this entry, deliberately; this paragraph
+    documents that choice, not an oversight.
 
     Test references: `tests/test_parser_dates.py`'s
     `test_reversed_relative_range_swaps_like_the_absolute_case`.

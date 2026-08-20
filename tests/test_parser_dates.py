@@ -97,14 +97,15 @@ def test_whoosh_plusminus(reg: FieldRegistry) -> None:
 
 
 def test_reversed_relative_range_swaps_like_the_absolute_case(reg: FieldRegistry) -> None:
-    # DIVERGENCES.md entry 53. Both bounds resolve to concrete, unambiguous
-    # instants (basedate +/- an offset), same as an absolute range whose
-    # bounds are typed backwards (see test_backwards_swap_carries_
-    # exactness_with_the_value above): a reversed order here is the user
-    # writing the endpoints in the wrong order, not an "overnight span"
-    # (that reading only applies to a genuinely ambiguous bare time of day,
-    # e.g. "9pm to 5am"). The forward and backward spellings must therefore
-    # produce the identical 2-hour span, not a ~22-hour one.
+    # DIVERGENCES.md entry 53. Both bounds are the now/offset family
+    # (basedate +/- an hour), which resolves to a plain datetime rather
+    # than an adatetime, same as an absolute range whose bounds are typed
+    # backwards (see test_backwards_swap_carries_exactness_with_the_value
+    # below): a reversed order here is the user writing the endpoints in
+    # the wrong order, not an "overnight span" (that reading only applies
+    # to a genuinely ambiguous bare time of day, e.g. "9pm to 5am"). The
+    # forward and backward spellings must therefore produce the identical
+    # 2-hour span, not a ~22-hour one.
     forward = dparse("added:[now-1h TO now+1h]", reg).ast
     backward = dparse("added:[now+1h TO now-1h]", reg).ast
     assert isinstance(forward, ast.DateRange)
