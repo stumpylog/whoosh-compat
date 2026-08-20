@@ -333,7 +333,19 @@ class TestIterativeNormalizeDeepTree:
 # kind of change that can break this without any of the *depth* tests above
 # noticing, since the failure here is about a node having two parents, not
 # about being deep or wide.
-class TestSharedSubtreeSurvivesDedupe:
+#
+# _dedupe calls _structural_key once *per sibling*, each call starting a
+# fresh discovery/memo pass: sharing between two top-level siblings in the
+# same `nodes` tuple therefore never lands inside a single _structural_key
+# call at all, and cannot exercise the bug this class exists to pin. Both
+# of the two ways sharing can actually reach a single _structural_key call
+# are covered separately below: calling it directly with the shared node
+# genuinely at the top (TestStructuralKeyToleratesSharedNode), and going
+# through the public normalize() with the shared subtree nested inside one
+# sibling, itself composite (TestNormalizeToleratesSharedSubtreeInOneSibling
+# - these six shapes were confirmed, directly against the previous commit,
+# to raise KeyError there and pass here).
+class TestStructuralKeyToleratesSharedNode:
     @pytest.mark.parametrize(
         "build",
         [
@@ -346,20 +358,69 @@ class TestSharedSubtreeSurvivesDedupe:
         ],
     )
     def test_shared_node_does_not_raise(self, build: Callable[[Node], Node]) -> None:
+        from whoosh_compat.ast import _structural_key
+
         shared = T("x")
         tree = build(shared)
-        normalize(tree)  # must not raise KeyError (or anything else)
-
-    def test_same_object_twice_dedupes_to_one(self) -> None:
-        shared = T("x")
-        result = normalize(And(children=(shared, shared)))
-        assert result == shared
+        _structural_key(tree)  # must not raise KeyError (or anything else)
 
     def test_shared_object_content_matches_unshared_equivalent(self) -> None:
         # The key a shared node produces must match what an unshared but
         # content-identical tree produces: sharing is an implementation
         # detail of how the caller built the tree, not a semantic signal.
+        from whoosh_compat.ast import _structural_key
+
         shared = T("x")
         shared_tree = AndNot(positive=Not(child=shared), negative=shared)
         unshared_tree = AndNot(positive=Not(child=T("x")), negative=T("x"))
-        assert normalize(shared_tree) == normalize(unshared_tree)
+        assert _structural_key(shared_tree) == _structural_key(unshared_tree)
+
+
+class TestNormalizeToleratesSharedSubtreeInOneSibling:
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(
+                lambda y: Or(children=(And(children=(Not(child=y), y)), T("z"))),
+                id="and-in-or",
+            ),
+            pytest.param(
+                lambda y: And(children=(AndNot(positive=Not(child=y), negative=y), T("z"))),
+                id="andnot-in-and",
+            ),
+            pytest.param(
+                lambda y: Or(children=(AndNot(positive=Not(child=y), negative=y), T("z"))),
+                id="andnot-in-or",
+            ),
+            pytest.param(
+                lambda y: Or(
+                    children=(
+                        Boosted(
+                            child=AndNot(positive=Not(child=y), negative=y), boost=2.0
+                        ),
+                        T("z"),
+                    )
+                ),
+                id="andnot-under-boosted-in-or",
+            ),
+            pytest.param(
+                lambda y: Or(children=(AndMaybe(required=Not(child=y), optional=y), T("z"))),
+                id="andmaybe-in-or",
+            ),
+            pytest.param(
+                lambda y: Or(children=(Require(scored=Not(child=y), filter_only=y), T("z"))),
+                id="require-in-or",
+            ),
+        ],
+    )
+    def test_shared_subtree_does_not_raise(self, build: Callable[[Not], Node]) -> None:
+        y = Not(child=T("y"))
+        tree = build(y)
+        normalize(tree)  # must not raise KeyError (or anything else)
+
+
+class TestDedupeIdentityPreCheck:
+    def test_same_object_twice_dedupes_to_one(self) -> None:
+        shared = T("x")
+        result = normalize(And(children=(shared, shared)))
+        assert result == shared

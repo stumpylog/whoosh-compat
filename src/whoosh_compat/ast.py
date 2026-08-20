@@ -308,18 +308,21 @@ def _encode_field(value: object, memo: dict[int, str]) -> str:
     ``self is other`` prologue that only ever fires for the *whole*
     node, not a field nested inside it - so even the *same* NaN object
     nested inside two otherwise-identical composite nodes compares
-    unequal there. This
-    does **not** hold across every interpreter this library supports
-    (3.11 through 3.14): on CPython 3.11, the generated ``__eq__``
-    instead builds and compares a tuple of the fields, which *does* get
+    unequal there. This does **not** hold across every interpreter this
+    library supports (3.11 through 3.14, measured on all four, not just
+    the two endpoints): the split falls between 3.12 and 3.13, not at
+    3.14. On CPython 3.11 and 3.12, the generated ``__eq__`` instead
+    builds and compares a tuple of the fields, which *does* get
     ``PyObject_RichCompareBool``'s per-element identity shortcut - so the
-    same same-object-NaN case compares *equal* there. An ``id(value)``-
-    based tag would have matched 3.11 but silently over-deduped on 3.14
-    (or vice versa for a counter, depending which version's behavior one
-    tried to match) - a NaN-bearing key cannot be made to match ``__eq__``
-    exactly on every supported interpreter simultaneously with a design
-    this simple. Always-unique per encounter (this function's actual
-    choice) never over-dedupes on *any* version: 3.11's identity-based
+    same same-object-NaN case compares *equal* on those two versions;
+    3.13 and 3.14 both use the direct field-by-field compare described
+    above, with no shortcut. An ``id(value)``-based tag would have
+    matched 3.11/3.12 but silently over-deduped on 3.13/3.14 (or vice
+    versa for a counter, depending which versions' behavior one tried to
+    match) - a NaN-bearing key cannot be made to match ``__eq__`` exactly
+    on every supported interpreter simultaneously with a design this
+    simple. Always-unique per encounter (this function's actual choice)
+    never over-dedupes on *any* version: 3.11/3.12's identity-based
     "equal" case just lands in the always-safe under-dedupe direction
     there instead (see :func:`_dedupe`'s docstring for why the merge that
     exact case is entitled to, at the *whole-node* level, is restored
@@ -389,12 +392,26 @@ def _structural_key(root: Node) -> str:
     It also does *not* hold across two separate calls to this function
     for the same NaN-bearing node: :func:`_encode_field` deliberately
     gives every NaN a fresh, ever-incrementing tag, so
-    ``_structural_key(n) == _structural_key(n)`` can be ``False``.
-    Nothing relies on that holding across calls today - :func:`_dedupe`
-    calls this once per sibling within a single pass over one ``nodes``
-    tuple, never compares a memoized key from one call against a freshly
-    computed one from another - but a future caller comparing keys
-    computed in two separate calls would need to know this.
+    ``_structural_key(n) == _structural_key(n)`` can be ``False``. This is
+    not a hazard nothing relies on, quite the opposite - :func:`_dedupe`
+    calls this once per sibling and *does* compare the results across
+    those separate calls, via its shared ``seen`` set (that comparison,
+    across calls, is precisely how two distinct siblings ever get
+    compared to each other at all). What is true, and is the actual
+    mechanism that makes this safe rather than a bug, is that each call's
+    internal ``memo`` dict (mapping ``id(node) -> str`` for one call's own
+    discovery pass) is never shared with another call - a stale lookup
+    from a *previous* call's memo is not the failure mode here. The
+    reason NaN siblings still behave correctly under this repeated
+    cross-call comparison is that ``_NAN_TAGS`` is a single, global,
+    ever-incrementing counter every call draws from: two different NaN
+    *encounters*, whether in the same call or different ones, always draw
+    different tags and so never spuriously compare equal - which is
+    exactly "no two NaN nodes ever falsely dedupe," the property this
+    module exists to guarantee. A future caller relying on
+    ``_structural_key(n) == _structural_key(n)`` being ``True`` across
+    two separate calls, for some purpose other than comparing distinct
+    siblings against each other, would need to know it is not.
 
     Traverses iteratively (an explicit work stack, keyed by node identity,
     mirroring :func:`normalize`'s own traversal), so a node that is itself
@@ -441,10 +458,28 @@ def _structural_key(root: Node) -> str:
        children has already been combined - guaranteeing, for a shared
        node with multiple parents, that its ``memo`` entry exists no
        matter which of its parents happens to run first, and that it is
-       computed exactly once even though multiple parents read it (unlike
-       a naive stack revisit, which would recompute a shared subtree once
-       per parent - fine for correctness on its own, but exponential on a
-       pathological DAG where sharing compounds across levels).
+       *processed* exactly once even though multiple parents read it,
+       unlike a naive stack revisit, which would redo a shared subtree's
+       own field-processing loop once per parent.
+
+       That only bounds the number of times this loop *runs*, not the
+       size of what it produces. Every node's own contribution still
+       embeds its children's full text (by design - see above), so on a
+       hand-built DAG where sharing *compounds* across levels (each
+       level's node embeds two already-large strings that themselves
+       overlap, e.g. ``And(children=(Not(child=n), Boosted(child=n,
+       boost=2.0)))`` chained so each level's ``n`` is the previous
+       level's whole node), the key string's own length still roughly
+       doubles per level - measured: 43 nodes / 1.5M characters at depth
+       14, 49 nodes / 5.9M characters at depth 16, 55 nodes / 23.7M
+       characters at depth 18, i.e. linear node count but exponential
+       string size. This is meaningfully better than the single-pass
+       version it replaced (which redid the *work* exponentially too:
+       0.12s vs 6.2s at depth 18 for the same input), but it is not
+       solved, only the work-duplication half of it is. Not a live
+       concern: ``normalize()``/``parse()`` never produce a DAG at all,
+       let alone a compounding one, so this only bites a caller who
+       hand-builds one on purpose.
 
     ``memo`` entries are still evicted as early as correctness allows,
     for the same reason as the single-pass version this replaced: a
