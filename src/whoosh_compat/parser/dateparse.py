@@ -878,7 +878,7 @@ class DateParserPlugin(Plugin):
     ambiguity/complexity it adds isn't worth carrying for a feature nothing
     exercises. :meth:`do_date_phrases` is not that mode returning by another
     name: it joins a closed list of six two-word keywords (and a time of day
-    adjacent to one of them), never an open-ended run of date words.
+    trailing one of them), never an open-ended run of date words.
     """
 
     def __init__(self, basedate: datetime, tz: tzinfo, dateparser: DateParser | None = None) -> None:
@@ -1036,6 +1036,15 @@ class DateParserPlugin(Plugin):
     def _is_time_of_day(self, text: str) -> bool:
         """Whether ``text`` alone is a time of day the grammar recognizes
         ("3pm", "13:45", "noon", "midnight", "now").
+
+        Asks the grammar's own ``time`` element rather than re-deriving a
+        notion of "looks like a time" here, so the two can't drift apart.
+        Only :class:`English` defines that element: a custom ``DateParser``
+        that does not returns False for everything, which degrades
+        :meth:`_phrase_run` to "never join a trailing time" (the phrase
+        itself still joins). That is a silent behavior difference, not an
+        error, so it is called out here: a custom parser wanting the
+        trailing-time join must expose a ``time`` element like English's.
         """
 
         element = getattr(self.dateparser, "time", None)
@@ -1076,43 +1085,47 @@ class DateParserPlugin(Plugin):
         """The indices of the nodes making up an unquoted date keyword
         phrase starting at ``group[i]``, or None if there isn't one.
 
-        The phrase is two words (``previous month``), optionally with a time
-        of day on either side of it (``previous week 3pm``,
-        ``3pm previous week``). The time is part of the run so that the
-        unquoted spelling reaches the grammar as the same value the quoted
-        spelling would; the grammar, not this join, decides what that value
-        means (for the span-valued keywords, that a time on a period is an
-        unusable date).
+        The run is the two-word phrase (``previous month``), plus a time of
+        day *trailing* it (``previous week 3pm``) if one is there. The
+        trailing time is part of the run so that the unquoted spelling
+        reaches the grammar as the same value the quoted spelling would; the
+        grammar, not this join, then decides what that value means (for the
+        span-valued keywords: that a time on a period is an unusable date,
+        see DIVERGENCES.md entry 52).
+
+        A time *leading* the phrase is deliberately NOT part of the run,
+        even though `added:"3pm previous week"` is rejected. The rule is
+        that a field prefix binds the next date expression: in
+        ``added:3pm previous week`` it finds "3pm", a complete date value,
+        and is satisfied, so "previous week" was never combined with the
+        time in the first place and stays ordinary free text (which is what
+        paperless v2 did with it, and what this fork must keep doing).
+        Quoting is what forces the two into one expression, and only then
+        is there an incoherent combination to reject. Do not "fix" this
+        into symmetry with the trailing case: the two spellings differ
+        because they bind differently, not by oversight.
         """
 
         # Three words is the longest run that can exist: the two-word phrase
-        # plus one adjacent time. A fourth word is never part of the value.
+        # plus a trailing time. A fourth word is never part of the value.
         idxs = [i, *self._phrase_words(group, i, limit=2)]
         words = [cast(str, group[j].text).lower() for j in idxs]
 
-        for start in (0, 1):
-            if len(words) < start + 2:
-                break
-            if words[start + 1] not in self._KEYWORD_PHRASES.get(words[start], ()):
-                continue
-            if start == 1 and not self._is_time_of_day(words[0]):
-                # A leading word that isn't a time isn't part of the value:
-                # `added:invoice previous month` keeps "invoice" a term.
-                continue
-            end = start + 2
-            if start == 0 and len(words) > end and self._is_time_of_day(words[end]):
-                end += 1
-            return idxs[:end]
+        if len(words) < 2 or words[1] not in self._KEYWORD_PHRASES.get(words[0], ()):
+            return None
 
-        return None
+        end = 2
+        if len(words) > end and self._is_time_of_day(words[end]):
+            end += 1
+        return idxs[:end]
 
     def do_date_phrases(self, parser: Any, group: syntax.GroupNode) -> syntax.GroupNode:
         """Join an unquoted multi-word date keyword phrase on a date field
         back into a single value node, so ``added:previous month`` resolves
         exactly like ``added:"previous month"``.
 
-        The join is limited to the phrases in ``_KEYWORD_PHRASES`` (plus an
-        adjacent time of day, see :meth:`_phrase_run`) on a field explicitly
+        The join is limited to the phrases in ``_KEYWORD_PHRASES`` (plus a
+        trailing time of day, see :meth:`_phrase_run`) on a field explicitly
         named in the query: everything else about date-field parsing keeps
         ending at the first space, as whoosh's grammar does.
         """

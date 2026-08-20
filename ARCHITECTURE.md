@@ -147,8 +147,8 @@ forked from in turn. Within the forked pipeline:
   running just after fieldname assignment that joins an unquoted multi-word
   date keyword (`added:previous month`) back into a single value node before
   the grammar sees it. In Whoosh a value always ends at the first space, so
-  this is a deliberate widening, confined to the six known phrases (plus an
-  adjacent time of day) on an explicitly named date field so that no other
+  this is a deliberate widening, confined to the six known phrases (plus a
+  trailing time of day) on an explicitly named date field so that no other
   date value becomes whitespace-greedy; `DIVERGENCES.md` entry 19 records
   what it does and does not cover.
 

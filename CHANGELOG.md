@@ -72,15 +72,18 @@ material; they are permanently documented, each with its rationale, in
   rewrite cannot see quotes, so it corrupts `title:"see added:previous month
   notes"`, where those characters are ordinary phrase text.
   The widening is limited to those six phrases on an explicitly named date
-  field, plus a time of day adjacent to one of them (in either word order),
-  so that an unquoted spelling reaches the grammar as the same value the
-  quoted spelling would: `added:previous week 3pm` is therefore the same
-  `BAD_DATE` as `added:"previous week 3pm"` (`DIVERGENCES.md` entry 52),
-  where before it was a `BAD_DATE` only by accident of `previous` not being
-  a date on its own. Nothing else about a date value becomes
-  whitespace-greedy: `added:previous week AND title:foo`,
-  `added:previous week invoice`, and `title:previous month` (a TEXT field)
-  are unchanged (`DIVERGENCES.md` entry 19).
+  field, plus a time of day *trailing* one of them, so that an unquoted
+  spelling reaches the grammar as the same value the quoted spelling would:
+  `added:previous week 3pm` is therefore the same `BAD_DATE` as
+  `added:"previous week 3pm"` (`DIVERGENCES.md` entry 52), where before it
+  was a `BAD_DATE` only by accident of `previous` not being a date on its
+  own. A *leading* time is not joined: `added:3pm previous week` stays an
+  instant plus two free-text terms, because `added:` binds `3pm` and stops,
+  so the phrase and the time were never one value to reject. Nothing else
+  about a date value becomes whitespace-greedy:
+  `added:previous week AND title:foo`, `added:previous week invoice`, and
+  `title:previous month` (a TEXT field) are unchanged (`DIVERGENCES.md`
+  entry 19).
 - A JSON field can declare one of its subpaths the default:
   `FieldSpec("notes", FieldKind.JSON, subpaths={"user": SubpathSpec(),
   "note": SubpathSpec(default=True)})`. A bare mention of the field then

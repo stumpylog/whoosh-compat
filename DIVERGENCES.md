@@ -484,7 +484,7 @@ parse-then-emit pipeline).
     have (`previous week`/`month`/`quarter`/`year`, plus whoosh's own
     `this month`/`this year`), and accepts all six as a bare value on a
     date field as well as as a quoted one: `DateParserPlugin`'s
-    `do_date_phrases` filter joins the two words (and an adjacent time of
+    `do_date_phrases` filter joins the two words (and a trailing time of
     day, if any) back into a single value before the grammar sees them, so
     `created:previous month` resolves exactly like
     `created:"previous month"`. In whoosh a value always ends at the first
@@ -503,16 +503,26 @@ parse-then-emit pipeline).
     date field. Nothing else about a date value becomes whitespace-greedy:
     `created:previous week AND title:foo`, `created:previous week invoice`,
     `title:previous month` (a TEXT field) and `created:this week` (not a
-    keyword in any spelling) are all unchanged. A time of day adjacent to
-    one of the six *is* joined on, in both word orders, so that the
+    keyword in any spelling) are all unchanged.
+
+    A time of day *trailing* one of the six is joined on, so that the
     unquoted spelling reaches the grammar as the value the quoted spelling
     would: entry 52's rejection of a time on a period keyword therefore
     holds for `created:previous week 3pm` exactly as for
-    `created:"previous week 3pm"`.
+    `created:"previous week 3pm"`. A time *leading* it is not joined, and
+    the asymmetry is deliberate: a field prefix binds the next date
+    expression, and in `created:3pm previous week` it finds `3pm`, a
+    complete value, and stops. The phrase after it was never combined with
+    the time, so there is no incoherent combination for entry 52 to
+    reject; it stays free text, which is also what released paperless-ngx
+    v2 did with that spelling (its quoting shim only fired on a phrase
+    directly following a date-field prefix). Quoting is what forces the
+    two into one value, so only `created:"3pm previous week"` is rejected.
 
     Test references: `tests/test_parser_date_phrases.py` (the whole file);
     `tests/test_parser_period_keywords.py`'s
-    `test_period_keyword_with_a_time_is_a_bad_date` and
+    `test_period_keyword_with_a_time_is_a_bad_date`,
+    `test_unquoted_leading_time_does_not_reach_the_phrase` and
     `test_calendar_unit_keyword_still_takes_a_time` (unquoted cases);
     `tests/emitter/test_acceptance_e2e.py`'s
     `test_created_previous_month_unquoted_needs_no_app_level_rewrite`;
@@ -2150,7 +2160,9 @@ parse-then-emit pipeline).
 52. **A period keyword written together with a time of day
     (`added:"previous week 3pm"`, `added:"3pm previous week"`,
     `added:"previous quarter noon"`) is diagnosed as a BAD_DATE, in both
-    word orders.** `previous week` and `previous quarter` are whoosh-compat
+    word orders.** ("Together with" means bound into one date value, which
+    quoting always does; see the last paragraph for the unquoted
+    spellings.) `previous week` and `previous quarter` are whoosh-compat
     grammar additions (entry 19's family of new keywords) and, unlike every
     other date element, they resolve directly to a fully-built `timespan`: a
     calendar week or quarter doesn't align with any single `adatetime` unit,
@@ -2177,12 +2189,18 @@ parse-then-emit pipeline).
     is entirely unaffected. Real whoosh has no equivalent behavior to
     diverge from here -- it has no `previous week` or `previous quarter` at
     all (entry 19) -- so this constrains only whoosh-compat's own
-    extension. The rejection is on the *value*, not on how it was spelled:
-    since entry 19 accepts the phrases unquoted too, `added:previous week
-    3pm` and `added:3pm previous week` are diagnosed exactly like their
-    quoted counterparts above (before that, the unquoted spellings were
-    rejected for the unrelated reason that a bare `previous` is not a
-    date).
+    extension. The rejection is on the *value*, so it does not depend on
+    quoting: entry 19 accepts the phrases unquoted, and a time trailing one
+    is bound into the same value, so `added:previous week 3pm` is diagnosed
+    exactly like `added:"previous week 3pm"` (before entry 19 it was
+    rejected too, but for the unrelated reason that a bare `previous` is
+    not a date). The *leading*-time spelling is the one place quoting
+    matters, and not as an exception to this rule: unquoted,
+    `added:3pm previous week` never combines the two at all (`added:` binds
+    `3pm` and stops, leaving "previous week" free text, as released
+    paperless-ngx v2 did), so there is no combination here to reject. See
+    entry 19 for why that binding rule, rather than word-order symmetry, is
+    the one being followed.
 
     Test references: `tests/test_parser_period_keywords.py` (whole file);
     `tests/test_times.py`'s

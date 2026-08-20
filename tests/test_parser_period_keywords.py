@@ -12,6 +12,13 @@ coherently, and must keep doing so in either order. So does a range with a
 bare time-of-day lower bound and a concrete upper bound ("noon to now"),
 which names a perfectly answerable span; whoosh crashes on that one, and this
 fork resolves it instead (DIVERGENCES.md entry 51).
+
+"Both word orders" is about a keyword and a time bound into a single date
+value, which is what quoting does. The unquoted spellings inherit that rule
+only where the words are actually bound together: a trailing time is
+(``added:previous week 3pm``), a leading one is not (``added:3pm previous
+week`` is an instant plus free text, see
+test_unquoted_leading_time_does_not_reach_the_phrase).
 """
 
 from datetime import UTC
@@ -26,6 +33,7 @@ from whoosh_compat import ParseResult
 from whoosh_compat import ast
 from whoosh_compat import parse
 from whoosh_compat.errors import DiagnosticKind
+from whoosh_compat.fields import FieldRef
 
 
 @pytest.fixture
@@ -74,11 +82,13 @@ PREDAWN = datetime(2026, 8, 19, 1, 41, tzinfo=UTC)
         "added:[previous week 3pm TO 2021]",
         # The same values written without quotes, which the date grammar now
         # accepts (see test_parser_date_phrases.py). Quoting is a spelling,
-        # not a semantic: the rejection cannot depend on it, or the unquoted
-        # spelling would silently answer a question the quoted one refuses.
+        # not a semantic: with the phrase and the time bound into one value
+        # either way, the rejection cannot depend on the quotes, or the
+        # unquoted spelling would silently answer a question the quoted one
+        # refuses. The *leading*-time spelling is the exception and has its
+        # own test below: there the two are never bound together at all.
         "added:previous week 3pm",
         "added:previous quarter noon",
-        "added:3pm previous week",
     ],
 )
 def test_period_keyword_with_a_time_is_a_bad_date(registry: FieldRegistry, q: str) -> None:
@@ -89,6 +99,36 @@ def test_period_keyword_with_a_time_is_a_bad_date(registry: FieldRegistry, q: st
     """
     result = _parse(registry, q)
     assert [d.kind for d in result.diagnostics] == [DiagnosticKind.BAD_DATE]
+
+
+def test_unquoted_leading_time_does_not_reach_the_phrase(registry: FieldRegistry) -> None:
+    """``added:3pm previous week`` is NOT a bad date, even though the quoted
+    ``added:"3pm previous week"`` is. The asymmetry is not an oversight.
+
+    A field prefix binds the next date expression. Unquoted, ``added:``
+    finds "3pm" -- a complete date value -- and is satisfied; "previous
+    week" is then ordinary free text that was never combined with the time,
+    so there is no incoherent combination to diagnose. Quoting is what
+    forces the two into a single value, and only then does entry 52's rule
+    (a time of day on a span names nothing) have anything to apply to.
+
+    This is also the released paperless v2 behavior: its auto-quoting shim
+    only ever quoted a phrase directly following a date-field prefix, so it
+    never fired on this spelling and the query parsed as an instant plus two
+    free-text terms. Making it symmetric with the quoted form would be a
+    parity regression, not a consistency fix.
+    """
+    result = _parse(registry, "added:3pm previous week", basedate=AFTERNOON)
+    assert not result.diagnostics
+    assert isinstance(result.ast, ast.And)
+    date_child, *terms = result.ast.children
+    assert isinstance(date_child, ast.DateRange)
+    # The instant "3pm" names on the basedate's day, not a week-wide span.
+    assert date_child.lo == datetime(2026, 8, 19, 15, 0, tzinfo=UTC)
+    assert terms == [
+        ast.Term(field=FieldRef("content"), text="previous"),
+        ast.Term(field=FieldRef("content"), text="week"),
+    ]
 
 
 def test_calendar_unit_keyword_still_takes_a_time(registry: FieldRegistry) -> None:

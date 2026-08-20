@@ -7,10 +7,10 @@ by the host with a regex that could not see quotes; owning the widening here
 removes that class of corruption (DIVERGENCES.md entry 19).
 
 The widening is deliberately limited to the six phrases the date grammar
-already knows as quoted values -- plus, when one of those phrases is present,
-an adjacent time of day, so that an unquoted spelling reaches the grammar as
-the same value the quoted spelling would (see
-``test_parser_period_keywords.py`` for what the grammar then does with it).
+already knows as quoted values -- plus a time of day *trailing* one of those
+phrases, so that an unquoted spelling reaches the grammar as the same value
+the quoted spelling would (see ``test_parser_period_keywords.py`` for what
+the grammar then does with it, and for why a *leading* time is not joined).
 Nothing else about date-field parsing becomes whitespace-greedy.
 """
 
