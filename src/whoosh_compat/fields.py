@@ -772,12 +772,30 @@ class FieldRegistry:
         so the two agree by construction rather than by parallel capability
         checks.
 
+        Validates ``spec`` against this registry by *identity*, not merely
+        by name: keying purely on ``spec.name`` would make a foreign spec
+        (one this registry never registered) return ``None``,
+        indistinguishable from "this registry's own field of that name has
+        no way to answer 'exists'", and would let a spec from a
+        *different* registry that happens to share a name silently borrow
+        this registry's strategy for that name instead of being refused.
+
         Args:
             spec: A ``FieldSpec`` registered in this registry.
 
         Returns:
             The resolved ``ExistsStrategy``, or ``None`` if unsupported.
+
+        Raises:
+            ValueError: ``spec`` is not the exact object this registry
+                registered under ``spec.name`` (an unregistered name, or a
+                different spec object that happens to share one).
         """
+        if self._by_name.get(spec.name) is not spec:
+            raise ValueError(
+                f"exists_strategy() called with a FieldSpec named {spec.name!r} "
+                f"that is not registered in this registry"
+            )
         return self._exists_strategies.get(spec.name)
 
     def __contains__(self, name: str) -> bool:

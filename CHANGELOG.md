@@ -265,6 +265,15 @@ material; they are permanently documented, each with its rationale, in
   does not make one instance safe to call `parse()` on concurrently from
   multiple threads, which the class docstrings now say explicitly.
 
+- `FieldRegistry.exists_strategy(spec)` keyed its answer purely by
+  `spec.name`, so a spec this registry never registered returned `None`
+  -- indistinguishable from "this registry's own field of that name has
+  no way to answer 'exists'" -- and a spec sharing a name with a
+  *different* registry's field silently borrowed that other registry's
+  resolved strategy instead of being refused. It now validates `spec` by
+  identity against what it actually registered under that name and raises
+  `ValueError` for anything else.
+
 ### Internal
 
 - The trailing-star-to-`Prefix` fold, which whoosh performs at two

@@ -669,6 +669,38 @@ def test_registry_exists_strategy_accessor() -> None:
     assert registry.exists_strategy(unsupported_spec) is None
 
 
+def test_registry_exists_strategy_rejects_foreign_spec() -> None:
+    """FieldRegistry.exists_strategy() must not answer for a spec this
+    registry never registered: keying purely by ``spec.name`` makes a
+    foreign spec (never passed to this registry's constructor) return
+    ``None``, indistinguishable from "this registry's own field cannot
+    answer 'exists'".
+    """
+    fast_spec = FieldSpec(name="flag", kind=FieldKind.KEYWORD, fast=True)
+    registry = FieldRegistry([fast_spec])
+
+    foreign_spec = FieldSpec(name="totally_unregistered", kind=FieldKind.KEYWORD, fast=True)
+    with pytest.raises(ValueError, match="totally_unregistered"):
+        registry.exists_strategy(foreign_spec)
+
+
+def test_registry_exists_strategy_rejects_name_collision_with_other_registry() -> None:
+    """A same-named spec from a *different* registry must not silently
+    borrow this registry's strategy for that name: two registries can
+    register a "flag" field with different `fast` settings, and passing
+    one registry's spec object to the other's ``exists_strategy()`` must
+    not answer as though it were this registry's own "flag".
+    """
+    this_registrys_flag = FieldSpec(name="flag", kind=FieldKind.KEYWORD, fast=True)
+    registry = FieldRegistry([this_registrys_flag])
+
+    other_registrys_flag = FieldSpec(name="flag", kind=FieldKind.KEYWORD, fast=False)
+    FieldRegistry([other_registrys_flag])  # constructs fine on its own
+
+    with pytest.raises(ValueError, match="flag"):
+        registry.exists_strategy(other_registrys_flag)
+
+
 def test_every_and_boolean_exists_share_resolved_strategy() -> None:
     """A field's exists strategy, as resolved for a bare ``field:*``
     (``Every``), and as resolved for a BOOLEAN_EXISTS field targeting it,
