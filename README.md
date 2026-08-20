@@ -228,14 +228,17 @@ quoted-phrase term outright, because the text is untokenized.
 **Cap query length at the host boundary.** Parse time is quadratic in the
 length of a long run of word characters containing no `:` (the fieldname
 tagger's regex, `[\w.]+:`, scans toward end-of-input and fails at each
-successive position). Measured: a 40KB pathological query takes ~6
-seconds, 60KB ~14 seconds, ~4x per doubling. This is exact parity with
-real whoosh (byte-identical timings against the pinned oracle), inherited
-deliberately rather than fixed with a rewritten tagger regex whose subtle
-behavior differences would risk parity. The parser's own nesting-depth cap
-bounds recursion, not CPU time, so a host accepting untrusted query
-strings should enforce its own length limit (a few KB comfortably covers
-any human-written query) before calling `parse()`.
+successive position). Measured on one developer machine, so treat these
+as order-of-magnitude and the ~4x-per-doubling growth as the durable
+claim: 10KB ~1 second, 20KB ~4 seconds, 40KB ~15 seconds, 60KB ~34
+seconds. The tagger regex is unchanged from upstream whoosh, so real
+whoosh has the same growth curve on the same input (measured 10KB ~1.1
+seconds, 20KB ~4.0 seconds against the pinned oracle). The cost is
+inherited deliberately rather than fixed with a rewritten tagger regex
+whose subtle behavior differences would risk parity. The parser's own
+nesting-depth cap bounds recursion, not CPU time, so a host accepting
+untrusted query strings should enforce its own length limit (a few KB
+comfortably covers any human-written query) before calling `parse()`.
 
 ## Supported query syntax
 
