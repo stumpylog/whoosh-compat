@@ -8,9 +8,17 @@ Intentional behavioral differences from real Whoosh are not changelog
 material; they are permanently documented, each with its rationale, in
 [DIVERGENCES.md](./DIVERGENCES.md).
 
-## [0.2.0] - 2026-08-20
+## [0.1.0] - 2026-08-20
 
-### Breaking
+First release. whoosh-compat was never published before this, and carries no
+git tag, so there is no earlier version to upgrade from.
+
+The **Breaking** entries below are relative to the pre-release git state
+recorded at the bottom of this file, not to any published version. They
+matter only to someone who installed from a git revision before this release
+-- in practice, paperless-ngx, which consumes this library by path.
+
+### Breaking (relative to the pre-release git state)
 
 - `QueryEmitError` and `UnsupportedQueryError` are replaced by a single
   `QueryError`, which always carries the `Diagnostic` describing why the
@@ -352,12 +360,11 @@ material; they are permanently documented, each with its rationale, in
   that fixes paperless-ngx#13568 (`DIVERGENCES.md` entry 13), and sharing
   one implementation is what keeps that true.
 
-## [0.1.0] - unreleased
+## Pre-release git state (never versioned, never published)
 
-Never published: no PyPI release and no tag. The section below records what
-the 0.1.0 source tree contained, and is what the 0.2.0 "Breaking" entries
-above are written against, for anyone who installed from git at that point.
-0.2.0 is the first published release.
+What the source tree contained before the work in 0.1.0 above. It carried no
+version number and no tag; it is recorded here because it is the baseline the
+"Breaking" entries above are written against.
 
 ### Added
 

@@ -649,7 +649,7 @@ parse-then-emit pipeline).
     `QueryParser.wildcard_query` already uses for the general case here.
 
     A JSON field that *does* declare a default subpath
-    (`SubpathSpec(default=True)`, 0.2.0) is outside this paragraph
+    (`SubpathSpec(default=True)`, 0.1.0) is outside this paragraph
     entirely, in both directions: its bare name resolves like any ordinary
     field, so nothing about it is demoted and the carve-out is never
     consulted for it. `notes:*` is then an ordinary recognized-field
@@ -1240,7 +1240,7 @@ parse-then-emit pipeline).
 
     Both halves of this entry are reachable through a *bare* JSON field
     name when its spec declares a default subpath
-    (`SubpathSpec(default=True)`, 0.2.0), because the bare name then
+    (`SubpathSpec(default=True)`, 0.1.0), because the bare name then
     resolves to a subpath like any dotted one: `notes:fo*` reports
     `PATTERN_ON_SUBPATH` at parse time and `notes:[a TO b]` builds a
     `TermRange` on `FieldRef("notes", "note")` that `visit_termrange`
