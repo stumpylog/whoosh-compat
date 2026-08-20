@@ -393,9 +393,24 @@ class timespan:
         end = ceil(end)
 
         if start.date() == end.date() and start.time() > end.time():
-            # If the start and end are on the same day, but the start time
-            # is after the end time, move the end time to the next day
-            end += timedelta(days=1)
+            if isinstance(self.start, datetime) and isinstance(self.end, datetime):
+                # Both bounds were already fully-resolved, unambiguous
+                # instants (e.g. "now-1h"/"now+1h", or whoosh's own bare
+                # "-1h"/"+1h" offset syntax) rather than a bare/ambiguous
+                # time of day (e.g. "9pm to 5am", meant as an overnight
+                # span -- see the day-bump below). For a concrete instant
+                # pair, out-of-order almost always means the user wrote the
+                # bounds in the wrong order, not "wrap to tomorrow", so
+                # normalize it the same way an out-of-order absolute range
+                # is normalized above: swap instead of pushing the upper
+                # bound into the next day (see DIVERGENCES.md entry 53).
+                start, end = end, start
+                swapped = True
+            else:
+                # If the start and end are on the same day, but the start
+                # time is after the end time, move the end time to the
+                # next day
+                end += timedelta(days=1)
 
         result = timespan(start, end)
         result.bounds_swapped = swapped

@@ -2283,3 +2283,64 @@ parse-then-emit pipeline).
     `tests/test_times.py`'s
     `test_fill_in_rejects_merging_a_timespan_with_other_units` and
     `test_fill_in_timespan_basedate_passthrough`.
+
+53. **A reversed relative date range (`added:[now+1h TO now-1h]`) swaps its
+    bounds instead of pushing the upper bound into the next day.** Checked
+    against real whoosh first, and confirmed the hard way, since whoosh
+    itself has no `now±<n><unit>` grammar (that combined token is a
+    whoosh-compat-only extension, entry 25) for a query string to check
+    directly: whoosh's own bare offset syntax that whoosh-compat inherits
+    "for free" (entry 25's note; e.g. `-1h`/`+1h` without a `now` prefix) is
+    the real thing to check, and real whoosh reproduces the exact same
+    ~22-hour day-bump on `added:[+1h TO -1h]` that whoosh-compat used to
+    produce on the `now±offset` spelling (confirmed directly against a
+    `whoosh.qparser.dateparse.DateParserPlugin` instance: `[-1h TO +1h]`
+    gives a 2-hour span, `[+1h TO -1h]` gives ~22 hours, from the same
+    basedate).
+
+    Despite that parity, this is treated as a defect rather than a
+    convention to match, and diverged from. The day-bump exists for a
+    genuine, different purpose: disambiguating a *bare, ambiguous* time of
+    day with no date attached (`added:[9pm TO 5am]`, an overnight-shift
+    reading that is a real, useful convention — confirmed separately
+    against real whoosh, which resolves it to a sensible ~9-hour span). But
+    `timespan.disambiguated()` (`parser/times.py`) applies the same
+    same-day/time-reversed check uniformly to that case AND to a pair of
+    already-fully-resolved, unambiguous instants (a `now`-relative offset,
+    or any other concrete `datetime` on both sides) that merely happen to
+    land on the same calendar day. For the latter, "the user wrote the
+    bounds backwards" is overwhelmingly the more likely reading than
+    "wrap to tomorrow" — nobody has a working query that depends on a
+    written-backwards 2-hour window silently becoming a 22-hour one, and
+    there is no diagnostic to warn them it happened. That is exactly the
+    "silent wrong answer with no diagnostic" shape the project's own
+    parity rule treats as a defect rather than a convention, so this
+    fork's `timespan.disambiguated()` now checks whether both original
+    bounds were already plain `datetime` instances (as opposed to
+    ambiguous `adatetime`s, i.e. bare times of day) before choosing between
+    the two branches: concrete-on-both-sides swaps (matching the existing,
+    already-whoosh-matching swap used for a same-shape reversed *absolute*
+    range, e.g. `added:[2020-01-01 TO 2019-01-01]`), anything else still
+    day-bumps. Real whoosh's own reversed-instant-range behavior is left
+    unfixed in `../whoosh`; only this fork's copy in `parser/times.py`
+    changes.
+
+    `tests/differential/corpus_paperless.txt`'s `added:[now+1h TO now-1h]`
+    line already exercises this exact query shape, but does not
+    independently discriminate this divergence: whoosh's grammar cannot
+    parse the combined `now±offset` token at all (per above), so
+    `oracle_parse` silently drops the offset on *both* bounds and returns a
+    degenerate zero-width `now`-to-`now` range regardless of which order
+    they're written in or what this fix does; the line already mismatches
+    the oracle for that unrelated reason and is already covered end-to-end
+    by the broad entry-12 allowlist pattern (the tz-reversal wiring defect,
+    which matches every bracketed range on a DATE/DATETIME field). Adding a
+    second, entry-53-citing allowlist pattern for the same line would be
+    unreachable dead code, since entry 12's pattern is checked first and
+    already matches; the direct-instantiation check against
+    `whoosh.qparser.dateparse.DateParserPlugin` above, not this corpus
+    line, is what actually establishes whoosh's own reversed-instant-range
+    behavior.
+
+    Test references: `tests/test_parser_dates.py`'s
+    `test_reversed_relative_range_swaps_like_the_absolute_case`.

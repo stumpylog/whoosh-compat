@@ -1,6 +1,7 @@
 import time
 from datetime import UTC
 from datetime import datetime
+from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -84,6 +85,26 @@ def test_now_compact(reg: FieldRegistry) -> None:
 def test_whoosh_plusminus(reg: FieldRegistry) -> None:
     r = dparse("added:'-1 week'", reg).ast
     assert isinstance(r, ast.DateRange)
+
+
+def test_reversed_relative_range_swaps_like_the_absolute_case(reg: FieldRegistry) -> None:
+    # DIVERGENCES.md entry 53. Both bounds resolve to concrete, unambiguous
+    # instants (basedate +/- an offset), same as an absolute range whose
+    # bounds are typed backwards (see test_backwards_swap_carries_
+    # exactness_with_the_value above): a reversed order here is the user
+    # writing the endpoints in the wrong order, not an "overnight span"
+    # (that reading only applies to a genuinely ambiguous bare time of day,
+    # e.g. "9pm to 5am"). The forward and backward spellings must therefore
+    # produce the identical 2-hour span, not a ~22-hour one.
+    forward = dparse("added:[now-1h TO now+1h]", reg).ast
+    backward = dparse("added:[now+1h TO now-1h]", reg).ast
+    assert isinstance(forward, ast.DateRange)
+    assert isinstance(backward, ast.DateRange)
+    assert forward.lo == backward.lo
+    assert forward.hi == backward.hi
+    assert forward.hi is not None
+    assert forward.lo is not None
+    assert forward.hi - forward.lo == timedelta(hours=2)
 
 
 def test_bad_date_diagnostic(reg: FieldRegistry) -> None:
