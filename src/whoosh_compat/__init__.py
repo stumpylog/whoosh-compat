@@ -124,7 +124,12 @@ def parse(
         means a defect in this library, and hosts route it to a monitorable
         500. Any other exception escaping the pipeline is converted to one,
         chained as ``__cause__``, so this is the only exception type a
-        caller passing ordinary query strings has to be ready for.
+        caller passing ordinary query strings has to be ready for. The
+        conversion covers the parse pipeline itself (tagging, filtering,
+        ``normalize()``); the argument validation and parser/plugin
+        construction above it are deliberately outside it, so a
+        configuration mistake still surfaces as the ``ValueError``
+        documented above rather than being relabelled a library defect.
     """
 
     if not default_fields:

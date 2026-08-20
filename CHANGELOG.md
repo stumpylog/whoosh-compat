@@ -23,6 +23,33 @@ material; they are permanently documented, each with its rationale, in
   `PATTERN_ON_BOOLEAN_EXISTS`, and `PATTERN_ON_SUBPATH`, one per field kind
   a wildcard/prefix pattern cannot be honored against.
 
+### Added
+
+- `parse()` now guarantees the exception type it can raise: the parse
+  pipeline is wrapped in a backstop that converts any unexpected exception
+  into `QueryParserError`, chaining the original as `__cause__`. It never
+  means the query was bad (that is still a `Diagnostic`); it means a defect
+  in this library, so a host routes it to a monitorable 500 rather than
+  seeing a bare `RecursionError` from a pathologically nested query.
+  Configuration mistakes passed to `parse()` still raise `ValueError`
+  eagerly, unchanged.
+
+### Fixed
+
+- A flat, paren-free chain of non-merging operators (`ANDNOT`, `ANDMAYBE`,
+  `REQUIRE`) builds one hierarchy level per operator, which the
+  parenthesization cap could not see, so a long chain raised
+  `RecursionError` out of `parse()`. The depth cap now covers
+  operator-built nesting too, and reports `DiagnosticKind.TOO_DEEP` instead.
+- `added:"previous week 3pm"` raised `AttributeError` out of `parse()`
+  (a period keyword denotes a span, so a time-of-day on it names nothing,
+  and the merging pass got a timespan where it expected a datetime). Both
+  word orders now report `DiagnosticKind.BAD_DATE`; previously the reversed
+  order silently dropped the time and returned the whole week instead.
+- `added:"noon to now"`, a range with a bare time-of-day lower bound and a
+  concrete upper bound, is resolved instead of crashing (whoosh itself
+  crashes on it; `DIVERGENCES.md` entry 51).
+
 ## [0.1.0] - 2026-08-18
 
 Initial release.

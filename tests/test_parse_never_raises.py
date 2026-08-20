@@ -10,11 +10,9 @@ as a 400 would blame the user for a library bug and hide it from monitoring.
 
 from __future__ import annotations
 
-import contextlib
 from datetime import UTC
 
 import pytest
-from hypothesis import HealthCheck
 from hypothesis import given
 from hypothesis import settings
 
@@ -33,32 +31,40 @@ REGISTRY = FieldRegistry(
     ],
 )
 
+# What the widening buys is *breadth*, not depth: ``max_leaves`` bounds how
+# many structural pieces st.recursive draws, so raising the shared strategy's
+# committed default (8, kept modest so the differential/emitter suites that
+# draw from it stay cheap) mostly buys wider composition of the grammar --
+# more feature combinations per query, awkward leaves in more structural
+# positions -- for ~2s. It does *not* approach the depths this backstop
+# exists for: measured over 300 draws, max_leaves=40 tops out around paren
+# depth 7 (vs. 4 at the default), against a cap of 200 and a compounded
+# nesting shape that needs ~1000 levels before it recurses out. Depth is
+# covered by test_compounded_nesting_becomes_query_parser_error below, which
+# constructs that shape directly; raising max_leaves further would only cost
+# runtime without ever reaching it.
+_WIDE_QUERY_TEXT = query_text(max_leaves=40)
 
-@pytest.fixture
-def registry() -> FieldRegistry:
-    return REGISTRY
 
-
-# ``query_text``'s committed default (max_leaves=8, kept modest so the shared
-# strategy stays cheap for the differential/emitter suites that draw from it)
-# generates trees far too shallow to reach the depth-cap and nesting paths
-# this backstop exists for. Widened here only, not in the strategy itself.
-_DEEP_QUERY_TEXT = query_text(max_leaves=40)
-
-
-@given(q=_DEEP_QUERY_TEXT)
-@settings(
-    max_examples=500,
-    deadline=None,
-    # REGISTRY is a read-only, immutable module-level fixture shared across
-    # examples on purpose; nothing here mutates parser-visible state.
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+@given(q=_WIDE_QUERY_TEXT)
+@settings(max_examples=500, deadline=None)
 def test_parse_raises_nothing_but_query_parser_error(q: str) -> None:
-    # QueryParserError is the one documented escape (a library defect, never
-    # bad user input); anything else propagating out of parse() fails the test.
-    with contextlib.suppress(QueryParserError):
+    """No generated query escapes ``parse()`` as an exception.
+
+    ``QueryParserError`` would be the one *permitted* escape (it means a
+    library defect, never bad user input), but the assertion here is the
+    stronger one: over the whole generated grammar the backstop must not fire
+    at all. Merely tolerating it would let this test keep passing while a
+    regression converted every query in the space into a 500, which is
+    exactly the "guard papering over a real bug" mode the backstop is most at
+    risk of enabling.
+    """
+    try:
         parse(q, registry=REGISTRY, default_fields=["content"], tz=UTC)
+    except QueryParserError as exc:
+        raise AssertionError(
+            f"backstop fired for a generated query: {q!r} (cause: {exc.__cause__!r})"
+        ) from exc
 
 
 @pytest.mark.parametrize(
@@ -70,17 +76,17 @@ def test_parse_raises_nothing_but_query_parser_error(q: str) -> None:
         'added:"noon to now"',
     ],
 )
-def test_known_crashers_stay_fixed(q: str, registry: FieldRegistry) -> None:
+def test_known_crashers_stay_fixed(q: str) -> None:
     """Regression anchors for the three escape routes found in review.
 
     Each of these once escaped ``parse()`` as an uncaught exception and is
     now fixed at its source, so they must parse without the backstop being
     involved at all.
     """
-    parse(q, registry=registry, default_fields=["content"], tz=UTC)
+    parse(q, registry=REGISTRY, default_fields=["content"], tz=UTC)
 
 
-def test_compounded_nesting_becomes_query_parser_error(registry: FieldRegistry) -> None:
+def test_compounded_nesting_becomes_query_parser_error() -> None:
     """The shape the depth caps structurally cannot see is the backstop's job.
 
     Both caps count within a single flat group, so groups that each stay
@@ -96,13 +102,10 @@ def test_compounded_nesting_becomes_query_parser_error(registry: FieldRegistry) 
         q = "(" + q + " ANDNOT " + " ANDNOT ".join(["a"] * 50) + ")"
 
     with pytest.raises(QueryParserError):
-        parse(q, registry=registry, default_fields=["content"], tz=UTC)
+        parse(q, registry=REGISTRY, default_fields=["content"], tz=UTC)
 
 
-def test_backstop_wraps_an_unexpected_filter_failure(
-    registry: FieldRegistry,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_backstop_wraps_an_unexpected_filter_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """An arbitrary defect inside the pipeline surfaces as QueryParserError,
     with the original exception preserved as ``__cause__`` so the real bug is
     still diagnosable from the traceback.
@@ -115,6 +118,6 @@ def test_backstop_wraps_an_unexpected_filter_failure(
     monkeypatch.setattr(plugins.GroupPlugin, "do_groups", boom, raising=True)
 
     with pytest.raises(QueryParserError) as excinfo:
-        parse("a OR b", registry=registry, default_fields=["content"], tz=UTC)
+        parse("a OR b", registry=REGISTRY, default_fields=["content"], tz=UTC)
 
     assert isinstance(excinfo.value.__cause__, ZeroDivisionError)
