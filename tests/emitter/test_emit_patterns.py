@@ -633,6 +633,13 @@ _SUBJECTS = ["", "a", "Z", "z", "ab", "a-b", "a]b", "a!b", "a\\b", "[", "-", "ab
 
 # The one shape a fold-created "!" diverges on, excluded from both sweeps
 # below and pinned by its own test at the end of this section.
+#
+# Excluded as a *substring*, which is marginally wider than the divergence
+# itself: prefix this value with another "[" and the leading bracket is an
+# ordinary class member rather than the opener, so that pattern emits
+# "[\[!]" and agrees with the oracle, yet is skipped along with the real
+# family. Harmless for a sweep this dense, but do not read the exclusion as
+# being exactly the divergent set.
 _FOLD_CREATED_EMPTY_NEGATION = f"[{FW_BANG}]"
 
 

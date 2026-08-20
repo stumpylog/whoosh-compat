@@ -54,11 +54,19 @@ parse, emit, search, `tests/emitter/test_acceptance_e2e.py`) test suites.
      class `[！]`, whose body folds to exactly `!`, which is fnmatch's
      negated-empty class and matches any single character; the oracle folds
      first, reads `[!]`, finds no closing `]` at all, and takes the whole
-     thing as the literal text `[!]`. That is the only shape where a
-     fold-created `!` diverges: everywhere else it negates the class in
-     both readings alike, fnmatch's "a `-` directly after the negation
-     marker is a literal member" offset rule included, which
-     `title:[！--a]` (the negated range `-` through `a`) exercises.
+     thing as the literal text `[!]`. It is the only shape *measured* to
+     diverge on a fold-created `!`: exhaustively over every pattern up to
+     length 4 in the glob alphabet plus the fullwidth `！－＼` (111,113
+     patterns) and over 299,761 random patterns of length 5-8, that shape
+     excluded, there were zero disagreements with the oracle. Everywhere
+     those sweeps reach, a fold-created `!` negates the class in both
+     readings alike, fnmatch's "a `-` directly after the negation marker is
+     a literal member" offset rule included, which `title:[！--a]` (the
+     negated range `-` through `a`) exercises. Longer patterns and wider
+     alphabets are unmeasured; the mechanism (a leading `!` shifting where
+     fnmatch's leading-`]` exemption applies) is confined to a class's first
+     two body characters, which is why the short-pattern sweeps are
+     believed to be representative rather than merely lucky.
 
    A normalizer mapping a character onto `-` or `\` (`ascii_fold` maps the
    en/em dashes and the fullwidth `－`/`＼`) is *not* a qualification: it is
