@@ -493,17 +493,17 @@ so a query that nests groups which *each* stay under the cap can still build
 a tree deeper than 200: 20 levels of parens, each holding a 50-operator
 `ANDNOT` chain, is ~1000 levels of `AndNotGroup` from under 10KB of input, and
 `GroupNode.query()`/`BinaryGroup.query()` (`parser/syntax.py`) still recurse
-once per level, so that input does `RecursionError` out of `parse()`. This is
+once per level, so that input `RecursionError`s internally. This is
 long-standing behaviour, not something the operator cap introduced or
 regressed, and the paren cap has the same shape of hole. Closing it is not a
-matter of a third cap: the intended backstop, added in a later task, is an
-exception boundary around the parse pipeline that turns any unexpected
-exception into a `QueryParserError` instead of letting a bare
-`RecursionError` reach the caller. That boundary does not exist yet, so as
-of this writing the compounding shape above really does escape `parse()` as
-a `RecursionError`. What the caps buy is that the *ordinary* pathological
-shapes (a long chain, a deep pile of parens) never reach that backstop at
-all: they get a real `TOO_DEEP` diagnostic instead.
+matter of a third cap: the backstop for it is the exception boundary in
+`parse()` (`__init__.py`), which turns any unexpected exception out of the
+parse pipeline into a `QueryParserError` (chaining the original as
+`__cause__`) instead of letting a bare `RecursionError` reach the caller, so
+the compounding shape above surfaces as a `QueryParserError`, pinned by
+`tests/test_parse_never_raises.py`. What the caps buy is that the *ordinary*
+pathological shapes (a long chain, a deep pile of parens) never reach that
+backstop at all: they get a real `TOO_DEEP` diagnostic instead.
 
 200 was chosen with a wide safety
 margin: confirmed directly against both the pinned real-whoosh oracle and

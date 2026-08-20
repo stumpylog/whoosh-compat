@@ -118,6 +118,13 @@ def parse(
         normally in both ``default_fields`` and ``field_boosts`` (a
         ``field_boosts`` key is canonicalized to its field's own name
         before use); it is not one of the rejected cases.
+
+    :raises QueryParserError: if the parse pipeline fails unexpectedly.
+        Never raised for bad query *input* (that becomes diagnostics); it
+        means a defect in this library, and hosts route it to a monitorable
+        500. Any other exception escaping the pipeline is converted to one,
+        chained as ``__cause__``, so this is the only exception type a
+        caller passing ordinary query strings has to be ready for.
     """
 
     if not default_fields:
@@ -156,6 +163,34 @@ def parse(
         resolved_tz = tz or UTC
         parser.add_plugin(DateParserPlugin(basedate or datetime.now(resolved_tz), resolved_tz))
 
-    node = parser.parse(query)
-    node = ast.normalize(node)
+    try:
+        node = parser.parse(query)
+        node = ast.normalize(node)
+    except QueryParserError:
+        raise
+    except Exception as exc:
+        # The never-raises invariant is a contract hosts build on, so it
+        # needs an enforcement mechanism, not just discipline at every site
+        # that can fail. Anything escaping the tag/filter/query pipeline
+        # that isn't already a QueryParserError is by definition
+        # unanticipated, and the shape review keeps finding is an
+        # interpreter-level error (RecursionError, from hierarchy the depth
+        # caps structurally cannot see; see ARCHITECTURE.md's "what the caps
+        # do not cover") reaching a caller that was told to expect only
+        # diagnostics.
+        #
+        # Deliberately QueryParserError and *not* a Diagnostic: a diagnostic
+        # means "your query is bad", which hosts route to a 400, and
+        # reporting an unknown internal failure that way would blame the
+        # user for a library bug and hide it from monitoring.
+        # QueryParserError already means "a defect in this library" and is
+        # routed to a monitorable 500. The original is chained so the real
+        # defect stays diagnosable from the traceback.
+        #
+        # KeyboardInterrupt/SystemExit are BaseExceptions and so are not
+        # caught here: neither one is a parse failure.
+        raise QueryParserError(
+            f"parsing failed with an unexpected {type(exc).__name__}; "
+            "this is a defect in whoosh-compat, not a bad query"
+        ) from exc
     return ParseResult(ast=node, diagnostics=tuple(parser.diagnostics))

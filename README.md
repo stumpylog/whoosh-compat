@@ -117,6 +117,17 @@ example) needs to check for **two** independent failure modes, not one:
 Both checks matter; a host that only looks at `diagnostics` will still see
 an uncaught `QueryError` bubble up for shapes like the one above.
 
+**The one exception `parse()` itself can raise is `QueryParserError`, and it
+never means the query was bad.** It means a defect in this library: the parse
+pipeline is wrapped in a backstop that converts any unexpected exception into
+that type, chaining the original as `__cause__`, so a host routes it to a
+monitorable 500 instead of seeing (for example) a bare `RecursionError` from a
+pathologically nested query. It is deliberately not a `Diagnostic`: reporting
+an unknown internal failure as a 400 would blame the user for a bug on this
+side and hide it from monitoring. (Misconfiguration passed to `parse()` --
+an empty or unknown `default_fields`, a naive `basedate` -- still raises
+`ValueError` eagerly, as documented on the function.)
+
 **Branch on `Diagnostic.kind` and `Diagnostic.cause`; treat `message` as
 log output, never parse it.** Both `ParseResult.diagnostics` entries and a
 caught `QueryError`'s `.diagnostic` are structured records: `kind` is a
@@ -342,6 +353,11 @@ It drives four properties:
 - `tests/differential/test_hypothesis.py::test_normalize_is_total_and_idempotent`:
   `normalize(normalize(x)) == normalize(x)` for every freshly parsed AST,
   and `normalize()` never raises.
+- `tests/test_parse_never_raises.py::test_parse_raises_nothing_but_query_parser_error`:
+  over the same generated grammar (drawn deeper than the shared strategy's
+  committed default), `parse()` raises nothing but `QueryParserError`, the
+  documented "library defect" type. Sits alongside regression anchors for
+  every escape route found so far.
 - `tests/emitter/test_hypothesis_e2e.py::test_emit_never_raises_except_unsupported`:
   parsing a query that produced no diagnostics, then emitting it against a
   real in-memory tantivy index, never raises a `QueryError` whose

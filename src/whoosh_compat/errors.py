@@ -172,11 +172,14 @@ class QueryParserError(WhooshCompatError):
 
     Not raised for bad *user* query input (see the module-level invariant:
     ``parse()`` never raises for that, it accumulates ``Diagnostic``s
-    instead). The only raise sites are internal self-checks in
+    instead). Two kinds of raise site: internal self-checks in
     ``parser/default.py`` (a tagger failed to advance the cursor, a filter
-    returned ``None`` where a node was required), both of which indicate a
-    bug in a tagger/filter plugin, not something a caller passing ordinary
-    query strings should ever expect to catch.
+    returned ``None`` where a node was required), and the backstop in
+    ``parse()`` that converts *any* other exception escaping the parse
+    pipeline into this type, chaining the original as ``__cause__`` (most
+    plausibly a ``RecursionError`` from compounded nesting the depth caps
+    cannot see). Either way it means a bug in this library, not something a
+    caller passing ordinary query strings should expect to catch.
 
     Distinct from ``Cause.INTERNAL``, which describes a ``Diagnostic``
     about an AST that already exists. This fires during the tagger/filter

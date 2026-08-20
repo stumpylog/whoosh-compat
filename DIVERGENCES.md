@@ -1115,12 +1115,13 @@ parse-then-emit pipeline).
     contributes, so a query that nests groups which each stay under the cap
     still compounds them (20 paren levels around a 50-operator `ANDNOT`
     chain apiece builds ~1000 group levels), and `GroupNode.query()` still
-    recurses once per level, so that shape does `RecursionError` past the
-    interpreter's limit exactly as real whoosh does. That residue is
+    recurses once per level, so that shape still exhausts the interpreter's
+    limit internally exactly as real whoosh does. That residue is
     long-standing, is not what this entry claims to diverge on, and is not
-    something a cap can close; the planned backstop for it (a later task) is
-    an exception boundary around the parse pipeline, which does not exist
-    yet -- see ARCHITECTURE.md's "what the caps do not cover".
+    something a cap can close; the backstop for it is the exception boundary
+    in `parse()`, so the caller sees a `QueryParserError` (a library defect,
+    routed to a 500) rather than whoosh's bare `RecursionError` -- see
+    ARCHITECTURE.md's "what the caps do not cover".
 
     Parentheses are not the only source of depth, so the cap is not enforced
     only on them. `InfixOperator.replace_self()` builds one new group per
