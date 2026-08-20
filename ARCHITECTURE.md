@@ -606,9 +606,11 @@ this parser's own tag/filter pipeline with the cap removed, both start
 `RecursionError`-ing on bare `(`-nesting somewhere between depth 950 and
 1000 (Python's default recursion limit), so 200 leaves roughly 5x headroom
 for the several other recursive filters (`do_wildcards`, `do_boost`,
-`do_fieldnames`, `do_operators`, `do_multifield`, `do_aliases`,
-`do_comma_values`) a still-legal, still-under-the-cap tree passes through
-afterward, while comfortably exceeding any nesting a real query would use.
+`do_fieldnames`, `do_multifield`, `do_aliases`, `do_comma_values`) a
+still-legal, still-under-the-cap tree passes through afterward, while
+comfortably exceeding any nesting a real query would use. `do_operators`
+is no longer one of them - its descent is the explicit work stack
+described above - which only widens the margin.
 `ast.normalize()`'s traversal was also converted from recursive to
 iterative (an explicit work stack) independently of the cap, since a
 hand-built AST that bypasses the parser entirely (constructed directly

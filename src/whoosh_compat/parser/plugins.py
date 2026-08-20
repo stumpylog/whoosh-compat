@@ -88,8 +88,9 @@ FilterEntry = tuple[FilterFn, int]
 # and 1000 at the default recursion limit of 1000). 200 leaves close to a
 # 5x margin under that floor for every other recursive filter this nested
 # structure still passes through (do_wildcards, do_boost, do_fieldnames,
-# do_operators, do_multifield, do_aliases, do_comma_values, and finally
-# GroupNode.query()), while comfortably exceeding any nesting a real query
+# do_multifield, do_aliases, do_comma_values, and finally GroupNode.query();
+# do_operators descends on an explicit stack and costs no frames, which only
+# widens the margin), while comfortably exceeding any nesting a real query
 # would ever use. See DIVERGENCES.md entry 31 and ARCHITECTURE.md's
 # "parsing never raises" invariant.
 _MAX_GROUP_NESTING_DEPTH = 200
