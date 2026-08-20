@@ -193,6 +193,24 @@ material; they are permanently documented, each with its rationale, in
   one inside a class, above all as a range endpoint (`[ss-z]`), would build
   a different query rather than a folded one. Entry 2 records that
   qualification.
+- Two denial-of-service surfaces, both reachable from ordinary query text
+  by any authenticated user, are now linear in the input length instead of
+  quadratic. A wildcard's glob-to-regex translation rescanned to the end of
+  the pattern for every `[` that never closes (`title:` + 16 K of `[` cost
+  12.2 s, growing 4x per doubling); the pattern's last `]` is now located
+  once, so "no closing bracket from here" is an index comparison. And the
+  RFC3339 trailing-`Z` gate's regex (`.*T.*Z`) backtracked over every pair
+  of `T`s in a date bound (231 s for 200 K of them); its leading run now
+  excludes `T`, leaving one candidate split point rather than one per `T`.
+  Neither accepts or rejects anything it did not before: the glob
+  translation was re-verified byte-identical to its previous output over
+  412,683 exhaustive and 600,000 random pattern/normalizer pairs (including
+  the multi-character-fold and fullwidth-bracket cases entry 2 qualifies)
+  as well as against the `fnmatch.translate` oracle, and the date regex
+  against its previous form over every string up to length 5 in
+  `TtZz a\n\r`. Query *parsing* remains quadratic in a long unmatched
+  word-character run (see `ARCHITECTURE.md`); hosts should still cap query
+  length at their own boundary.
 
 ### Internal
 

@@ -143,13 +143,23 @@ def _normalize_class_body(body: str, normalize: Callable[[str], str]) -> str:
 
 
 def _translate_class(
-    pattern: str, i: int, n: int, normalize: Callable[[str], str]
+    pattern: str, i: int, n: int, normalize: Callable[[str], str], last_close: int
 ) -> tuple[str | None, int]:
     """Translate the bracket expression starting just after a ``[`` at ``i-1``.
 
     Returns ``(regex_fragment, next_index)``. ``regex_fragment`` is ``None``
     when the ``[`` has no matching ``]``: in that case the caller must treat
     the ``[`` as an ordinary literal character and resume at ``i``.
+
+    ``last_close`` is the index of the pattern's final ``]`` (``-1`` if it has
+    none), computed once by the caller: it is what keeps the whole translation
+    linear. An unmatched ``[`` used to be answered by scanning forward to the
+    end of the pattern, and since the caller then resumes one character later,
+    a run of ``[`` cost a full rescan each (12.2 s for 16 K of them, growing
+    4x per doubling: a denial of service on a user-supplied wildcard). With
+    the pattern's last ``]`` known, "no close exists from here" is an index
+    comparison, and the only forward search left is the one that succeeds and
+    is paid for once, because the caller resumes past the class it consumed.
 
     This is a direct port of CPython's ``fnmatch.translate`` bracket handling
     (the ``elif c == '['`` branch), which is the semantics whoosh's
@@ -171,10 +181,14 @@ def _translate_class(
         j += 1
     if j < n and pattern[j] == "]":
         j += 1
-    while j < n and pattern[j] != "]":
-        j += 1
-    if j >= n:
+    # fnmatch's "scan for the closing ]", with its two leading exemptions (a
+    # "!" is negation, and a "]" in first position is a member) intact. The
+    # search itself only runs when last_close promises it will find one, so
+    # it never walks the tail of a pattern that has no "]" left in it.
+    close = pattern.find("]", j) if j <= last_close else -1
+    if close < 0:
         return None, i
+    j = close
 
     # Fold the body in place. Length-preserving by construction, so i/j/n stay
     # valid and the rest of this function is fnmatch's algorithm verbatim. A
@@ -285,6 +299,14 @@ def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str 
             literal.clear()
 
     i, n = 0, len(pattern)
+    # Where the last bracket class could possibly end, computed once here and
+    # handed to every _translate_class call (see there for why: it is what
+    # makes this a single left-to-right pass instead of a rescan per "["). It
+    # is read off the pattern as typed, like the class extents themselves,
+    # which is the same deliberate choice documented in _translate_class: a
+    # character the normalizer maps onto "]" is a class member, not a close.
+    last_close = pattern.rfind("]")
+
     while i < n:
         c = pattern[i]
         i += 1
@@ -298,7 +320,7 @@ def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str 
             flush()
             out.append(".")
         elif c == "[":
-            fragment, i = _translate_class(pattern, i, n, normalize)
+            fragment, i = _translate_class(pattern, i, n, normalize, last_close)
             if fragment is None:
                 # No closing "]": the "[" is an ordinary character.
                 literal.append(c)

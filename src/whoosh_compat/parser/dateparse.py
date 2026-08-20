@@ -963,8 +963,18 @@ class DateParserPlugin(Plugin):
     # earlier in the string so an unrelated trailing "z"/"Z" doesn't get
     # misread as this designator (mirrors paperless's own
     # ``_translate.py::_bound_datetimes``'s ``if "T" in token:`` gate).
+    #
+    # The leading run excludes "T" (and, being IGNORECASE, "t") so the "T"
+    # can only be placed at the first one: the same language as the obvious
+    # ``.*T.*``, but with one candidate split point instead of one per "T".
+    # The obvious spelling backtracked over every pair, costing 231 s for a
+    # 200 K-"T" bound with no trailing "Z" -- a denial of service, since the
+    # text here is a user-supplied date bound. Both runs still exclude
+    # newlines, as "." did, so the accepted language is unchanged (verified
+    # against the old pattern, group included, over every string up to
+    # length 5 in "TtZz a\n\r").
     _RFC3339_UTC_RE: ClassVar[re.Pattern[str]] = re.compile(
-        r"^(?P<body>.*T.*)Z$", re.IGNORECASE
+        r"^(?P<body>[^\nT]*T[^\n]*)Z$", re.IGNORECASE
     )
 
     def _split_rfc3339_utc(self, text: str) -> tuple[str, bool]:

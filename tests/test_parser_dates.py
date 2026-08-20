@@ -1,3 +1,4 @@
+import time
 from datetime import UTC
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -1265,3 +1266,43 @@ def test_range_exclusive_bounds_ignored_for_ambiguous_bounds(reg: FieldRegistry)
     assert isinstance(r, ast.DateRange)
     assert r.incl_lo is True
     assert r.incl_hi is False
+
+
+# --- RFC3339 "Z" recognition is linear in the value length ----------------
+
+
+def test_rfc3339_z_check_is_linear_in_value_length() -> None:
+    """The "Z" gate looks for a "T" somewhere before a trailing "Z"; the
+    regex spelling of that used to backtrack quadratically over a run of
+    "T"s (50 K "T"s cost 15.6 s), which any authenticated user can send as
+    a date bound.
+
+    Sized so the guard cannot be flaky rather than so it is quick: the
+    pre-fix cost at this length is minutes, the post-fix cost is well under
+    a millisecond, so the budget sits orders of magnitude away from both and
+    no scheduling noise can move a run across it. (A ratio between two input
+    sizes was rejected: once the check is linear, both timings are
+    sub-millisecond, where noise dominates and the ratio means nothing.)
+    """
+    plugin = DateParserPlugin(BASE, BERLIN)
+    text = "T" * 200_000
+    start = time.perf_counter()
+    body, is_utc = plugin._split_rfc3339_utc(text)
+    elapsed = time.perf_counter() - start
+    # No trailing "Z", so this is not the designator and the text is
+    # returned untouched: checked, not just timed, so a "fast" version that
+    # stopped recognizing anything would fail here.
+    assert (body, is_utc) == (text, False)
+    assert elapsed < 2.0
+
+
+def test_rfc3339_z_designator_still_recognized_on_a_long_value() -> None:
+    # The accepting half of the same shape: a real (if absurdly long) "T"-run
+    # ending in the designator is still split, and still cheaply.
+    plugin = DateParserPlugin(BASE, BERLIN)
+    body = "T" * 200_000
+    start = time.perf_counter()
+    got, is_utc = plugin._split_rfc3339_utc(body + "Z")
+    elapsed = time.perf_counter() - start
+    assert (got, is_utc) == (body, True)
+    assert elapsed < 2.0

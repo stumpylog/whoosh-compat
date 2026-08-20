@@ -8,6 +8,7 @@ not by eyeballing the raw document text. See the module-level token map.
 
 import fnmatch
 import re
+import time
 from collections.abc import Callable
 
 import pytest
@@ -602,3 +603,50 @@ def test_glob_to_regex_agrees_with_fnmatch(
         assert _accepts(got, subject) == (oracle.match(subject) is not None), (
             f"{pattern!r} -> {got!r} disagrees with fnmatch on {subject!r}"
         )
+
+
+# -- linear-time translation -------------------------------------------------
+
+# Sized so the guard cannot be flaky rather than so it is quick: an unmatched
+# "[" used to make the translator rescan to end-of-string, which cost 12.2 s
+# at 16 K brackets and grew 4x per doubling, i.e. roughly 30 minutes at the
+# size below, against ~0.01 s once the scan is single-pass. Any wall-clock
+# assertion is in principle schedulable-away on shared hardware, so the
+# budget is four orders of magnitude above the passing cost and four orders
+# below the failing one: no plausible load can move a run across it. A
+# ratio-of-two-sizes shape was rejected for the opposite reason: once the
+# function is linear both timings are sub-millisecond, where scheduler noise
+# is the dominant term and the ratio is meaningless.
+_DOS_PATTERN_LEN = 200_000
+_DOS_BUDGET_SECONDS = 2.0
+
+
+@pytest.mark.parametrize("normalizer", [None, str.lower], ids=["identity", "lowercase"])
+def test_unmatched_bracket_pattern_translates_in_linear_time(
+    normalizer: Callable[[str], str] | None,
+) -> None:
+    """A wildcard is reachable by any authenticated user, so the translation
+    has to stay linear in the pattern length: quadratic here is a denial of
+    service costing one worker CPU for minutes per request."""
+    pattern = "[" * _DOS_PATTERN_LEN + "a*"
+    start = time.perf_counter()
+    got = glob_to_regex(pattern, normalizer)
+    elapsed = time.perf_counter() - start
+    # Every "[" is an ordinary literal (no "]" anywhere closes one), so the
+    # result is the escaped run followed by ".*". Checked, not just timed, so
+    # a "fast" implementation that stopped translating would fail here.
+    assert got == re.escape("[" * _DOS_PATTERN_LEN + "a") + ".*"
+    assert elapsed < _DOS_BUDGET_SECONDS
+
+
+def test_late_closing_bracket_translates_in_linear_time() -> None:
+    """The companion shape: every "[" is followed by a "]", but only at the
+    very end of the pattern, so the forward scan for a close is long and
+    *succeeds*. It must still be paid for once in total, not once per "[".
+    """
+    pattern = "[" * _DOS_PATTERN_LEN + "a]" + "[" * _DOS_PATTERN_LEN
+    start = time.perf_counter()
+    got = glob_to_regex(pattern, None)
+    elapsed = time.perf_counter() - start
+    assert got is not None
+    assert elapsed < _DOS_BUDGET_SECONDS
