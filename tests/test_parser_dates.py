@@ -476,9 +476,16 @@ def test_month_alone(reg: FieldRegistry) -> None:
 
 
 def test_compact_numeric_datetime(reg: FieldRegistry) -> None:
+    # 8 digits is the whole calendar day, not the instant at its start: both
+    # bounds are pinned so a narrowing of this form to a single instant fails
+    # here rather than only shortening the upper bound silently. Contrast the
+    # 14-digit spelling below, which really is one instant.
     r = dparse("added:'20200304'", reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2020, 3, 4, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == datetime(2020, 3, 5, tzinfo=BERLIN).astimezone(UTC)
+    assert r.incl_lo
+    assert not r.incl_hi
 
 
 def test_compact_numeric_datetime_progressive_partial(reg: FieldRegistry) -> None:
