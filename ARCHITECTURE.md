@@ -377,8 +377,16 @@ later, once a host presents a real query that under-matches because of the
 first consequence, is a deliberate product decision and deferred until then.
 
 `FieldSpec.pattern_normalizer` is a second, narrower callable used only for
-the literal segments of `Wildcard`/`Prefix` patterns: character-level only
-(lowercase, ASCII-fold), **never stemming or tokenization**. The two
+the *term* characters of `Wildcard`/`Prefix` patterns: character-level only
+(lowercase, ASCII-fold), **never stemming or tokenization**. Term characters
+means whole literal runs and, one character at a time, the body of a bracket
+character class (`BILL[I]NG*` folds to `bill[i]ng.*`: a class member is an
+index character exactly as a literal run's characters are). The per-character
+application inside a class is deliberate: a normalizer may expand one
+character into several (`ascii_fold` maps `ß` -> `ss`), which a range endpoint
+cannot survive and a class cannot express, so such characters are left exactly
+as typed rather than corrupting the class. See `_normalize_class_body` in the
+tantivy emitter. The two
 callables can't be unified: index terms on a stemmed field are themselves
 stems, but a wildcard's literal prefix has to stay literal for the
 glob-to-regex translation to mean what the user typed. Running a stemmer

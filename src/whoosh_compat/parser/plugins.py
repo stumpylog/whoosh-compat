@@ -108,6 +108,37 @@ def _too_deep_node(node: syntax.SyntaxNode | None) -> syntax.ErrorNode:
     return syntax.ErrorNode(message, kind=DiagnosticKind.TOO_DEEP, node=node)
 
 
+def folds_to_prefix(text: str, qmarks: str = "?") -> bool:
+    """Whether wildcard ``text`` folds down to a prefix query: plain literal
+    text followed by exactly one trailing ``*``.
+
+    The single implementation behind whoosh's two independent copies of this
+    fold: ``WildcardPlugin.do_wildcards`` below (parse time, testing the whole
+    Unicode ``qmarks`` set that plugin lexes as wildcards) and
+    ``QueryParser.wildcard_query`` (``parser/default.py``, whoosh-compat's port
+    of ``query.Wildcard.normalize()``, which upstream only knows the ASCII
+    ``?``). That qmark difference is genuinely upstream's, so it stays a
+    parameter; nothing else about the fold may differ between the two again.
+
+    ``[`` blocks the fold alongside the question marks, and that part is *not*
+    upstream's: a ``Prefix``'s text is a literal (the tantivy emitter
+    regex-escapes it), so folding ``202[0-3]*`` into ``Prefix('202[0-3]')``
+    would silently reinterpret the bracket character class as ordinary
+    characters and match essentially nothing. Real whoosh does exactly that,
+    even though the very same class sets ``SPECIAL_CHARS = frozenset("*?[")``
+    for prefix-seeking. whoosh-compat keeps such patterns tagged as a
+    ``Wildcard``, where the emitter's fnmatch-faithful glob translation handles
+    the class properly. See paperless-ngx#13568 and DIVERGENCES.md entry 13.
+    """
+
+    return (
+        len(text) > 1
+        and "[" not in text
+        and not any(qm in text for qm in qmarks)
+        and text.find("*") == len(text) - 1
+    )
+
+
 class Plugin:
     """Base class for parser plugins."""
 
@@ -268,24 +299,15 @@ class WildcardPlugin(TaggingPlugin):
             node = group[i]
             if isinstance(node, self.WildcardNode):
                 text = node.text
-                # "[" blocks the fold alongside the question marks: a
-                # PrefixNode's text is a *literal*, so folding "202[0-3]*"
-                # into Prefix("202[0-3]") would silently reinterpret the
-                # bracket character class as ordinary characters (real
-                # whoosh does exactly that: see paperless-ngx#13568 and
-                # ``QueryParser.wildcard_query``'s _TRAILING_STAR_RE).
-                # Nested rather than combined with `and`: mirrors whoosh's
-                # original two-step condition/action shape for this fold.
-                if (  # noqa: SIM102 (preserves whoosh control-flow fidelity)
-                    len(text) > 1
-                    and "[" not in text
-                    and not any(qm in text for qm in self.qmarks)
-                ):
-                    if text.find("*") == len(text) - 1:
-                        newnode = self.PrefixNode(text[:-1])
-                        newnode.startchar = node.startchar
-                        newnode.endchar = node.endchar
-                        group[i] = newnode
+                # whoosh's two-step condition/action shape for this fold is
+                # collapsed into ``folds_to_prefix``, which
+                # ``QueryParser.wildcard_query`` shares: see its docstring for
+                # why "[" is tested here and not upstream.
+                if folds_to_prefix(text, self.qmarks):
+                    newnode = self.PrefixNode(text[:-1])
+                    newnode.startchar = node.startchar
+                    newnode.endchar = node.endchar
+                    group[i] = newnode
         return group
 
 

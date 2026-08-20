@@ -85,6 +85,24 @@ material; they are permanently documented, each with its rationale, in
 - `added:"noon to now"`, a range with a bare time-of-day lower bound and a
   concrete upper bound, is resolved instead of crashing (whoosh itself
   crashes on it; `DIVERGENCES.md` entry 51).
+- A wildcard's bracket character class is now case-folded by the field's
+  `pattern_normalizer` like the rest of the pattern. `title:BILL[I]NG*`
+  compiled to the regex `bill[I]ng.*` and so silently matched nothing while
+  `title:BILLING*` matched, breaking the promise in `DIVERGENCES.md` entry
+  2. The fold is applied one character at a time, and a character whose
+  normalized form is longer than one character (`ascii_fold` maps `ß` ->
+  `ss`) is left as typed: a class matches a single character, so expanding
+  one inside a class, above all as a range endpoint (`[ss-z]`), would build
+  a different query rather than a folded one. Entry 2 records that
+  qualification.
+
+### Internal
+
+- The trailing-star-to-`Prefix` fold, which whoosh performs at two
+  independent sites, is implemented once as
+  `parser.plugins.folds_to_prefix`. Both copies carried the `"["` exclusion
+  that fixes paperless-ngx#13568 (`DIVERGENCES.md` entry 13), and sharing
+  one implementation is what keeps that true.
 
 ## [0.1.0] - 2026-08-18
 

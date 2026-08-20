@@ -672,9 +672,9 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # despite SPECIAL_CHARS = "*?[" including "[": so a pattern like
     # "202[0-3]*" folds to Prefix('title', '202[0-3]') and silently loses the
     # character class instead of staying a Wildcard. whoosh-compat fixed the
-    # fold check in both sites that perform it (parser/default.py's
-    # _TRAILING_STAR_RE and parser/plugins.py's do_wildcards) to also check
-    # for "[", so it keeps the full Wildcard pattern. Not reproduced:
+    # fold check (parser/plugins.py's folds_to_prefix, shared by both sites
+    # that perform this fold: do_wildcards and QueryParser.wildcard_query) to
+    # also test for "[", so it keeps the full Wildcard pattern. Not reproduced:
     # whoosh-compat's own trailing-star-with-bracket corpus line
     # (title:202[0-3]*) is intentionally allowlisted here rather than
     # matched against the (buggy) oracle tree. Broadened from the single

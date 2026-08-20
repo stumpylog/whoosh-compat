@@ -18,7 +18,20 @@ parse, emit, search, `tests/emitter/test_acceptance_e2e.py`) test suites.
    400 response (real whoosh: silent empty results).
 2. Wildcard/prefix patterns are case-folded via `pattern_normalizer` (real
    whoosh matched raw index terms, so `Entwä*` with a capital E failed
-   there too, this is a fix, not a regression).
+   there too, this is a fix, not a regression). The fold covers every *term*
+   character of the pattern, literal runs and bracket-class bodies alike
+   (`title:BILL[I]NG*` matches whatever `title:BILLING*` matches), matching
+   real whoosh's model of folding the whole pattern text before handing it
+   to fnmatch. One qualification, and it is the only one: a
+   `pattern_normalizer` that expands a single character into several
+   (paperless-ngx supplies `ascii_fold(text.lower())`, which maps `ß` ->
+   `ss` and `æ` -> `ae`) cannot be applied inside a bracket class, because a
+   class matches exactly one character and a range endpoint of `[ss-z]` is
+   not a range at all. Those characters are left as typed, so `[aß]` keeps
+   looking for a literal `ß` that a folded index will not contain; the
+   pattern under-matches rather than silently meaning something else.
+   Outside a class the same character folds normally, since a literal run
+   has room for the expansion.
 3. Date-node boosts are preserved (whoosh silently dropped them).
 4. Stopwords are not removed (a policy choice: whoosh-compat takes no
    position on stopwords, it uses whatever tokens the host's `analyzer`
@@ -127,10 +140,13 @@ parse-then-emit pipeline).
     saved views built around bracket-class year ranges) therefore folds to
     `Prefix('title', '202[0-3]')`, silently destroying the character class
     instead of keeping the full wildcard pattern. whoosh-compat fixed the
-    fold check in both sites that perform this optimization,
-    `parser/default.py`'s `_TRAILING_STAR_RE` and `parser/plugins.py`'s
-    `do_wildcards`, to also check for `"["`, so a trailing-star-with-bracket
-    pattern stays a `Wildcard` instead of losing its class body.
+    fold check to also test for `"["`, so a trailing-star-with-bracket
+    pattern stays a `Wildcard` instead of losing its class body. Whoosh
+    performs this fold at two independent sites
+    (`WildcardPlugin.do_wildcards` and `Wildcard.normalize()`, ported as
+    `QueryParser.wildcard_query`); here both call one
+    `parser/plugins.py:folds_to_prefix`, so the `"["` test cannot come back
+    at one site and not the other.
 
     Test references: `tests/differential/corpus_docs.txt`'s
     `title:202[0-3]*` line plus its matching `tests/differential/allowlist.py`

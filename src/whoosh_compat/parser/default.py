@@ -46,7 +46,6 @@ methods called by the ``syntax`` nodes: :meth:`QueryParser.term_query`,
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from collections.abc import Sequence
 
@@ -62,22 +61,7 @@ from whoosh_compat.parser import syntax
 from whoosh_compat.parser.common import print_debug
 from whoosh_compat.parser.plugins import MultifieldPlugin
 from whoosh_compat.parser.plugins import Plugin
-
-# Matches wildcard text that is plain *literal* text followed by exactly one
-# trailing "*": rewritten to a Prefix query.
-#
-# "[" is excluded alongside "*"/"?" because a bracket character class is glob
-# syntax too, and a Prefix node's text is a literal (the tantivy emitter
-# regex-escapes it). Real whoosh's ``Wildcard.normalize()`` only checks for
-# "*"/"?" here and so folds ``202[0-3]*`` down to ``Prefix('202[0-3]')``,
-# silently reinterpreting the class as literal characters: a query that then
-# matches (essentially) nothing. That is a whoosh bug, not an intended
-# semantic: the very same class sets ``SPECIAL_CHARS = frozenset("*?[")``
-# for prefix-seeking, so "[" is known to be special everywhere *except* this
-# fold. whoosh-compat keeps such patterns tagged as Wildcard, where the
-# emitter's fnmatch-faithful glob translation handles the class properly.
-# See paperless-ngx#13568.
-_TRAILING_STAR_RE = re.compile(r"^[^*?\[]+\*$")
+from whoosh_compat.parser.plugins import folds_to_prefix
 
 _U64_MAX = 2**64 - 1
 
@@ -603,8 +587,10 @@ class QueryParser:
         Note that this is only ever reached for text ``WildcardPlugin``
         actually tagged as a wildcard, i.e. text containing ``*`` or a
         question mark: a bracket-only ``202[0-3]`` lexes as an ordinary
-        term on both sides, matching whoosh. See ``_TRAILING_STAR_RE`` for
-        why ``[`` blocks the Prefix fold.
+        term on both sides, matching whoosh. See
+        :func:`~whoosh_compat.parser.plugins.folds_to_prefix` (the single
+        implementation of this fold, shared with ``WildcardPlugin``) for why
+        ``[`` blocks it.
         """
 
         if not any(ch in text for ch in "*?"):
@@ -623,7 +609,7 @@ class QueryParser:
             )
             if err is not None:
                 return err
-            if _TRAILING_STAR_RE.match(text):
+            if folds_to_prefix(text):
                 node = ast.Prefix(field=ref, text=text[:-1])
             else:
                 node = ast.Wildcard(field=ref, pattern=text)

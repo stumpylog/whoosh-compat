@@ -7,10 +7,14 @@ not by eyeballing the raw document text. See the module-level token map.
 """
 
 import fnmatch
+import re
 from collections.abc import Callable
 
 import pytest
 import tantivy
+from hypothesis import given
+from hypothesis import settings
+from hypothesis import strategies as st
 
 from whoosh_compat import ast
 from whoosh_compat.emitters.tantivy_ import glob_to_regex
@@ -68,11 +72,11 @@ def fnmatch_ids(tokens: dict[int, list[str]], pattern: str) -> list[int]:
         # fnmatch.translate("202[0-3") == "(?s:202\\[0\\-3)\\z": the unmatched
         # "[" is an ordinary character, not a class opener.
         pytest.param("202[0-3", None, "202\\[0\\-3", id="unclosed-bracket-is-literal"),
-        # Only literal runs go through the normalizer; the class body is passed
-        # through as class syntax.
-        pytest.param(
-            "AB[0-3]*", str.lower, "ab[0-3].*", id="class-body-not-normalized-or-escaped-away"
-        ),
+        # The class survives as class syntax (it is not regex-escaped away into
+        # literal brackets) while the literal run around it is normalized. The
+        # class body's own normalization is covered further down, in
+        # test_glob_to_regex_normalizes_class_bodies.
+        pytest.param("AB[0-3]*", str.lower, "ab[0-3].*", id="class-not-escaped-away"),
         # A "*" immediately following a class collapses runs the same as bare
         # "**" (the `while pattern[i]=="*"` collapse only fires after `flush()`,
         # not right after a class: this is really exercising the "**" collapse
@@ -485,3 +489,116 @@ def test_every_field_non_fast_non_text_raises(tindex: TIndex, ereg: FieldRegistr
     with pytest.raises(QueryError) as exc:
         emit_ast(ast.Every(field=FieldRef("asn")), tindex, non_fast_registry)
     assert exc.value.diagnostic.kind is DiagnosticKind.EXISTS_REQUIRES_FAST
+
+
+# -- bracket-class body normalization ----------------------------------------
+
+
+def multichar_fold(text: str) -> str:
+    """Stand-in for the host's ``pattern_normalizer``.
+
+    paperless-ngx supplies ``ascii_fold(text.lower())``, which is *not* a pure
+    case fold: tantivy's ascii_fold filter expands single letters into several
+    ASCII ones ("ß" -> "ss", "æ" -> "ae"). Reproduced here (only for the two
+    letters the tests need) rather than imported, so this suite keeps no
+    dependency on the host.
+    """
+    return text.lower().replace("ß", "ss").replace("æ", "ae")
+
+
+@pytest.mark.parametrize(
+    ("pattern", "normalizer", "expected"),
+    [
+        # A class member is pattern *syntax*, but the characters inside it are
+        # index terms just like a literal run's, so they need the same fold.
+        pytest.param("BILL[I]NG*", str.lower, "bill[i]ng.*", id="class-member-folded"),
+        pytest.param("B[I-L]LLING*", str.lower, "b[i-l]lling.*", id="range-endpoints-folded"),
+        # The negation marker is class syntax, not a term character: it must
+        # survive the fold and still translate to the regex dialect's "^".
+        pytest.param("[!A-Z]*", str.lower, "[^a-z].*", id="negated-class-endpoints-folded"),
+        # Folding can empty a range that was non-empty before it ("Z" < "a",
+        # but "z" > "a"), which is exactly what real whoosh does when it folds
+        # the whole pattern text and hands it to fnmatch.
+        pytest.param("x[Z-a]", str.lower, None, id="fold-empties-the-range"),
+        # A range endpoint whose fold is several characters is left alone:
+        # "[a-ss]" is not the same range, it is a different (and wrong) class.
+        # The *other* endpoint still folds, pinning that the skip is per
+        # character and not per class.
+        pytest.param("[A-ß]x*", multichar_fold, "[a-ß]x.*", id="multichar-fold-endpoint-untouched"),
+        # Same rule for a plain member. A class matches exactly one character,
+        # so an expansion cannot be expressed here at all (see the comment on
+        # _normalize_class_body); leaving it is the only non-corrupting choice.
+        pytest.param("[aæ]x*", multichar_fold, "[aæ]x.*", id="multichar-fold-member-untouched"),
+    ],
+)
+def test_glob_to_regex_normalizes_class_bodies(
+    pattern: str, normalizer: Callable[[str], str], expected: str | None
+) -> None:
+    assert glob_to_regex(pattern, normalizer) == expected
+
+
+@pytest.mark.parametrize(
+    ("pattern", "expected"),
+    [
+        pytest.param("BILLING*", [1, 2], id="control-literal-run-folded"),
+        pytest.param("BILL[I]NG*", [1, 2], id="class-member"),
+        pytest.param("B[I-L]LLING*", [1, 2], id="class-range"),
+    ],
+)
+def test_class_body_is_normalized_end_to_end(
+    tindex: TIndex, ereg: FieldRegistry, pattern: str, expected: list[int]
+) -> None:
+    # DIVERGENCES entry 2 promises unqualified case folding of wildcard
+    # patterns, and real whoosh folds the whole pattern text (class bodies
+    # included). Before this fix the two class forms compiled to
+    # "bill[I]ng.*" / "b[I-L]lling.*" and silently matched nothing while the
+    # bare "BILLING*" control matched.
+    assert fnmatch_ids(TITLE_TOKENS, pattern) == expected
+    q = emit_ast(ast.Wildcard(field=FieldRef("title"), pattern=pattern), tindex, ereg)
+    assert search_ids(tindex[0], q) == expected
+
+
+# -- fnmatch equivalence -----------------------------------------------------
+
+# Glob syntax plus the characters that make fnmatch's bracket parser branch:
+# the negation "!", the literal-member "]", the range "-", the escape "\", and
+# the class-internal metacharacters "^&~[" the emitter has to escape for
+# tantivy's regex engine. Cased letters so the folded run is a real test.
+_GLOB_ALPHABET = "abZ*?[]!-\\^&~.0"
+_SUBJECTS = ["", "a", "Z", "z", "ab", "a-b", "a]b", "a!b", "a\\b", "[", "-", "abZ0"]
+
+
+def _accepts(regex: str | None, subject: str) -> bool:
+    """Whether ``glob_to_regex``'s output matches ``subject``, reading ``None``
+    (the "provably matches nothing" signal) as "matches nothing"."""
+    if regex is None:
+        return False
+    return re.match(regex + r"\Z", subject) is not None
+
+
+@pytest.mark.parametrize("normalizer", [None, str.lower], ids=["identity", "lowercase"])
+@settings(max_examples=500, deadline=None)
+@given(pattern=st.text(alphabet=_GLOB_ALPHABET, min_size=1, max_size=8))
+def test_glob_to_regex_agrees_with_fnmatch(
+    normalizer: Callable[[str], str] | None, pattern: str
+) -> None:
+    """``glob_to_regex`` must accept exactly the strings ``fnmatch.translate``
+    accepts, since fnmatch is what whoosh's ``query.Wildcard`` compiles with:
+    the strongest guard this translation has, and the one that has to survive
+    later rewrites of it.
+
+    Under a normalizer the oracle is ``fnmatch.translate`` of the *whole*
+    folded pattern text, which is what real whoosh does. ``str.lower`` over
+    this ASCII-only alphabet is per-character-safe, so the emitter's
+    per-run/per-class-character application has to agree with it exactly. A
+    bulk version of this check (a quarter-million generated patterns) was run
+    by hand when the class-body fold landed; this is the version cheap enough
+    to keep in the suite.
+    """
+    source = pattern if normalizer is None else normalizer(pattern)
+    oracle = re.compile(fnmatch.translate(source))
+    got = glob_to_regex(pattern, normalizer)
+    for subject in _SUBJECTS:
+        assert _accepts(got, subject) == (oracle.match(subject) is not None), (
+            f"{pattern!r} -> {got!r} disagrees with fnmatch on {subject!r}"
+        )

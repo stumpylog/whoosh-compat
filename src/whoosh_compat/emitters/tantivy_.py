@@ -88,7 +88,41 @@ def _is_intable(value: object) -> bool:
 _EMPTY_CLASS = "(?!)"
 
 
-def _translate_class(pattern: str, i: int, n: int) -> tuple[str | None, int]:
+def _normalize_class_body(body: str, normalize: Callable[[str], str]) -> str:
+    """``normalize`` applied to a bracket class's body, one character at a time.
+
+    The characters inside a class are index terms exactly like a literal run's
+    are: ``title:BILL[I]NG*`` has to fold to ``bill[i]ng.*`` or it matches
+    nothing, and real whoosh folds the whole pattern text (class bodies
+    included) before handing it to fnmatch. So the body is normalized too, but
+    *per character*, and the length is preserved so the caller's indices into
+    ``pattern`` stay valid.
+
+    Per character rather than as one string, and skipping any character whose
+    normalized form is not exactly one character, because a
+    ``pattern_normalizer`` is not necessarily a pure case fold: paperless-ngx
+    supplies ``ascii_fold(text.lower())``, and ascii-folding expands single
+    letters into several ("ß" -> "ss", "æ" -> "ae"). Folding a range endpoint
+    that way would turn ``[ß-z]`` into ``[ss-z]``: no longer that range, or any
+    range. A multi-character fold of a plain class *member* is not the same
+    failure but has no good answer either: a class matches exactly one
+    character, so "one of a, or the two-character sequence ss" is not
+    expressible as a class at all (it would need an alternation, which would
+    have to be threaded back out through the whole concatenation). Both cases
+    therefore leave the character as the user typed it: that can lose a match
+    the host's folded index would have had, which is a bounded and honest
+    outcome, where a corrupted class is silently the wrong query.
+    """
+    out: list[str] = []
+    for ch in body:
+        folded = normalize(ch)
+        out.append(folded if len(folded) == 1 else ch)
+    return "".join(out)
+
+
+def _translate_class(
+    pattern: str, i: int, n: int, normalize: Callable[[str], str]
+) -> tuple[str | None, int]:
     """Translate the bracket expression starting just after a ``[`` at ``i-1``.
 
     Returns ``(regex_fragment, next_index)``. ``regex_fragment`` is ``None``
@@ -102,6 +136,13 @@ def _translate_class(pattern: str, i: int, n: int) -> tuple[str | None, int]:
     negation, the leading-``]``-is-a-literal-member rule, and the
     hyphen/backslash escaping inside the class all have to line up with
     fnmatch exactly or globs would silently change meaning.
+
+    The one addition to fnmatch's algorithm is ``normalize``, applied to the
+    class body (see ``_normalize_class_body``) *before* the fnmatch logic runs,
+    which is where real whoosh's pattern-wide fold would have applied it too.
+    Order matters: folding can empty a range that was non-empty unfolded
+    (``[Z-a]`` -> ``[z-a]``), and it is fnmatch's own empty-range removal that
+    has to see the folded endpoints and collapse it.
     """
     j = i
     if j < n and pattern[j] == "!":
@@ -112,6 +153,15 @@ def _translate_class(pattern: str, i: int, n: int) -> tuple[str | None, int]:
         j += 1
     if j >= n:
         return None, i
+
+    # Fold the body in place. Length-preserving by construction, so i/j/n stay
+    # valid and the rest of this function is fnmatch's algorithm verbatim. A
+    # leading "!" is negation syntax rather than a term character, so it is
+    # left out of the fold and keeps its meaning below.
+    body_start = i + 1 if pattern[i] == "!" else i
+    pattern = (
+        pattern[:body_start] + _normalize_class_body(pattern[body_start:j], normalize) + pattern[j:]
+    )
 
     stuff = pattern[i:j]
     if "-" not in stuff:
@@ -177,11 +227,13 @@ def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str 
     is the ground truth for what a whoosh wildcard matches. This function
     reproduces fnmatch's translation with two deliberate changes:
 
-    * Literal runs are passed through ``normalizer`` (``spec.pattern_normalizer``,
-      identity when ``None``) *before* being regex-escaped, so a pattern can be
-      case-folded to line up with the analyzed/indexed term text. Only literal
-      runs are normalized: ``*``, ``?`` and bracket-class bodies are pattern
-      syntax and are passed through as such.
+    * Term characters are passed through ``normalizer``
+      (``spec.pattern_normalizer``, identity when ``None``) *before* being
+      regex-escaped, so a pattern can be case-folded to line up with the
+      analyzed/indexed term text. That means whole literal runs and, one
+      character at a time, bracket-class bodies (see
+      ``_normalize_class_body``); ``*``, ``?`` and the class delimiters
+      themselves are syntax and are passed through as such.
     * No anchoring. ``fnmatch.translate`` emits ``(?s:...)\\z`` framing, and
       newer CPython versions also emit atomic groups (``(?>.*?foo)``) as a
       backtracking optimization. tantivy's regex engine (regex-automata, via
@@ -213,7 +265,7 @@ def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str 
             flush()
             out.append(".")
         elif c == "[":
-            fragment, i = _translate_class(pattern, i, n)
+            fragment, i = _translate_class(pattern, i, n, normalize)
             if fragment is None:
                 # No closing "]": the "[" is an ordinary character.
                 literal.append(c)
