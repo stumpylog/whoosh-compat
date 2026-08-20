@@ -1135,6 +1135,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         subpath is not a schema field in its own right (``notes.user``
         probes as absent even when ``notes`` is present), so passing one
         would report every JSON subpath query as schema drift.
+
+        ``tests/emitter/test_schema_drift.py``'s
+        ``test_other_value_errors_are_still_internal`` monkeypatches
+        ``term_query`` to fail *while* this probe keeps succeeding, so it
+        depends on this call staying a different tantivy-py entry point
+        than the one under test. Changing it to ``term_query`` would break
+        that test loudly rather than silently, but change both together.
         """
         try:
             tantivy.Query.regex_query(self.schema, name, ".*")

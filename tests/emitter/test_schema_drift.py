@@ -174,6 +174,11 @@ def test_other_value_errors_are_still_internal(
     missing field, which is the only way to produce the condition without an
     actual tantivy-py bug: the schema probe still finds "content", so the
     drift branch must decline it.
+
+    That hinges on ``_field_in_schema`` probing with ``regex_query`` rather
+    than the ``term_query`` monkeypatched below; if it ever switches to
+    ``term_query`` the probe would fail too and this test would report
+    SCHEMA_FIELD_MISSING instead, failing loudly, but keep the two in step.
     """
     real_term_query = tantivy.Query.term_query
 
