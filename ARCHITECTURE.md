@@ -787,6 +787,17 @@ self-retiring: once
 [tantivy-py#716](https://github.com/quickwit-oss/tantivy-py/pull/716) lands
 and ships, the probe starts succeeding and the fallback branch simply stops
 being taken. No code change is required in this library.
+The probe itself queries `self.schema` (a specific index's schema), not
+just the installed `tantivy-py` version in the abstract, so the cached
+answer can go stale for **the same** `FieldRegistry` reused across
+different `tantivy.Index`/schema generations (e.g. after a reindex) if
+that changes the probe's outcome. The cache is not re-keyed per index:
+`tantivy.Schema`/`tantivy.Index` are not weak-referenceable (confirmed
+directly), so there is nothing to key on, and on tantivy-py 0.26 the
+probe answers `False` for any real JSON schema regardless of content,
+making the cached value invariant across index generations today; this
+becomes a live staleness risk only once tantivy-py#716 ships and a
+schema-content-dependent `True`/`False` split becomes possible.
 
 ## 6. Testing strategy
 

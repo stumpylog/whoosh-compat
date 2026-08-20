@@ -637,6 +637,17 @@ def test_backwards_swap_carries_exactness_with_the_value(reg: FieldRegistry) -> 
     # genuinely backwards range), landing the exact value at hi_naive; it
     # must produce the exact same incl_hi/hi, not silently apply the
     # ceiling adjustment meant for an ambiguous bound.
+    # NOTE: with "[...]" brackets on both sides, incl_lo is a
+    # non-discriminating assertion here: the ambiguous bound ("2019") is
+    # always the one that lands at lo (2019 sorts below 2020 either way,
+    # swap or no swap), and an ambiguous lo is forced incl_lo=True
+    # unconditionally (dateparse.py: "if lo_naive is not None and not
+    # start_exact: incl_lo = True"), so this assertion would pass even
+    # without the fix. Only end_exact/incl_hi is genuinely pinned by this
+    # test; see test_backwards_swap_carries_start_exactness_with_the_value
+    # below for the start_exact/incl_lo half, which needs an exclusive
+    # "{" bracket and the exact value on alternating sides to discriminate
+    # at all.
     forward = dparse("created:[2019 TO 20200615120000123456]", reg).ast
     reversed_ = dparse("created:[20200615120000123456 TO 2019]", reg).ast
     assert isinstance(forward, ast.DateRange)
@@ -647,6 +658,37 @@ def test_backwards_swap_carries_exactness_with_the_value(reg: FieldRegistry) -> 
     assert reversed_.hi == forward.hi
     assert reversed_.lo == forward.lo
     assert reversed_.incl_lo == forward.incl_lo
+
+
+def test_backwards_swap_carries_start_exactness_with_the_value(reg: FieldRegistry) -> None:
+    # The start_exact/incl_lo half of
+    # test_backwards_swap_carries_exactness_with_the_value, which only
+    # pins end_exact/incl_hi (see its NOTE): incl_lo only reveals a
+    # start_exact bug for a bound the code doesn't force True outright,
+    # which requires BOTH an exact lo bound (start_exact True skips the
+    # "ambiguous lo is always inclusive" forcing) AND an exclusive "{"
+    # bracket (an inclusive "[" produces incl_lo=True either way, since
+    # True is also the un-forced default for an untyped exclusion flag).
+    #
+    # "20190615120000123456" is exact; "2020" is year-only (ambiguous).
+    # The forward spelling (exact TO ambiguous) never swaps (2019 sorts
+    # before 2020): the exact lo bound keeps the bracket's typed
+    # exclusivity ("{" -> incl_lo=False). The reversed spelling
+    # (ambiguous TO exact, with "{" on the same, now-ambiguous-typed
+    # side) swaps (2020 sorts after 2019), landing the exact value back
+    # at lo_naive; it must produce the same incl_lo=False, not the
+    # "ambiguous lo forces incl_lo=True" answer that applied to the
+    # ORIGINAL (pre-swap) ambiguous-typed start bound.
+    forward = dparse("created:{20190615120000123456 TO 2020}", reg).ast
+    reversed_ = dparse("created:{2020 TO 20190615120000123456}", reg).ast
+    assert isinstance(forward, ast.DateRange)
+    assert isinstance(reversed_, ast.DateRange)
+    assert forward.incl_lo is False
+    assert forward.lo == datetime(2019, 6, 15, tzinfo=UTC)
+    assert reversed_.incl_lo == forward.incl_lo
+    assert reversed_.lo == forward.lo
+    assert reversed_.hi == forward.hi
+    assert reversed_.incl_hi == forward.incl_hi
 
 
 def test_rfc3339_range_open_lo_bound_with_z(reg: FieldRegistry) -> None:

@@ -58,6 +58,18 @@ material; they are permanently documented, each with its rationale, in
   library's own tests and fixtures already declared `date_only=True`
   explicitly, so this is not expected to affect a real caller; a host that
   omitted it must add it.
+- `FieldRegistry.exists_strategy(spec)` keyed its answer purely by
+  `spec.name`, so a spec this registry never registered returned `None`
+  -- indistinguishable from "this registry's own field of that name has
+  no way to answer 'exists'" -- and a spec sharing a name with a
+  *different* registry's field silently borrowed that other registry's
+  resolved strategy instead of being refused. It now validates `spec` by
+  identity against what it actually registered under that name and raises
+  `ValueError` for anything else. Only reachable by misuse (the sole
+  in-repo caller always passes a spec obtained from
+  `FieldRegistry.resolve()` on the same registry), but the contract itself
+  changed (`None` in one case is now a raise), so it is listed here rather
+  than under Fixed, for the same reason as the `date_only` entry above.
 - `Cause.MISCONFIGURED` is documented as requiring **both** an operator
   alert and an HTTP 400, not an alert alone. Every `MISCONFIGURED` kind is
   reachable from ordinary query text, so a request is always waiting on an
@@ -303,7 +315,12 @@ material; they are permanently documented, each with its rationale, in
   once per `FieldRegistry` instead (a `weakref.WeakKeyDictionary`, so a
   registry no longer referenced anywhere else is not kept alive by this
   cache), scoped per registry rather than shared globally so one
-  registry's schema drift cannot poison another registry's answer.
+  registry's schema drift cannot poison another registry's answer. The
+  cache is not schema-independent, though: the probe itself queries a
+  specific `tantivy.Index`'s schema, so the cached entry can still go
+  stale for **the same** registry if it is later paired with a
+  different index whose schema changes the probe's outcome (e.g. after
+  a reindex); see `ARCHITECTURE.md`.
 - `ast.Visitor.visit()` dispatched on the exact concrete class name only,
   so a `Node` subclass with no `visit_<its-own-name>` method of its own
   (e.g. a caller-defined specialization of `Term`) fell straight through
@@ -312,14 +329,6 @@ material; they are permanently documented, each with its rationale, in
   what is otherwise a structurally ordinary node. It now walks
   `type(node).__mro__` up to (and including) `Node`, so a subclass
   dispatches through its nearest ancestor's `visit_*` method.
-- `FieldRegistry.exists_strategy(spec)` keyed its answer purely by
-  `spec.name`, so a spec this registry never registered returned `None`
-  -- indistinguishable from "this registry's own field of that name has
-  no way to answer 'exists'" -- and a spec sharing a name with a
-  *different* registry's field silently borrowed that other registry's
-  resolved strategy instead of being refused. It now validates `spec` by
-  identity against what it actually registered under that name and raises
-  `ValueError` for anything else.
 
 ### Internal
 

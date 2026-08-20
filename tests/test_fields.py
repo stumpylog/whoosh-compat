@@ -1148,11 +1148,19 @@ def test_date_only_true_on_date_preserves_spec_identity() -> None:
     """A DATE spec declaring ``date_only=True``, as now required, is
     registered by reference.
 
-    Before this fix, an ordinary DATE spec (one that left ``date_only`` at
-    its ``False`` default) was silently rewritten via
-    ``dataclasses.replace()``, so the object the registry actually
-    registered, resolved, and iterated (``list(registry)[0]``) was a
-    *copy*, never the object the caller constructed and passed in.
+    This is a forward regression guard, not a bug pin: it passes
+    unmodified against the pre-fix code too, since the old
+    ``dataclasses.replace()`` rewrite only ever fired for a DATE spec that
+    left ``date_only`` at its ``False`` default -- the shape
+    ``test_validation_date_only_on_date_false_rejected``/
+    ``test_validation_date_only_omitted_on_date_rejected`` now reject
+    outright, so it can no longer reach ``FieldRegistry.__init__`` at all
+    to demonstrate the identity break directly. This test instead pins
+    that the *other*, still-permitted shape (``date_only=True`` explicit,
+    every DATE spec in this library's own fixtures) stays identity-safe
+    going forward, so a future change reintroducing any per-spec rewrite
+    in ``FieldRegistry.__init__`` breaks a test immediately rather than
+    silently.
     """
     spec = FieldSpec(name="created", kind=FieldKind.DATE, date_only=True)
     registry = FieldRegistry([spec])

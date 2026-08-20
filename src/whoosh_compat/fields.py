@@ -159,16 +159,20 @@ class SubpathSpec:
 class FieldSpec:
     """Specification for a single field in the schema.
 
-    ``analyzer``/``pattern_normalizer``/``multitoken`` are only consulted
-    for kinds that use them (TEXT/KEYWORD, plus JSON, whose subpaths are
-    tokenized exactly like a TEXT/KEYWORD field's value and so honor
-    ``analyzer`` and ``multitoken`` the same way: a JSON subpath's
-    multi-token value is combined per this same spec's ``multitoken``,
-    falling back to the enclosing group's combinator on
+    ``analyzer``/``multitoken`` are only consulted for kinds that use them:
+    TEXT/KEYWORD, plus JSON, whose subpaths are tokenized exactly like a
+    TEXT/KEYWORD field's value and so honor both the same way (a JSON
+    subpath's multi-token value is combined per this same spec's
+    ``multitoken``, falling back to the enclosing group's combinator on
     ``Multitoken.DEFAULT``, identically to a plain field; see
-    ``_leaf_tokens``/``_analyze_term`` in ``ast.py``. ``pattern_normalizer``
-    is JSON-subpath-relevant too, for a subpath prefix/wildcard query);
-    setting one of those three on a kind that ignores it is permitted, not
+    ``_leaf_tokens``/``_analyze_term`` in ``ast.py``). ``pattern_normalizer``
+    is narrower: TEXT/KEYWORD only, never JSON, even through a subpath.
+    A JSON subpath's wildcard/prefix query is refused outright
+    (``AST_PATTERN_ON_KIND``, DIVERGENCES.md entry 30; a parse-time
+    ``PATTERN_ON_SUBPATH`` diagnostic catches ordinary query text before
+    that), so ``spec.pattern_normalizer`` is never even read for one; see
+    ``TantivyEmitter._reject_pattern_incompatible_kind``.
+    Setting one of these three on a kind that ignores it is permitted, not
     validated against, since a host may reasonably share one ``FieldSpec``
     factory across kinds rather than branch on kind to omit them.
     ``comma_values`` is the exception: ``FieldRegistry.__init__`` raises
