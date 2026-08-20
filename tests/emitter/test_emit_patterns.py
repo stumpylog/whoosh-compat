@@ -607,16 +607,26 @@ def test_glob_to_regex_agrees_with_fnmatch(
 
 # -- linear-time translation -------------------------------------------------
 
-# Sized so the guard cannot be flaky rather than so it is quick: an unmatched
-# "[" used to make the translator rescan to end-of-string, which cost 12.2 s
-# at 16 K brackets and grew 4x per doubling, i.e. roughly 30 minutes at the
-# size below, against ~0.01 s once the scan is single-pass. Any wall-clock
-# assertion is in principle schedulable-away on shared hardware, so the
-# budget is four orders of magnitude above the passing cost and four orders
-# below the failing one: no plausible load can move a run across it. A
-# ratio-of-two-sizes shape was rejected for the opposite reason: once the
-# function is linear both timings are sub-millisecond, where scheduler noise
-# is the dominant term and the ratio is meaningless.
+# Sized so the guard cannot be flaky rather than so it is quick. Two distinct
+# quadratics used to live here: an unmatched "[" made the translator rescan to
+# end-of-string (once per "["), and the class fold rebuilt the whole pattern
+# string (once per class). Both grew ~4x per doubling, so at the sizes below
+# each failing shape costs seconds to minutes.
+#
+# Honest margins, measured on the author's machine, because the useful thing
+# to know at 2am is how much room a flake actually had: the three glob guards
+# cost 64 ms, 64 ms and 83 ms (dominated by re.escape over a 200 KB literal
+# run, not by the scan) and the repeated-class guard 103 ms, against a 2 s
+# budget: 19x to 31x, not orders of magnitude. Their pre-fix costs are ~1000 s
+# (extrapolated), 11.3 s and 2.5 s, so the budget still sits far below every
+# failure and well above every pass. A flake would mean a run stalled for 30x
+# its own CPU time; the response to one is to raise the budget, never to
+# shrink the input. The date guards in tests/test_parser_dates.py have far
+# more room (760x and 10,000x) on the same 2 s budget.
+#
+# A ratio-of-two-sizes shape was rejected: once the function is linear the
+# timings are tens of milliseconds dominated by allocation and escaping, so
+# the ratio would measure memory bandwidth rather than algorithmic order.
 _DOS_PATTERN_LEN = 200_000
 _DOS_BUDGET_SECONDS = 2.0
 
@@ -648,5 +658,28 @@ def test_late_closing_bracket_translates_in_linear_time() -> None:
     start = time.perf_counter()
     got = glob_to_regex(pattern, None)
     elapsed = time.perf_counter() - start
-    assert got is not None
+    # One class holding every "[" up to the "]" (each an ordinary member, and
+    # escaped because Rust's regex crate reads a bare "[" in a class as a
+    # nested one), then the trailing run as literals.
+    assert got == "[" + r"\[" * (_DOS_PATTERN_LEN - 1) + "a]" + r"\[" * _DOS_PATTERN_LEN
+    assert elapsed < _DOS_BUDGET_SECONDS
+
+
+def test_many_small_classes_translate_in_linear_time() -> None:
+    """The third shape, and the one the scan fix alone did not cover: many
+    *closed* classes. Folding a class body used to rebuild the whole pattern
+    string around it, once per class, so cost was O(classes x length) even
+    with a single-pass scan. The inert literal tail is the diagnostic half of
+    the shape: it joins no class, so anything that scales with it is copying
+    the pattern rather than the class ("[a]" x 50 K plus 200 KB of tail cost
+    11.3 s against 2.5 s without the tail; both are ~0.1 s now).
+    """
+    classes, tail = 50_000, 200_000
+    pattern = "[a]" * classes + "x" * tail
+    start = time.perf_counter()
+    got = glob_to_regex(pattern, None)
+    elapsed = time.perf_counter() - start
+    # Nothing in this pattern needs escaping or folding, so the translation
+    # is its own input.
+    assert got == "[a]" * classes + "x" * tail
     assert elapsed < _DOS_BUDGET_SECONDS

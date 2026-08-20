@@ -95,8 +95,8 @@ def _normalize_class_body(body: str, normalize: Callable[[str], str]) -> str:
     are: ``title:BILL[I]NG*`` has to fold to ``bill[i]ng.*`` or it matches
     nothing, and real whoosh folds the whole pattern text (class bodies
     included) before handing it to fnmatch. So the body is normalized too, but
-    *per character*, and the length is preserved so the caller's indices into
-    ``pattern`` stay valid.
+    *per character*, and the length is preserved so the caller can keep using
+    fnmatch's own offsets into the class it cut out.
 
     Per character rather than as one string, and skipping any character whose
     normalized form is not exactly one character, because a
@@ -190,9 +190,19 @@ def _translate_class(
         return None, i
     j = close
 
-    # Fold the body in place. Length-preserving by construction, so i/j/n stay
-    # valid and the rest of this function is fnmatch's algorithm verbatim. A
-    # leading "!" is negation syntax rather than a term character, so it is
+    # Cut the class out of the pattern and fold it. Everything below then
+    # works inside this class-sized slice, at fnmatch's indices minus i.
+    #
+    # Slicing rather than rebuilding the pattern around the folded body is
+    # the second half of this function's linearity, and it is the same bug
+    # as the scan above wearing different clothes: a full string copy per
+    # class made a pattern of many small classes cost O(classes x length)
+    # even with the scan fixed ("[a]" x 32,000 spent half a second, and
+    # appending an inert tail that joins no class scaled it, which is the
+    # signature of a per-class whole-string copy). The fold itself is
+    # length-preserving by construction, so the offsets below stay fnmatch's.
+    #
+    # A leading "!" is negation syntax rather than a term character, so it is
     # left out of the fold and keeps its meaning below.
     #
     # Note the ordering: the class extent (j) is found on the *unfolded* text,
@@ -205,26 +215,26 @@ def _translate_class(
     # are syntax and are read from what the user actually typed, which
     # under-matches rather than silently building a different valid class.
     # See DIVERGENCES.md entry 2's second qualification.
-    body_start = i + 1 if pattern[i] == "!" else i
-    pattern = (
-        pattern[:body_start] + _normalize_class_body(pattern[body_start:j], normalize) + pattern[j:]
+    negated = pattern[i] == "!"
+    stuff = pattern[i:j]
+    stuff = ("!" if negated else "") + _normalize_class_body(
+        stuff[1:] if negated else stuff, normalize
     )
 
-    stuff = pattern[i:j]
     if "-" not in stuff:
         stuff = stuff.replace("\\", r"\\")
     else:
         chunks = []
-        k = i + 2 if pattern[i] == "!" else i + 1
-        start = i
+        k = 2 if negated else 1
+        start = 0
         while True:
-            k = pattern.find("-", k, j)
+            k = stuff.find("-", k)
             if k < 0:
                 break
-            chunks.append(pattern[start:k])
+            chunks.append(stuff[start:k])
             start = k + 1
             k = k + 3
-        chunk = pattern[start:j]
+        chunk = stuff[start:]
         if chunk:
             chunks.append(chunk)
         else:

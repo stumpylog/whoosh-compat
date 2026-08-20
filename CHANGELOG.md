@@ -193,24 +193,35 @@ material; they are permanently documented, each with its rationale, in
   one inside a class, above all as a range endpoint (`[ss-z]`), would build
   a different query rather than a folded one. Entry 2 records that
   qualification.
-- Two denial-of-service surfaces, both reachable from ordinary query text
+- Three denial-of-service surfaces, all reachable from ordinary query text
   by any authenticated user, are now linear in the input length instead of
-  quadratic. A wildcard's glob-to-regex translation rescanned to the end of
-  the pattern for every `[` that never closes (`title:` + 16 K of `[` cost
-  12.2 s, growing 4x per doubling); the pattern's last `]` is now located
-  once, so "no closing bracket from here" is an index comparison. And the
-  RFC3339 trailing-`Z` gate's regex (`.*T.*Z`) backtracked over every pair
-  of `T`s in a date bound (231 s for 200 K of them); its leading run now
-  excludes `T`, leaving one candidate split point rather than one per `T`.
-  Neither accepts or rejects anything it did not before: the glob
-  translation was re-verified byte-identical to its previous output over
-  412,683 exhaustive and 600,000 random pattern/normalizer pairs (including
-  the multi-character-fold and fullwidth-bracket cases entry 2 qualifies)
-  as well as against the `fnmatch.translate` oracle, and the date regex
-  against its previous form over every string up to length 5 in
-  `TtZz a\n\r`. Query *parsing* remains quadratic in a long unmatched
-  word-character run (see `ARCHITECTURE.md`); hosts should still cap query
-  length at their own boundary.
+  quadratic. Timings below are order-of-magnitude, from one developer
+  machine; the durable claim is the growth curve, which was 4x per doubling
+  in each case.
+  - A wildcard's glob-to-regex translation rescanned to the end of the
+    pattern for every `[` that never closes (`title:` + 16 K of `[` cost
+    seconds). The pattern's last `]` is now located once, so "no closing
+    bracket from here" is an index comparison.
+  - The same translation rebuilt the whole pattern string around every
+    bracket class it folded, so a pattern of many *closed* classes cost
+    O(classes x length) with no unmatched bracket involved (`[a]` x 50 K
+    plus a 200 KB literal tail: ~11 s, now ~0.1 s). Each class is now cut
+    out and folded as its own slice. This one arrived with the
+    per-character class-body fold in this same release, so no released
+    version was affected.
+  - The RFC3339 trailing-`Z` gate's regex (`.*T.*Z`) backtracked over every
+    pair of `T`s in a date bound (200 K of them cost minutes). Its leading
+    run now excludes `T`, leaving one candidate split point rather than one
+    per `T`.
+
+  None of the three accepts or rejects anything it did not before: the glob
+  translation is byte-identical to its previous output over 412,683
+  exhaustive and 600,000 random pattern/normalizer pairs (including the
+  multi-character-fold and fullwidth-bracket cases entry 2 qualifies) as
+  well as against the `fnmatch.translate` oracle, and the date regex matches
+  its previous form over every string up to length 5 in `TtZz a\n\r`. Query
+  *parsing* remains quadratic in a long unmatched word-character run (see
+  `ARCHITECTURE.md`); hosts must cap query length at their own boundary.
 
 ### Internal
 

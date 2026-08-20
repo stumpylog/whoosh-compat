@@ -623,24 +623,41 @@ rewritten tagger regex would risk parity for a purely adversarial input
 shape); the README's host-contract section tells hosts to cap query length
 at their own boundary instead.
 
-Two *other* super-linear costs on the same user-reachable path were not
-inherited from whoosh and are fixed rather than tolerated, since neither
-had a parity argument protecting it. The emitter's `glob_to_regex` rescanned
-to the end of the pattern for every `[` with no closing `]`, so a wildcard
-of 16K brackets cost 12.2s and grew 4x per doubling; the pattern's last `]`
-is now found once with `str.rfind` and passed into `_translate_class`, which
-turns "is there a close from here" into a comparison and leaves only the
-forward search that succeeds, and that one is paid for once in total because
-the caller resumes past the class it consumed. `DateParserPlugin`'s RFC3339
-`Z` gate was a fork-only regex, `^(?P<body>.*T.*)Z$`, whose two open-ended
-runs made the engine try every pair of `T` positions before failing (231s
-for a 200K-`T` bound, where real whoosh, which has no such gate, pays
-nothing); the leading run now excludes `T`, which pins the split at the
-first one and matches the same language. Both are single-pass rewrites of
-*how* the answer is computed, not caps on what is accepted: a length cap
-would have changed which queries work, and the accepted language of both is
-pinned unchanged by differential checks against the previous implementations
-(and, for the glob, against the `fnmatch.translate` oracle that defines it).
+*Other* super-linear costs on the same user-reachable path were not
+inherited from whoosh and are fixed rather than tolerated, since none had a
+parity argument protecting it. Wall-clock figures below are order-of-
+magnitude, from one developer machine; the durable claim in each case is the
+growth curve, not the seconds.
+
+`glob_to_regex` was quadratic in the pattern length two independent ways,
+and both are gone. It rescanned to the end of the pattern for every `[` with
+no closing `]` (16K brackets cost ~6-12s, growing 4x per doubling): the
+pattern's last `]` is now found once with `str.rfind` and passed into
+`_translate_class`, which turns "is there a close from here" into a
+comparison and leaves only the forward search that succeeds, and that one is
+paid for once in total because the caller resumes past the class it
+consumed. Separately, `_translate_class` rebuilt the entire pattern string
+around each folded class body, so a pattern of many *closed* classes cost
+O(classes x length) with no unmatched bracket involved (`[a]` x 50K plus a
+200KB literal tail, which joins no class at all, cost ~11s; the tail's
+influence is the signature of a per-class whole-string copy). The class is
+now cut out and folded as its own slice, at fnmatch's offsets minus the
+class start, so a class costs its own length and the same input is ~0.1s.
+That second quadratic arrived with the per-character class-body fold and was
+found by review of the first fix.
+
+`DateParserPlugin`'s RFC3339 `Z` gate was a fork-only regex,
+`^(?P<body>.*T.*)Z$`, whose two open-ended runs made the engine try every
+pair of `T` positions before failing (a 200K-`T` bound cost minutes, where
+real whoosh, which has no such gate, pays nothing); the leading run now
+excludes `T`, which pins the split at the first one and matches the same
+language.
+
+All three are rewrites of *how* the answer is computed, not caps on what is
+accepted: a length cap would have changed which queries work, and the
+accepted language of each is pinned unchanged by differential checks against
+the previous implementations (and, for the glob, against the
+`fnmatch.translate` oracle that defines it).
 
 **Spans are preserved through `normalize()`, not just set at parse time.**
 Every `Node` carries an optional `startchar`/`endchar` (character offsets

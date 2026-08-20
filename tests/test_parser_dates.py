@@ -1277,12 +1277,14 @@ def test_rfc3339_z_check_is_linear_in_value_length() -> None:
     "T"s (50 K "T"s cost 15.6 s), which any authenticated user can send as
     a date bound.
 
-    Sized so the guard cannot be flaky rather than so it is quick: the
-    pre-fix cost at this length is minutes, the post-fix cost is well under
-    a millisecond, so the budget sits orders of magnitude away from both and
-    no scheduling noise can move a run across it. (A ratio between two input
-    sizes was rejected: once the check is linear, both timings are
-    sub-millisecond, where noise dominates and the ratio means nothing.)
+    Sized so the guard cannot be flaky rather than so it is quick. Measured
+    on the author's machine: this shape cost 231 s before the fix and 2.6 ms
+    after (the accepting case below, 0.2 ms), against the 2 s budget, so the
+    room is ~760x on the passing side and two orders of magnitude on the
+    failing one. Absolute seconds are hardware-specific; the durable claim
+    is the shape, quadratic-in-"T"s before and linear after. A ratio between
+    two input sizes was rejected: at these costs both timings are
+    noise-dominated and the ratio would measure nothing.
     """
     plugin = DateParserPlugin(BASE, BERLIN)
     text = "T" * 200_000
