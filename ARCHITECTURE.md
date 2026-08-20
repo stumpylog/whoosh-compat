@@ -495,13 +495,15 @@ a tree deeper than 200: 20 levels of parens, each holding a 50-operator
 `GroupNode.query()`/`BinaryGroup.query()` (`parser/syntax.py`) still recurse
 once per level, so that input does `RecursionError` out of `parse()`. This is
 long-standing behaviour, not something the operator cap introduced or
-regressed, and the paren cap has the same shape of hole. The backstop for it
-is not another cap but an exception boundary around the parse pipeline,
-turning any unexpected exception into a `QueryParserError` rather than
-letting a bare `RecursionError` escape to the caller; the caps' job is to
-keep the *ordinary*
-pathological shapes (a long chain, a deep pile of parens) out of that
-backstop entirely and give them a real `TOO_DEEP` diagnostic instead.
+regressed, and the paren cap has the same shape of hole. Closing it is not a
+matter of a third cap: the intended backstop, added in a later task, is an
+exception boundary around the parse pipeline that turns any unexpected
+exception into a `QueryParserError` instead of letting a bare
+`RecursionError` reach the caller. That boundary does not exist yet, so as
+of this writing the compounding shape above really does escape `parse()` as
+a `RecursionError`. What the caps buy is that the *ordinary* pathological
+shapes (a long chain, a deep pile of parens) never reach that backstop at
+all: they get a real `TOO_DEEP` diagnostic instead.
 
 200 was chosen with a wide safety
 margin: confirmed directly against both the pinned real-whoosh oracle and

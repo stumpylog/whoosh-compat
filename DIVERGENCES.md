@@ -1108,9 +1108,19 @@ parse-then-emit pipeline).
     reproduced here: whoosh-compat caps nesting at
     `_MAX_GROUP_NESTING_DEPTH` (200, `parser/plugins.py`), well under either
     interpreter's crash floor, and reports `Diagnostic(kind=TOO_DEEP)` plus
-    an `ErrorLeaf` for the excess nesting instead, keeping `parse()`'s
-    "never raises for query input" invariant intact regardless of the
-    interpreter's recursion limit.
+    an `ErrorLeaf` for the excess nesting instead, so the ordinary
+    pathological shapes (a deep pile of parens, a long operator chain) keep
+    `parse()`'s "never raises for query input" invariant intact. The cap is
+    not a total-depth guarantee: it bounds what each individual flat group
+    contributes, so a query that nests groups which each stay under the cap
+    still compounds them (20 paren levels around a 50-operator `ANDNOT`
+    chain apiece builds ~1000 group levels), and `GroupNode.query()` still
+    recurses once per level, so that shape does `RecursionError` past the
+    interpreter's limit exactly as real whoosh does. That residue is
+    long-standing, is not what this entry claims to diverge on, and is not
+    something a cap can close; the planned backstop for it (a later task) is
+    an exception boundary around the parse pipeline, which does not exist
+    yet -- see ARCHITECTURE.md's "what the caps do not cover".
 
     Parentheses are not the only source of depth, so the cap is not enforced
     only on them. `InfixOperator.replace_self()` builds one new group per
@@ -1124,6 +1134,15 @@ parse-then-emit pipeline).
     group and build no hierarchy, so a chain of them of any length parses
     normally, as does a chain of prefix `NOT`s, each of which wraps a single
     node without nesting.
+
+    The two cap sites collapse differently, which is visible in what
+    survives. `do_groups` treats only the over-deep bracket region as
+    overflow and keeps everything outside it, so `a OR (((...300 deep...)))`
+    still searches for `a`. `do_operators` replaces the whole flat group
+    holding the over-long chain with the single `TOO_DEEP` leaf, so any
+    sibling content in that same group goes with it. Both produce the same
+    diagnostic and the same hard failure at `emit()`, so nothing is silently
+    mis-answered either way, but the operator side is the blunter of the two.
 
     Not carried through the differential-triage allowlist/corpus triple:
     the corpus generators (`tests/differential/strategies.py`) have no
