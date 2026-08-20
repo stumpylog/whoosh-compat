@@ -514,9 +514,11 @@ parse-then-emit pipeline).
     `created:"previous week 3pm"` is. The other four (`previous month`,
     `previous year`, `this month`, `this year`) resolve to a calendar unit
     and *accept* the time, which narrows the range to that time of day on
-    the period's first and last day: `added:previous month noon` is
-    `2026-07-01T12:00Z .. 2026-07-31T12:00:00.000001Z`, not the whole
-    month. Both outcomes are a change from paperless-ngx v2, whose rewrite
+    the period's first and last day: parsed in Europe/Berlin,
+    `added:previous month noon` is
+    `2026-07-01T10:00Z .. 2026-07-31T10:00:00.000001Z` (noon local, which
+    is 10:00Z at that zone's UTC+2 summer offset), not the whole month.
+    Both outcomes are a change from paperless-ngx v2, whose rewrite
     matched the phrase alone: there, `added:previous month noon` was the
     full-month range **plus a free-text `noon` term**, and that free-text
     term is now gone. This is the same class of v2 divergence as the

@@ -80,12 +80,14 @@ material; they are permanently documented, each with its rationale, in
   where before it was a `BAD_DATE` only by accident of `previous` not being
   a date on its own; the other four are calendar units and accept it,
   narrowing the range to that time of day on the period's first and last
-  day, so `added:previous month noon` is
-  `2026-07-01T12:00Z .. 2026-07-31T12:00:00.000001Z` rather than the whole
-  month plus a free-text `noon` term. A *leading* time is not joined: `added:3pm previous week` stays an
-  instant plus two free-text terms, because `added:` binds `3pm` and stops,
-  so the phrase and the time were never one value to reject. Nothing else
-  about a date value becomes whitespace-greedy:
+  day: parsed in Europe/Berlin, `added:previous month noon` is
+  `2026-07-01T10:00Z .. 2026-07-31T10:00:00.000001Z` (noon local, which is
+  10:00Z at that zone's UTC+2 summer offset) rather than the whole month
+  plus a free-text `noon` term. A *leading* time is not joined:
+  `added:3pm previous week` stays an instant plus two free-text terms,
+  because `added:` binds `3pm` and stops, so the phrase and the time were
+  never one value to reject. Nothing else about a date value becomes
+  whitespace-greedy:
   `added:previous week AND title:foo`, `added:previous week invoice`, and
   `title:previous month` (a TEXT field) are unchanged (`DIVERGENCES.md`
   entry 19).

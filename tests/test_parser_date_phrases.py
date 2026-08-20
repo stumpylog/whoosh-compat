@@ -198,6 +198,9 @@ def test_trailing_time_narrows_the_calendar_unit_phrases(
     # A single DateRange, not a DateRange AND a leftover "noon" term.
     assert isinstance(bare.ast, ast.DateRange)
     assert bare.ast.lo is not None
+    # Asserted in the query's own zone: noon Berlin is 10:00Z at the UTC+2
+    # summer offset, so reading the UTC hour here would pin the offset
+    # rather than the time of day the user asked for.
     assert bare.ast.lo.astimezone(BERLIN).hour == 12
 
 
@@ -208,6 +211,9 @@ def test_trailing_time_pins_one_concrete_narrowed_range(registry: FieldRegistry)
     r = dparse("added:previous month noon", registry).ast
     assert isinstance(r, ast.DateRange)
     # BASE is 2026-08-05 Europe/Berlin, so "previous month" is July 2026.
+    # Converted rather than hardcoded in UTC, but for the record the values
+    # are 2026-07-01T10:00Z and 2026-07-31T10:00:00.000001Z (Berlin is
+    # UTC+2 in July), which is what DIVERGENCES.md entry 19 quotes.
     assert r.lo == datetime(2026, 7, 1, 12, 0, tzinfo=BERLIN).astimezone(UTC)
     assert r.hi == datetime(2026, 7, 31, 12, 0, tzinfo=BERLIN).astimezone(UTC) + timedelta(
         microseconds=1
