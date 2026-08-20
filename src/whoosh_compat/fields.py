@@ -570,10 +570,10 @@ class FieldRegistry:
 
             self._specs.append(spec)
 
-        # Third pass: validate BOOLEAN_EXISTS targets (now all specs are registered)
+        # Second pass: validate BOOLEAN_EXISTS targets (now all specs are registered)
         for spec in self._specs:
             if spec.kind == FieldKind.BOOLEAN_EXISTS:
-                # Second pass above already rejected BOOLEAN_EXISTS specs
+                # The first pass above already rejected BOOLEAN_EXISTS specs
                 # with exists_target=None.
                 assert spec.exists_target is not None
                 target_spec = self._by_name.get(spec.exists_target)
@@ -608,7 +608,7 @@ class FieldRegistry:
                         f"kind to TEXT or KEYWORD"
                     )
 
-        # Fourth pass: reject a registered canonical name or alias that
+        # Third pass: reject a registered canonical name or alias that
         # exactly matches "<jsonfield>.<subpath>" for any registered JSON
         # field's subpath, where <jsonfield> is the JSON field's canonical
         # name OR any of its aliases (an alias makes "<alias>.<subpath>:" a
