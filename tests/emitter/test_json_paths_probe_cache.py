@@ -67,9 +67,7 @@ def test_probe_is_scoped_per_registry_not_shared_globally(
     the first registry's cached probe answer: each registry gets its own
     probe, run once, cached from then on for that registry.
     """
-    other_registry = FieldRegistry(
-        [FieldSpec("notes", FieldKind.JSON, subpaths=("note", "user"))]
-    )
+    other_registry = FieldRegistry([FieldSpec("notes", FieldKind.JSON, subpaths=("note", "user"))])
     node = _json_term("notes", "user", "alice")
 
     emit_ast(node, tindex, ereg)

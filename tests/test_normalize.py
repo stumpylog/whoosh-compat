@@ -365,12 +365,8 @@ class TestStructuralKeyToleratesSharedNode:
     @pytest.mark.parametrize(
         "build",
         [
-            pytest.param(
-                lambda x: And(children=(Not(child=x), x)), id="wrapped-then-shared"
-            ),
-            pytest.param(
-                lambda x: AndNot(positive=Not(child=x), negative=x), id="andnot-shared"
-            ),
+            pytest.param(lambda x: And(children=(Not(child=x), x)), id="wrapped-then-shared"),
+            pytest.param(lambda x: AndNot(positive=Not(child=x), negative=x), id="andnot-shared"),
         ],
     )
     def test_shared_node_does_not_raise_pin(self, build: Callable[[Node], Node]) -> None:
@@ -388,9 +384,7 @@ class TestStructuralKeyToleratesSharedNode:
             pytest.param(lambda x: And(children=(x, Not(child=x))), id="shared-then-wrapped"),
         ],
     )
-    def test_shared_node_does_not_raise_characterize(
-        self, build: Callable[[Node], Node]
-    ) -> None:
+    def test_shared_node_does_not_raise_characterize(self, build: Callable[[Node], Node]) -> None:
         """CHARACTERIZATION, not a regression pin: both shapes pass on
         `48febd4` too, for different reasons, so neither would catch this
         bug coming back - they are kept because "a shared node must not
@@ -460,9 +454,7 @@ class TestNormalizeToleratesSharedSubtreeInOneSibling:
             pytest.param(
                 lambda y: Or(
                     children=(
-                        Boosted(
-                            child=AndNot(positive=Not(child=y), negative=y), boost=2.0
-                        ),
+                        Boosted(child=AndNot(positive=Not(child=y), negative=y), boost=2.0),
                         T("z"),
                     )
                 ),
