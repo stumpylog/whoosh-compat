@@ -1386,8 +1386,14 @@ class DateParserPlugin(Plugin):
             # disambiguation may also MUTATE a bound before ordering (year
             # borrowing, equal-years month/day fill), so the swap cannot
             # be inferred from the resolved values, only from the flag.
+            # start_exact/end_exact (computed above, from raw_start/raw_end
+            # as originally typed) must follow the same swap: after it,
+            # hi_naive/lo_naive are ts.end/ts.start, which are the SWAPPED
+            # values, so end_exact/start_exact have to name the same bound
+            # those values actually came from.
             if ts.bounds_swapped:
                 start_tz, end_tz = end_tz, start_tz
+                start_exact, end_exact = end_exact, start_exact
         else:
             if raw_start is not None:
                 sd = (raw_start.disambiguated(local_now)

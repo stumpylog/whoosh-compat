@@ -616,6 +616,39 @@ def test_rfc3339_mixed_tz_bounds_survive_a_backwards_swap(
     assert r.hi == expected_hi
 
 
+def test_backwards_swap_carries_exactness_with_the_value(reg: FieldRegistry) -> None:
+    # Mirrors test_rfc3339_mixed_tz_bounds_survive_a_backwards_swap, but for
+    # start_exact/end_exact rather than start_tz/end_tz: the joint
+    # disambiguation step's genuine-swap branch (times.py's timespan
+    # .disambiguated()) swaps the resolved VALUES, so after a swap
+    # hi_naive is really the originally-typed start bound's value and vice
+    # versa. start_tz/end_tz already follow that swap; start_exact/
+    # end_exact did not, so whichever side's exactness decides the
+    # exclusive-ceiling adjustment (hi_naive + 1 microsecond, "not
+    # end_exact") was answering with the WRONG bound's exactness after a
+    # swap.
+    #
+    # "20200615120000123456" is a fully-specified (exact) compact
+    # datetime; "2019" is a year-only (ambiguous, not exact) bound. The
+    # forward spelling never swaps (2019 already sorts before 2020), so it
+    # is the ground truth: the exact end bound keeps the bracket's typed
+    # inclusivity (no "}" -> incl_hi=True) and no ceiling adjustment
+    # applies. The reversed spelling swaps (2020 sorts after 2019, a
+    # genuinely backwards range), landing the exact value at hi_naive; it
+    # must produce the exact same incl_hi/hi, not silently apply the
+    # ceiling adjustment meant for an ambiguous bound.
+    forward = dparse("created:[2019 TO 20200615120000123456]", reg).ast
+    reversed_ = dparse("created:[20200615120000123456 TO 2019]", reg).ast
+    assert isinstance(forward, ast.DateRange)
+    assert isinstance(reversed_, ast.DateRange)
+    assert forward.incl_hi is True
+    assert forward.hi == datetime(2020, 6, 15, tzinfo=UTC)
+    assert reversed_.incl_hi == forward.incl_hi
+    assert reversed_.hi == forward.hi
+    assert reversed_.lo == forward.lo
+    assert reversed_.incl_lo == forward.incl_lo
+
+
 def test_rfc3339_range_open_lo_bound_with_z(reg: FieldRegistry) -> None:
     # A "Z" bound as the sole (lo) side of an open-ended range: no second
     # bound to combine with, so this exercises the individual (non-joint)
@@ -948,11 +981,6 @@ def test_range_out_of_range_diagnostic_names_the_failing_bound(
             # positional bound fails its own side's arithmetic too.
         ),
         pytest.param(
-            "added:['9999-12-31 23:59:59.999999' to 9999]",
-            "9999",
-            id="exact-max-instant-start-not-blamed",
-        ),
-        pytest.param(
             "added:[9999 to 0001]",
             "9999",
             # The first failing site is the hi-side exclusive ceiling, and
@@ -997,6 +1025,31 @@ def test_range_diagnostic_names_failing_bound_after_joint_swap(
     assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
     assert res.diagnostics[0].raw_value == bad_bound
     assert bad_bound in res.diagnostics[0].message
+
+
+def test_swapped_exact_max_instant_does_not_spuriously_overflow(reg: FieldRegistry) -> None:
+    # Sibling of "innocent-max-ceiling-start-not-blamed" above, but for an
+    # EXACT (fully microsecond-specified) start instant rather than an
+    # ambiguous whole-day one: 9999-12-31 23:59:59.999999 (exact) genuinely
+    # swaps with the year-only "9999" end bound here (unlike the ambiguous
+    # '9999-12-31' sibling, which does not swap), landing the exact value
+    # at hi_naive.
+    #
+    # Before start_exact/end_exact followed the swap (see
+    # test_backwards_swap_carries_exactness_with_the_value), this used
+    # end_exact's STALE, pre-swap value (raw_end = "9999", ambiguous, so
+    # False) to decide whether hi_naive needed the exclusive-ceiling
+    # +1-microsecond bump. hi_naive was actually the exact start value by
+    # then, which needs no such bump; adding one to
+    # 9999-12-31 23:59:59.999999 overflowed past datetime.max and raised a
+    # bogus BAD_DATE blaming "9999", even though every value the user typed
+    # was individually representable. Now that end_exact follows the swap,
+    # the exact value is recognized as exact and no adjustment applies.
+    res = dparse("added:['9999-12-31 23:59:59.999999' to 9999]", reg)
+    assert not res.diagnostics
+    assert isinstance(res.ast, ast.DateRange)
+    assert res.ast.incl_hi is True
+    assert res.ast.hi == datetime(9999, 12, 31, 22, 59, 59, 999999, tzinfo=UTC)
 
 
 def test_range_bad_start_diagnostic(reg: FieldRegistry) -> None:

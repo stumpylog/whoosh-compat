@@ -281,6 +281,19 @@ material; they are permanently documented, each with its rationale, in
   does not make one instance safe to call `parse()` on concurrently from
   multiple threads, which the class docstrings now say explicitly.
 
+- A backwards date range with two explicit years swaps its bounds in the
+  joint-disambiguation step (`parser/dateparse.py`, whoosh's own range
+  heuristic), and each bound's timezone was already carried across that
+  swap (`start_tz`/`end_tz`), but each bound's *exactness*
+  (`start_exact`/`end_exact` -- whether it needs the exclusive-upper-bound
+  `+1`-microsecond adjustment) was not. So `created:[2019 TO
+  20200615120000123456]` (an exact end instant, never swaps) and its
+  reversed spelling `created:[20200615120000123456 TO 2019]` (a genuine
+  swap) disagreed on `incl_hi`/`hi` for the identical pair of values, and
+  in at least one case the stale exactness caused a spurious
+  exclusive-ceiling overflow (`BAD_DATE`) on a value that was
+  individually representable, misattributed to the wrong bound.
+  `start_exact`/`end_exact` now swap alongside `start_tz`/`end_tz`.
 - `TantivyEmitter._json_paths_supported()`'s probe (does the installed
   `tantivy-py`'s `Query.term_query` resolve a JSON subpath directly)
   was cached only on the emitter instance, but `emit()` builds a fresh
