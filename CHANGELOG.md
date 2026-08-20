@@ -8,7 +8,7 @@ Intentional behavioral differences from real Whoosh are not changelog
 material; they are permanently documented, each with its rationale, in
 [DIVERGENCES.md](./DIVERGENCES.md).
 
-## [0.2.0] - 2026-08-19
+## [0.2.0] - 2026-08-20
 
 ### Breaking
 
