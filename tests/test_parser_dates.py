@@ -393,6 +393,27 @@ def test_now_keyword(reg: FieldRegistry) -> None:
     assert r.incl_hi
 
 
+def test_now_followed_by_unquoted_offset_words_reads_as_now_plus_free_text(
+    reg: FieldRegistry,
+) -> None:
+    # A trap the quoting rules above exist to avoid: unlike a quoted or
+    # bracketed relative offset, "now - 3 days" (unquoted, space-separated)
+    # never reaches the offset grammar at all. Whitespace ends the value at
+    # "now" (a zero-width instant, see test_now_keyword), and "-", "3",
+    # "days" become three ordinary free-text terms ANDed alongside it, not
+    # part of the date. No diagnostic is raised anywhere in this.
+    r = dparse("added:now - 3 days", reg)
+    assert not r.diagnostics
+    node = r.ast
+    assert isinstance(node, ast.And)
+    assert len(node.children) == 4
+    date_children = [c for c in node.children if isinstance(c, ast.DateRange)]
+    assert len(date_children) == 1
+    assert date_children[0].lo == date_children[0].hi == BASE.astimezone(UTC)
+    term_texts = {c.text for c in node.children if isinstance(c, ast.Term)}
+    assert term_texts == {"-", "3", "days"}
+
+
 @pytest.mark.parametrize(
     ("query", "hour", "minute", "second"),
     [
@@ -466,6 +487,21 @@ def test_compact_numeric_datetime_progressive_partial(reg: FieldRegistry) -> Non
     r = dparse("added:'202003'", reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == datetime(2020, 3, 1, tzinfo=BERLIN).astimezone(UTC)
+
+
+def test_compact_numeric_datetime_full_width_is_a_single_second_instant(
+    reg: FieldRegistry,
+) -> None:
+    # The full-width (14-digit) spelling of the same "simple" sequence
+    # (year+month+day+hour+minute+second, no separators) is a single
+    # second-precision instant, not the whole day the 8-digit prefix above
+    # resolves to.
+    r = dparse("added:'20050304153000'", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2005, 3, 4, 15, 30, 0, tzinfo=BERLIN).astimezone(UTC)
+    assert r.hi == r.lo + timedelta(seconds=1)
+    assert r.incl_lo
+    assert not r.incl_hi
 
 
 # --- plusdate / nowcompact (Combo/PlusMinus grammar) -----------------------
