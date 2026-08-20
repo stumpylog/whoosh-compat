@@ -60,3 +60,40 @@ def test_operator_chain_below_the_cap_still_parses(registry: FieldRegistry) -> N
         tz=UTC,
     )
     assert not result.diagnostics
+
+
+def test_flat_prefix_nots_are_not_capped(registry: FieldRegistry) -> None:
+    """Prefix NOT builds a NotGroup per operator, but as siblings: each wraps
+    one node and none nests inside another, so 200+ of them add depth 1 in
+    total. They are deliberately excluded from do_operators' count, which
+    keys on InfixOperator rather than Operator. Widening that predicate to
+    all Operators (NotGroup is a Wrapper, so merging is False) would make
+    this query report TOO_DEEP, which is why this test exists.
+    """
+    q = " AND ".join(["NOT a"] * 250)
+
+    result = parse(q, registry=registry, default_fields=["content"], tz=UTC)
+
+    assert not result.diagnostics
+
+
+@pytest.mark.parametrize(
+    ("operands", "expect_too_deep"),
+    [(200, False), (201, True)],
+)
+def test_andnot_chain_cap_boundary(
+    registry: FieldRegistry,
+    operands: int,
+    expect_too_deep: bool,
+) -> None:
+    """The cap trips at _MAX_GROUP_NESTING_DEPTH (200) operators, i.e. 201
+    operands, and one operator below that still parses clean.
+    """
+    q = " ANDNOT ".join(["a"] * operands)
+
+    result = parse(q, registry=registry, default_fields=["content"], tz=UTC)
+
+    kinds = [d.kind for d in result.diagnostics]
+    assert (DiagnosticKind.TOO_DEEP in kinds) is expect_too_deep
+    if not expect_too_deep:
+        assert not result.diagnostics

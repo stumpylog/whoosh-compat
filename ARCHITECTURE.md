@@ -460,8 +460,10 @@ recursively (the tag/filter pipeline's own filters, `GroupNode.query()`, and
 proportional to depth. Left unbounded, `parse()` would eventually
 `RecursionError` instead of returning a `ParseResult`, which is exactly the
 invariant this section opens with breaking. Two stages construct hierarchy,
-and both bound it at `_MAX_GROUP_NESTING_DEPTH` (200), each as early as it
-can see the depth coming.
+and each bounds *its own* contribution at `_MAX_GROUP_NESTING_DEPTH` (200),
+as early as it can see the depth coming. Neither bounds total depth: both
+caps are per group, and they can still compound along a nesting path — see
+"what the caps do not cover" below.
 
 `GroupPlugin.do_groups` (`parser/plugins.py`) turns flat `(`/`)` markers into
 real tree hierarchy: past 200 unclosed levels, further nesting is
@@ -485,6 +487,21 @@ operators (`NOT`) wrap one node each without nesting and are likewise not
 counted. `do_operators`' descent into subgroups is an explicit work stack
 rather than recursion, so hierarchy reaching it from any source cannot
 exhaust frames on the way down.
+
+**What the caps do not cover.** Both caps count within a single flat group,
+so a query that nests groups which *each* stay under the cap can still build
+a tree deeper than 200: 20 levels of parens, each holding a 50-operator
+`ANDNOT` chain, is ~1000 levels of `AndNotGroup` from under 10KB of input, and
+`GroupNode.query()`/`BinaryGroup.query()` (`parser/syntax.py`) still recurse
+once per level, so that input does `RecursionError` out of `parse()`. This is
+long-standing behaviour, not something the operator cap introduced or
+regressed, and the paren cap has the same shape of hole. The backstop for it
+is not another cap but an exception boundary around the parse pipeline,
+turning any unexpected exception into a `QueryParserError` rather than
+letting a bare `RecursionError` escape to the caller; the caps' job is to
+keep the *ordinary*
+pathological shapes (a long chain, a deep pile of parens) out of that
+backstop entirely and give them a real `TOO_DEEP` diagnostic instead.
 
 200 was chosen with a wide safety
 margin: confirmed directly against both the pinned real-whoosh oracle and

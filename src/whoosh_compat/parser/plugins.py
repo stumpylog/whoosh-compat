@@ -65,14 +65,22 @@ TaggerEntry = tuple[Tagger, int]
 FilterFn = Any
 FilterEntry = tuple[FilterFn, int]
 
-# Maximum depth of tree hierarchy this parser will materialize. Two stages
-# construct hierarchy, and both enforce this cap: GroupPlugin.do_groups (one
-# level per unclosed "(") and OperatorsPlugin.do_operators (one level per
-# non-merging operator -- ANDNOT/ANDMAYBE/REQUIRE/NOT -- since
-# Operator.replace_self() builds a new group for each, while merging groups
-# like AND/OR absorb their neighbour into one flat group and so add no depth
-# at all). Not a whoosh concept: whoosh (and this parser's own
-# tag/filter pipeline, and ast.normalize() before it became iterative) all
+# Maximum depth of tree hierarchy this parser will materialize per group.
+# Two stages construct hierarchy and each caps its own: GroupPlugin.do_groups
+# (one level per unclosed "(") and OperatorsPlugin.do_operators (one level
+# per non-merging *infix* operator -- ANDNOT/ANDMAYBE/REQUIRE -- since
+# InfixOperator.replace_self() nests the previous result inside a new group
+# for each). Merging groups (AND/OR) absorb their neighbour into one flat
+# group and add no depth; the prefix/postfix operators (NOT) wrap one node
+# each as siblings rather than nesting. Neither is counted: widening
+# do_operators' predicate from InfixOperator to Operator would start
+# reporting TOO_DEEP for 200 flat NOTs (tests/test_parse_depth_limits.py
+# pins this). Both caps are per group, not over a whole nesting path, so
+# parens nesting groups that each hold an operator chain still compound
+# them -- see ARCHITECTURE.md.
+#
+# Not a whoosh concept: whoosh (and this parser's own tag/filter pipeline,
+# and ast.normalize() before it became iterative) all
 # eventually RecursionError on pathologically deep nesting, just at
 # interpreter-recursion-limit-dependent depths nobody chose on purpose
 # (confirmed directly against both the pinned real-whoosh oracle and this
