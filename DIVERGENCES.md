@@ -1957,34 +1957,54 @@ parse-then-emit pipeline).
     `test_no_separator_t_value_is_a_result_level_divergence`.
 
 51. **A range whose start is a bare time of day and whose end is already a
-    concrete instant (`added:"noon to now"`, `added:[noon TO now]`) is
-    diagnosed as a BAD_DATE instead of crashing with an `AttributeError`
-    (whoosh-bug, not reproduced).** Whoosh's range disambiguation resolves a
-    date-less start against the end's date, and to decide whether copying
-    the end's month/day would invert the range it compares
-    `start.floor().time()` with `end.ceil().time()`. `ceil()` is an
-    `adatetime` method: it exists only while a bound is still ambiguous. The
-    `now` keyword (and anything else that resolves straight to a concrete
-    `datetime`) reaches that line fully specified, so whoosh calls `ceil()`
-    on a plain `datetime` and raises `AttributeError: 'datetime.datetime'
-    object has no attribute 'ceil'` out of the parser. That is a defect, not
-    intended semantics, and this fork's bar is that confirmed whoosh bugs
-    are not reproduced -- least of all ones that break `parse()`'s "never
-    raises for query input" invariant. `parser/times.py`'s
-    `timespan.disambiguated` therefore raises the grammar's own `TimeError`
-    for that combination, which `DateParserPlugin` turns into
-    `Diagnostic(kind=BAD_DATE)` and an `ErrorLeaf`, like any other unusable
-    date value. Reading the concrete bound through the module-level `ceil()`
-    helper (which passes a `datetime` straight through) would have been the
-    other option, but that invents a range semantics whoosh has never had,
-    so the conservative "this input has no meaning here" answer is the one
-    taken. Only this one asymmetric shape is affected: a range whose bounds
-    are both still ambiguous (`added:[noon to 3am]`, `added:[3pm to 10am]`)
-    never reaches the guard and resolves exactly as before.
+    concrete instant (`added:"noon to now"`, `added:[noon TO now]`,
+    `added:[noon TO -1 week]`) resolves normally; real whoosh crashes with
+    `AttributeError` on every such query (whoosh-bug, not reproduced).**
+    Whoosh's range disambiguation resolves a date-less start against the
+    end's date, and to decide whether copying the end's month/day would
+    invert the range it compares `start.floor().time()` with
+    `end.ceil().time()`. `ceil()` is an `adatetime` method: it exists only
+    while a bound is still ambiguous. The `now` keyword (and anything else
+    that resolves straight to a concrete `datetime`, such as a `-1 week`
+    offset) reaches that line fully specified, so whoosh calls `ceil()` on a
+    plain `datetime` and raises `AttributeError: 'datetime.datetime' object
+    has no attribute 'ceil'` out of the parser. Confirmed directly against
+    the real package for all three spellings above.
+
+    That is a defect, not intended semantics, and this fork's bar is that
+    confirmed whoosh bugs are not reproduced. The query itself is perfectly
+    answerable -- a time-of-day lower bound with a concrete upper bound is
+    an ordinary, meaningful range, and "noon today until now" is plainly
+    what it asks for -- so returning a diagnostic for it would reproduce the
+    *effect* of the bug (the query still doesn't work) while only changing
+    the failure mode from a crash to a 400. Instead `parser/times.py`'s
+    `timespan.disambiguated` reads both sides through the module-level
+    `floor()`/`ceil()` helpers, which pass an already-concrete `datetime`
+    straight through, so the comparison works for either kind of bound and
+    the range resolves.
+
+    Resolved semantics, with `now` = 2026-08-19 15:30 UTC:
+    `added:[noon TO now]` -> 2026-08-19 12:00 through 15:30 inclusive;
+    `added:"noon to now"` -> the same lower bound with the exclusive
+    +1-microsecond upper bound the quoted `to` form always takes;
+    `added:[noon TO -1 week]` -> 2026-08-12 12:00 through 2026-08-12 15:30.
+    When `now` falls *earlier* in the day than the lower bound (a pre-noon
+    `now` for `noon to now`), whoosh's own overnight rule for time-only
+    bounds carries the upper bound past midnight rather than inverting the
+    range -- the same rule already visible in `added:[3pm to 10am]`. The
+    range is well-formed (lower bound below upper) in every case.
+
+    Only this one asymmetric shape is affected: a range whose bounds are
+    both still ambiguous (`added:[noon to 3am]`, `added:[3pm to 10am]`)
+    never took the crashing path and resolves exactly as before. There is
+    no differential-corpus coverage and no allowlist entry, and there cannot
+    be: the oracle harness parses through real whoosh, which raises on these
+    inputs, so there is no oracle value to compare against.
 
     Test references: `tests/test_parser_period_keywords.py`'s
-    `test_period_keyword_with_a_time_is_a_bad_date` (its
-    `added:"noon to now"` case).
+    `test_time_of_day_lower_bound_against_a_concrete_upper_bound_resolves`,
+    `test_time_of_day_lower_bound_before_noon_carries_past_midnight` and
+    `test_time_of_day_lower_bound_against_a_relative_upper_bound_resolves`.
 
 52. **A period keyword written together with a time of day
     (`added:"previous week 3pm"`, `added:"3pm previous week"`,

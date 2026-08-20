@@ -1036,16 +1036,12 @@ class DateParserPlugin(Plugin):
         text: str = node.text  # type: ignore[attr-defined]
         try:
             return self._text_to_node(node, spec, text)
-        except (ValueError, OverflowError, TimeError):
+        except (ValueError, OverflowError):
             # Years at the edges of what datetime can represent (year 0, or
             # year 9999 whose exclusive ceiling lands past datetime.max)
             # fail in the arithmetic rather than in the grammar. Parsing
             # reports bad input through diagnostics, so treat these as an
-            # unrecognizable date like any other. TimeError covers the
-            # disambiguation pass's own "these parts don't combine" signal
-            # (times.py: a period keyword written with a time of day), which
-            # the grammar elements above catch for themselves but which
-            # DateParser.date_from's post-parse disambiguation does not.
+            # unrecognizable date like any other.
             return self._error(node, text, spec)
 
     def _text_to_node(
@@ -1093,7 +1089,7 @@ class DateParserPlugin(Plugin):
     def range_to_node(self, node: syntax.RangeNode, spec: FieldSpec) -> syntax.SyntaxNode:
         try:
             return self._range_to_node(node, spec)
-        except (ValueError, OverflowError, TimeError):
+        except (ValueError, OverflowError):
             # See text_to_node: a bound at the edge of datetime's range
             # fails in the arithmetic, and must diagnose rather than raise.
             # _range_to_node itself catches and attributes failures on a
@@ -1146,7 +1142,7 @@ class DateParserPlugin(Plugin):
                 start_tz = UTC
             try:
                 raw_start = bound_parser.date_from(start_text, local_now)
-            except (ValueError, OverflowError, TimeError):
+            except (ValueError, OverflowError):
                 return self._error(node, node.start, spec)
             if raw_start is None:
                 return self._error(node, node.start, spec)
@@ -1156,7 +1152,7 @@ class DateParserPlugin(Plugin):
                 end_tz = UTC
             try:
                 raw_end = bound_parser.date_from(end_text, local_now)
-            except (ValueError, OverflowError, TimeError):
+            except (ValueError, OverflowError):
                 return self._error(node, node.end, spec)
             if raw_end is None:
                 return self._error(node, node.end, spec)

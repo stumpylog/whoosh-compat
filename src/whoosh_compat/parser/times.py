@@ -350,20 +350,19 @@ class timespan:
             start_dm = not (start.month is None and start.day is None)
             end_dm = not (end.month is None and end.day is None)
             if end_dm and not start_dm:
-                if isinstance(end, datetime):
-                    # ``end`` reaches here fully concrete (a plain datetime,
-                    # e.g. the "now" keyword) whenever the start is a bare
-                    # time of day, as in "noon to now" -- and a datetime has
-                    # no ceil(). Whoosh raises AttributeError here; this fork
-                    # doesn't reproduce confirmed whoosh bugs, and parsing
-                    # reports bad input through diagnostics rather than
-                    # exceptions, so report it as an unusable date
-                    # (see DIVERGENCES.md).
-                    raise TimeError(f"can't resolve the start of {start!r} against {end!r}")
                 # ``start`` is only mutated below when it is an adatetime
                 # instance (guaranteed by the has_no_date/*_dm checks above),
-                # never a plain (immutable) datetime object.
-                if start.floor().time() > end.ceil().time():  # type: ignore[union-attr]
+                # never a plain (immutable) datetime object. ``end``, by
+                # contrast, does reach here fully concrete (a plain datetime,
+                # e.g. the "now" keyword, or a "-1 week" offset) whenever the
+                # start is a bare time of day, as in "noon to now" -- and a
+                # datetime has no ceil() method, which is why whoosh raises
+                # AttributeError on exactly that shape. Read both sides
+                # through the module-level floor()/ceil() helpers, which pass
+                # an already-concrete datetime straight through, so the
+                # comparison works for either kind of bound
+                # (see DIVERGENCES.md entry 51).
+                if floor(start).time() > ceil(end).time():
                     start.month = basedate.month  # type: ignore[misc]
                     start.day = basedate.day  # type: ignore[misc]
                 else:
