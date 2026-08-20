@@ -50,6 +50,28 @@ matter only to someone who installed from a git revision before this release
   `ValueError` from tantivy-py still reaches `emit`'s backstop as
   `BACKEND_REJECTED`, so a genuine library defect is not hidden behind a
   400.
+- `FieldSpec.pattern_normalizer` may now return *several* forms of a
+  pattern fragment, not just one. Its type is the new exported
+  `PatternNormalizer` alias, `Callable[[str], str | Sequence[str]]`, and the
+  emitter matches a term satisfying any returned form (deduplicated, ORed
+  into one non-capturing alternation group per literal run). A normalizer
+  returning a bare `str` keeps its old meaning exactly -- one form, and the
+  same regex as before, character for character -- so no existing host is
+  required to change anything; it is listed as breaking because the declared
+  type changed and a host annotating its own callable must widen the
+  annotation. Returning an empty sequence is a new, meaningful answer: no
+  term can match that fragment, and the pattern as a whole then matches
+  nothing.
+
+  This exists because a single normalized string cannot address a stemmed
+  index. English Snowball substitutes rather than truncates, so `company*`
+  only reaches the indexed term through the stem (`compani`) while `copy*`
+  only reaches `copyright` through the run as typed, and the two words are
+  the same morphological class, so no rule over one string tells them apart.
+  A host with a stemmed field should now return both the folded run and its
+  stem. Inside a bracket class the normalizer is still consulted per
+  character and applied only when it answers with exactly one
+  single-character form; see DIVERGENCES.md entry 2.
 - `FieldSpec(kind=FieldKind.DATE, date_only=False)` (or omitting
   `date_only`, its default) is now a `ValueError` at `FieldRegistry`
   construction instead of being silently rewritten to `date_only=True` via

@@ -40,6 +40,7 @@ from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 from whoosh_compat.fields import Multitoken
+from whoosh_compat.fields import PatternNormalizer
 from whoosh_compat.fields import SubpathSpec
 from whoosh_compat.parser.dateparse import DateParserPlugin
 from whoosh_compat.parser.default import MultifieldParser
@@ -58,6 +59,7 @@ __all__ = [
     "FieldSpec",
     "Multitoken",
     "ParseResult",
+    "PatternNormalizer",
     "QueryError",
     "QueryParserError",
     "SubpathSpec",

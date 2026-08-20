@@ -24,8 +24,8 @@ import contextlib
 import dataclasses
 import re
 import weakref
-from collections.abc import Callable
 from collections.abc import Iterator
+from collections.abc import Sequence
 from datetime import UTC
 from datetime import datetime
 from typing import NoReturn
@@ -42,6 +42,7 @@ from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import Multitoken
+from whoosh_compat.fields import PatternNormalizer
 from whoosh_compat.fields import ResolvedField
 
 _FALSY_TEXT = ("f", "false", "no", "0")
@@ -122,7 +123,51 @@ _EMPTY_CLASS = "(?!)"
 _CLASS_FOLD_LENGTH_MSG = "pattern_normalizer changed a bracket class's length"
 
 
-def _normalize_class_body(body: str, normalize: Callable[[str], str]) -> str:
+def _alternatives(normalize: PatternNormalizer, text: str) -> tuple[str, ...]:
+    """The forms of ``text`` a term may match, deduplicated, in order.
+
+    ``pattern_normalizer`` returns either one form (a bare ``str``) or
+    several (a ``Sequence[str]``); see ``fields.PatternNormalizer``. A bare
+    ``str`` is one alternative, *not* one alternative per character: ``str``
+    satisfies ``Sequence[str]``, so a normalizer written against the older
+    ``Callable[[str], str]`` contract still type-checks against the new one
+    and must keep meaning what it always meant.
+
+    Deduplication is correctness, not tidiness. The equal case is the common
+    one: every non-stemming field, and every word a stemmer leaves alone,
+    yields the same string twice, and the caller must emit one regex branch
+    for it rather than "x|x".
+
+    An empty tuple is a real answer and means no term can match this
+    fragment; ``_alternation`` turns it into the caller's matches-nothing
+    signal.
+    """
+    result = normalize(text)
+    if isinstance(result, str):
+        return (result,)
+    return tuple(dict.fromkeys(result))
+
+
+def _alternation(alternatives: Sequence[str]) -> str | None:
+    """Regex-escape ``alternatives`` into one fragment, or ``None`` for none.
+
+    One alternative escapes to exactly the fragment this function's
+    single-form predecessor emitted, so a normalizer that returns a plain
+    string (or none at all) produces a byte-identical regex to before this
+    seam existed. Several become one non-capturing alternation group: a
+    *local* widening of the one fragment, so a pattern with several literal
+    runs costs the sum of their alternatives rather than the product.
+    tantivy's regex engine (regex-automata via tantivy_fst) accepts
+    ``(?:a|b)``; verified against a live index, not assumed.
+    """
+    if not alternatives:
+        return None
+    if len(alternatives) == 1:
+        return re.escape(alternatives[0])
+    return "(?:" + "|".join(re.escape(alt) for alt in alternatives) + ")"
+
+
+def _normalize_class_body(body: str, normalize: PatternNormalizer) -> str:
     """``normalize`` applied to a bracket class's body, one character at a time.
 
     The characters inside a class are index terms exactly like a literal run's
@@ -132,11 +177,11 @@ def _normalize_class_body(body: str, normalize: Callable[[str], str]) -> str:
     *per character*, and the length is preserved so the caller can keep using
     fnmatch's own offsets into the class it cut out.
 
-    Per character rather than as one string, and skipping any character whose
-    normalized form is not exactly one character, because a
-    ``pattern_normalizer`` is not necessarily a pure case fold: paperless-ngx
-    supplies ``ascii_fold(text.lower())``, and ascii-folding expands single
-    letters into several ("ß" -> "ss", "æ" -> "ae"). Folding a range endpoint
+    Per character rather than as one string, and skipping any character that
+    does not normalize to exactly one alternative of exactly one character,
+    because a ``pattern_normalizer`` is not necessarily a pure case fold:
+    paperless-ngx supplies ``ascii_fold(text.lower())``, and ascii-folding
+    expands single letters into several ("ß" -> "ss", "æ" -> "ae"). Folding a range endpoint
     that way would turn ``[ß-z]`` into ``[ss-z]``: no longer that range, or any
     range. A multi-character fold of a plain class *member* is not the same
     failure but has no good answer either: a class matches exactly one
@@ -146,6 +191,19 @@ def _normalize_class_body(body: str, normalize: Callable[[str], str]) -> str:
     therefore leave the character as the user typed it: that can lose a match
     the host's folded index would have had, which is a bounded and honest
     outcome, where a corrupted class is silently the wrong query.
+
+    A normalizer returning *several* alternatives for a character (a stemmer
+    composed with a fold, say) gets the same answer, and for the same reason
+    the multi-character case does: a class position matches exactly one
+    character, so "one of a, or one of the forms of b" is not expressible as
+    a class at all, and widening it into extra class members would change the
+    body's length, which every offset below is taken against. An empty
+    sequence lands here too: on the literal path it means the fragment can
+    never match, but a class member that never matches is just one member
+    fewer, and dropping it would again change the length. The one case that
+    applies is the one that cannot corrupt anything: exactly one alternative,
+    exactly one character long. That is also the case a stemmer produces for
+    a single character, which it leaves alone.
 
     A *single*-character remap onto class syntax ("-" or "\\") is allowed to
     apply, and that is a decision rather than an oversight. It is reachable,
@@ -171,13 +229,13 @@ def _normalize_class_body(body: str, normalize: Callable[[str], str]) -> str:
     """
     out: list[str] = []
     for ch in body:
-        folded = normalize(ch)
-        out.append(folded if len(folded) == 1 else ch)
+        folded = _alternatives(normalize, ch)
+        out.append(folded[0] if len(folded) == 1 and len(folded[0]) == 1 else ch)
     return "".join(out)
 
 
 def _translate_class(
-    pattern: str, i: int, n: int, normalize: Callable[[str], str], last_close: int
+    pattern: str, i: int, n: int, normalize: PatternNormalizer, last_close: int
 ) -> tuple[str | None, int]:
     """Translate the bracket expression starting just after a ``[`` at ``i-1``.
 
@@ -331,15 +389,16 @@ def _translate_class(
     return f"[{stuff}]", j + 1
 
 
-def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str | None:
+def glob_to_regex(pattern: str, normalizer: PatternNormalizer | None) -> str | None:
     """Translate an fnmatch-style glob into a tantivy regex, or ``None``
-    when the glob provably matches nothing (it contains an empty bracket
-    class, whose empty language poisons the whole concatenation). The
-    ``None`` signal is out-of-band on purpose: fnmatch's own spelling of
-    the same fact is a lookahead fragment tantivy's regex engine cannot
-    parse, and recognizing it inside the finished regex by substring would
-    false-positive on a legitimate class body spelling the same characters
-    (``a[(?!)]b``).
+    when the glob provably matches nothing. Two things say that: an empty
+    bracket class, whose empty language poisons the whole concatenation,
+    and a normalizer answering a literal run with *no* alternatives, which
+    says the same thing about that run. The ``None`` signal is out-of-band
+    on purpose: fnmatch's own spelling of the same fact is a lookahead
+    fragment tantivy's regex engine cannot parse, and recognizing it inside
+    the finished regex by substring would false-positive on a legitimate
+    class body spelling the same characters (``a[(?!)]b``).
 
     Whoosh's ``query.Wildcard`` compiles its pattern with
     ``fnmatch.translate``, so fnmatch: not a naive split on ``*``/``?``:
@@ -352,7 +411,10 @@ def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str 
       analyzed/indexed term text. That means whole literal runs and, one
       character at a time, bracket-class bodies (see
       ``_normalize_class_body``); ``*``, ``?`` and the class delimiters
-      themselves are syntax and are passed through as such.
+      themselves are syntax and are passed through as such. A run whose
+      normalizer offers several alternatives becomes an alternation group
+      over them (see ``_alternation``), so a pattern can match a term that
+      satisfies the run as typed *or* its stem.
     * No anchoring. ``fnmatch.translate`` emits ``(?s:...)\\z`` framing, and
       newer CPython versions also emit atomic groups (``(?>.*?foo)``) as a
       backtracking optimization. tantivy's regex engine (regex-automata, via
@@ -360,15 +422,25 @@ def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str 
       support atomic groups, so the framing is dropped and ``*`` is emitted as
       a plain ``.*``.
     """
-    normalize: Callable[[str], str] = normalizer if normalizer is not None else (lambda s: s)
+    normalize: PatternNormalizer = normalizer if normalizer is not None else (lambda s: s)
 
     out: list[str] = []
     literal: list[str] = []
+    # Set by flush() when a run has no alternatives at all. Flagged rather
+    # than returned because flush() is called from four places and the
+    # answer is the same at every one; the loop may keep appending after it
+    # is set, since the assembled regex is then discarded unread.
+    impossible = False
 
     def flush() -> None:
+        nonlocal impossible
         if literal:
-            out.append(re.escape(normalize("".join(literal))))
+            fragment = _alternation(_alternatives(normalize, "".join(literal)))
             literal.clear()
+            if fragment is None:
+                impossible = True
+            else:
+                out.append(fragment)
 
     i, n = 0, len(pattern)
     # Where the last bracket class could possibly end, computed once here and
@@ -406,6 +478,8 @@ def glob_to_regex(pattern: str, normalizer: Callable[[str], str] | None) -> str 
         else:
             literal.append(c)
     flush()
+    if impossible:
+        return None
     return "".join(out)
 
 
@@ -1053,9 +1127,15 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         self._reject_pattern_incompatible_kind(resolved)
         spec = resolved.spec
         text = str(node.text)
-        if spec.pattern_normalizer is not None:
-            text = spec.pattern_normalizer(text)
-        return self._regex_query(resolved, re.escape(text) + ".*", node)
+        if spec.pattern_normalizer is None:
+            fragment: str | None = re.escape(text)
+        else:
+            fragment = _alternation(_alternatives(spec.pattern_normalizer, text))
+        if fragment is None:
+            # The normalizer offered no form this run could take, the same
+            # "provably matches nothing" answer glob_to_regex spells as None.
+            return tantivy.Query.empty_query()
+        return self._regex_query(resolved, fragment + ".*", node)
 
     def visit_wildcard(self, node: ast.Wildcard) -> tantivy.Query:
         resolved = self._resolve(node.field)

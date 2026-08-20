@@ -22,8 +22,22 @@ parse, emit, search, `tests/emitter/test_acceptance_e2e.py`) test suites.
    character of the pattern, literal runs and bracket-class bodies alike
    (`title:BILL[I]NG*` matches whatever `title:BILLING*` matches), matching
    real whoosh's model of folding the whole pattern text before handing it
-   to fnmatch. Two qualifications, both inside a bracket class, and both
-   erring toward reading the pattern as typed:
+   to fnmatch.
+
+   The normalizer may also answer with *several* forms of a fragment
+   (`FieldSpec.pattern_normalizer` returns `str | Sequence[str]`), and the
+   emitter then matches a term satisfying any of them. That widens the same
+   divergence rather than adding a new one, and exists because a host whose
+   index is stemmed cannot pick one form: English Snowball substitutes
+   rather than truncates, so `company*` needs the stem (`compani`) to reach
+   the indexed term while `copy*` needs the run as typed to reach
+   `copyright`, and 3.5% of a 4,977-word vocabulary stems to something that
+   is not a prefix of itself. Real whoosh, matching raw index terms, found
+   neither. Equal forms collapse to one regex branch, so a host that returns
+   one form (or none at all) gets byte-identical output to before.
+
+   Three qualifications, all inside a bracket class, and all erring toward
+   reading the pattern as typed:
 
    - A `pattern_normalizer` that expands a single character into several
      (paperless-ngx supplies `ascii_fold(text.lower())`, which maps `ß` ->
@@ -34,6 +48,15 @@ parse, emit, search, `tests/emitter/test_acceptance_e2e.py`) test suites.
      pattern under-matches rather than silently meaning something else.
      Outside a class the same character folds normally, since a literal run
      has room for the expansion.
+   - A normalizer offering *several* alternatives for a character (or none)
+     is likewise not applied inside a class, for the same reason and with
+     the same outcome: a class position matches exactly one character, so an
+     alternation cannot live there, and adding or dropping members would
+     change the body's length, which every fnmatch offset in the translation
+     is taken against. Only a single one-character alternative applies. A
+     stemmer leaves single characters alone, so this qualification costs a
+     realistic host nothing; the pattern under-matches rather than silently
+     meaning something else.
    - The class's extent is found *before* the fold, so a character the
      normalizer maps onto `[` or `]` (`ascii_fold` maps the fullwidth `［`
      and `］` that way) can neither open a class nor close one; it is only

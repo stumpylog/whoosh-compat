@@ -311,18 +311,40 @@ Two separate callables on `FieldSpec`, deliberately not unified into one:
   chain (lowercase, ASCII-fold, stemming, stopword removal, whatever the
   host's index-time analyzer does) applied to `Term`/`Phrase` query text at
   emit time, so query tokens match what's actually in the index.
-- **`pattern_normalizer`** (`Callable[[str], str]`): a *lighter*,
-  character-level-only transform (lowercase + ASCII-fold, no tokenization,
-  **never stemming**) applied to the literal segments of `Wildcard`/`Prefix`
-  patterns.
+- **`pattern_normalizer`** (`PatternNormalizer`, i.e.
+  `Callable[[str], str | Sequence[str]]`): a *lighter*, character-level
+  transform (lowercase + ASCII-fold, no tokenization) applied to each
+  literal segment of a `Wildcard`/`Prefix` pattern. It may return **one**
+  form of the segment (a bare `str`) or **several alternatives** (a
+  sequence); the emitter matches a term satisfying *any* of them.
 
-These have to be different callables: index terms for a stemmed field are
-themselves stems, but running a stemmer over a wildcard's literal prefix
-(e.g. the `entwä` in `Entwä*`) would mangle it before the glob/prefix match
-even runs. This means **wildcards over a stemmed index inherit the same
-caveat Whoosh itself always had**: a wildcard pattern matches raw (folded,
-not stemmed) index terms, so `run*` will not match a document whose only
-related token was stemmed down to `ran`.
+These have to be different callables. The analyzer answers "what tokens does
+this *value* become"; the pattern normalizer answers "what could this
+*fragment of a glob* look like in the index", which is not the same question:
+a fragment is usually not a word (`inv*oices`), it can never be split into
+several tokens or dropped, and inside a bracket class it has to stay exactly
+one character long.
+
+The alternatives are what let a pattern reach a **stemmed** index without
+giving up the spelling the user typed. English Snowball substitutes rather
+than truncates, so neither form alone is enough: `company` stems to
+`compani` (only the stem finds the indexed term) while `copyright` is its own
+stem (only the typed run finds it). A host with a stemmed field returns both
+forms and gets both documents; measured over a 4,977-word vocabulary, 3.5% of
+words stem to something that is not a prefix of themselves, so no
+"use the stem when ..." rule over a single string separates the two cases.
+Each literal run alternates independently, so a many-run pattern costs the
+*sum* of its alternatives, not the product.
+
+Two properties of the seam survive that widening. Inside a bracket class the
+normalizer is still applied one character at a time and only when it answers
+with exactly one alternative exactly one character long (a class position
+matches one character, and every offset in the glob translation is taken
+against the body's length). And a normalizer is never asked to be
+*correct* on a fragment that is not a word: stemming `oices` (from
+`inv*oices`) is morphological nonsense, but as an *added* alternative it can
+only widen the match, never move it, which is why alternatives replaced the
+single-string form rather than joining it.
 
 ### Timezone handling
 

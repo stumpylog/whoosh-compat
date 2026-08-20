@@ -446,24 +446,42 @@ later, once a host presents a real query that under-matches because of the
 first consequence, is a deliberate product decision and deferred until then.
 
 `FieldSpec.pattern_normalizer` is a second, narrower callable used only for
-the *term* characters of `Wildcard`/`Prefix` patterns: character-level only
-(lowercase, ASCII-fold), **never stemming or tokenization**. Term characters
-means whole literal runs and, one character at a time, the body of a bracket
-character class (`BILL[I]NG*` folds to `bill[i]ng.*`: a class member is an
-index character exactly as a literal run's characters are). The per-character
+the *term* characters of `Wildcard`/`Prefix` patterns: character-level
+(lowercase, ASCII-fold), never tokenization. Term characters means whole
+literal runs and, one character at a time, the body of a bracket character
+class (`BILL[I]NG*` folds to `bill[i]ng.*`: a class member is an index
+character exactly as a literal run's characters are). The per-character
 application inside a class is deliberate: a normalizer may expand one
 character into several (`ascii_fold` maps `ß` -> `ss`), which a range endpoint
 cannot survive and a class cannot express, so such characters are left exactly
 as typed rather than corrupting the class. See `_normalize_class_body` in the
-tantivy emitter. The two
-callables can't be unified: index terms on a stemmed field are themselves
-stems, but a wildcard's literal prefix has to stay literal for the
-glob-to-regex translation to mean what the user typed. Running a stemmer
-over `entwä` (from `Entwä*`) before pattern-matching would corrupt it. The
-practical consequence (inherited honestly from Whoosh itself, which had the
-same property) is that a wildcard query against a stemmed field only
-matches *unstemmed* index tokens; see the README's "analyzer /
-pattern_normalizer seam" section for the concrete example.
+tantivy emitter.
+
+Its type is `PatternNormalizer` (`Callable[[str], str | Sequence[str]]`): it
+returns either one form of a fragment or several *alternatives*, any of which
+a term may match. The emitter deduplicates them and ORs what is left into a
+single non-capturing alternation group per literal run (`_alternatives` and
+`_alternation`), so equal forms - the common case, every non-stemming field -
+emit exactly the regex the single-string contract used to. An empty sequence
+means the fragment can match no term, and the whole pattern then matches
+nothing, which is the same out-of-band `None` an empty bracket class already
+returns from `glob_to_regex`. A bare `str` is accepted rather than rejected
+because `str` satisfies `Sequence[str]`: a normalizer written against the
+older `Callable[[str], str]` contract type-checks against this one, and
+reading it as one alternative per character would be a silent wrong answer no
+type checker could catch.
+
+The two callables still can't be unified. The analyzer answers "what tokens
+does this value become"; this one answers "what could this fragment of a glob
+look like in the index" - a fragment that is often not a word, that can never
+be split or dropped, and that inside a class must stay one character long.
+What alternatives change is the *stemming* consequence: a wildcard over a
+stemmed field used to reach only unstemmed index tokens (a property inherited
+from Whoosh itself), because a single normalized string can be the run as
+typed or its stem but not both, and English Snowball substitutes rather than
+truncates (`company` -> `compani`). A host that returns both forms now
+reaches both, with no heuristic; see the README's "analyzer /
+pattern_normalizer seam" section for the measurement.
 
 **Half-open date-range ceilings.** An ambiguous/period date match (e.g. just
 a year, or `previous month`) is represented internally as a `timespan` whose

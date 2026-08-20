@@ -7,6 +7,7 @@ import re
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
+from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
 from enum import Enum
@@ -21,6 +22,25 @@ from typing import cast
 # inside to be addressable from query text at all. See
 # FieldRegistry.__init__'s name/alias and subpath validation.
 _TAGGER_REACHABLE = re.compile(r"[\w.]+")
+
+#: The type of ``FieldSpec.pattern_normalizer``: a fragment of a
+#: wildcard/prefix pattern in, and *one or more* forms of it out, any of
+#: which a term may match.
+#:
+#: Returning a bare ``str`` means exactly one form and is the plain
+#: case-folding contract this hook has always had. Returning a sequence
+#: means the emitter should accept a term matching *any* of the forms, ORed
+#: together; that is what lets a pattern reach both the run as typed and its
+#: stem, which no single string can do (English Snowball substitutes rather
+#: than truncates: "company" -> "compani", so a prefix of one is not a
+#: prefix of the other). An empty sequence means "no term can match this
+#: fragment", and the whole pattern then matches nothing.
+#:
+#: A bare ``str`` is accepted rather than rejected on purpose: ``str`` *is*
+#: a ``Sequence[str]``, so a normalizer written against the old contract
+#: type-checks against the new one and would otherwise be read, silently, as
+#: one alternative per character.
+PatternNormalizer = Callable[[str], "str | Sequence[str]"]
 
 
 class FieldKind(Enum):
@@ -171,7 +191,9 @@ class FieldSpec:
     (``AST_PATTERN_ON_KIND``, DIVERGENCES.md entry 30; a parse-time
     ``PATTERN_ON_SUBPATH`` diagnostic catches ordinary query text before
     that), so ``spec.pattern_normalizer`` is never even read for one; see
-    ``TantivyEmitter._reject_pattern_incompatible_kind``.
+    ``TantivyEmitter._reject_pattern_incompatible_kind``. It may return
+    either one form of a pattern fragment or several alternatives; see
+    :data:`PatternNormalizer` for that contract.
     Setting one of these three on a kind that ignores it is permitted, not
     validated against, since a host may reasonably share one ``FieldSpec``
     factory across kinds rather than branch on kind to omit them.
@@ -205,7 +227,7 @@ class FieldSpec:
     aliases: tuple[str, ...] = ()
     comma_values: bool = False
     analyzer: Callable[[str], list[str]] | None = None
-    pattern_normalizer: Callable[[str], str] | None = None
+    pattern_normalizer: PatternNormalizer | None = None
     multitoken: Multitoken = Multitoken.DEFAULT
     exists_target: str | None = None
     subpaths: Mapping[str, SubpathSpec] | tuple[str, ...] = field(default=(), hash=False)

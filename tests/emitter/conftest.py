@@ -12,6 +12,7 @@ import pytest
 import tantivy
 from whoosh.filedb.filestore import RamStorage
 from whoosh.index import Index as WhooshIndex
+from whoosh.lang.snowball.english import EnglishStemmer
 
 from tests.differential.oracle import oracle_parse
 from tests.differential.oracle import oracle_schema
@@ -23,6 +24,8 @@ from whoosh_compat.fields import FieldRegistry
 from whoosh_compat.fields import FieldSpec
 
 TIndex = tuple[tantivy.Index, tantivy.Schema]
+
+_english_stemmer = EnglishStemmer()
 
 
 class Doc(NamedTuple):
@@ -301,3 +304,101 @@ def whoosh_search_ids(windex: WhooshIndex, q_str: str, basedate: datetime, tz: t
     query = oracle_parse(q_str, basedate, tz)
     with windex.searcher() as searcher:
         return sorted(hit["id"] for hit in searcher.search(query, limit=None))
+
+
+# -- Stemmed index/registry pair ---------------------------------------------
+#
+# ``tindex`` above builds its text fields with tantivy's 'default' tokenizer
+# (simple + lowercase, NO stemming), which is exactly right for the rest of
+# the emitter suite but cannot show what a stemmed index does to a pattern:
+# against an unstemmed index "company*" and "copy*" both already work. This
+# second purpose-built pair (same reason ``nonfast_index`` exists) indexes
+# through ``tantivy.Filter.stemmer("English")`` and pairs with a registry
+# whose ``pattern_normalizer`` stems too, mirroring how ``ereg`` pairs with
+# ``tindex``.
+
+STEM_COMPANY = 1
+STEM_COMPANIES = 2
+STEM_COPYRIGHT = 3
+STEM_COPIES = 4
+
+#: id -> indexed content for ``stemmed_index``. Chosen because English
+#: Snowball's y->i step *substitutes* rather than truncates: "company" and
+#: "companies" both stem to "compani" (so a pattern typed as the user spells
+#: it misses them), while "copyright" keeps its literal spelling (so a
+#: pattern that stems misses it). No single normalized string reaches both.
+STEM_DOCS: dict[int, str] = {
+    STEM_COMPANY: "company",
+    STEM_COMPANIES: "companies",
+    STEM_COPYRIGHT: "copyright",
+    STEM_COPIES: "copies",
+}
+
+
+def english_stem(text: str) -> str:
+    """Real-whoosh's English Snowball stemmer, one word in, one word out.
+
+    Whoosh's implementation is used rather than a hand table so the fixture
+    cannot drift from the stemmer the differential oracle itself would apply;
+    ``test_pattern_alternates.py`` pins it against the terms tantivy's own
+    Rust Snowball actually put in the index.
+    """
+    return _english_stemmer.stem(text)
+
+
+def stem_fold(text: str) -> list[str]:
+    """Analyzer counterpart of ``stemmed_index``'s tokenizer chain."""
+    return [english_stem(token) for token in lower_fold(text)]
+
+
+def stem_alternates(text: str) -> tuple[str, ...]:
+    """``pattern_normalizer`` for ``stemmed_reg``: the folded run and its stem.
+
+    Both forms, not a choice between them, which is the whole point of the
+    alternatives contract (``whoosh_compat.PatternNormalizer``). Returned
+    with the duplicate still in it when the stemmer is a no-op: collapsing
+    that is the emitter's job, and this fixture would hide the bug if it did
+    it here.
+    """
+    folded = text.lower()
+    return (folded, english_stem(folded))
+
+
+@pytest.fixture(scope="session")
+def stemmed_index() -> TIndex:
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_text_field("content", stored=True, tokenizer_name="en_stem_test")
+    schema = sb.build()
+    index = tantivy.Index(schema)
+    index.register_tokenizer(
+        "en_stem_test",
+        tantivy.TextAnalyzerBuilder(tantivy.Tokenizer.simple())
+        .filter(tantivy.Filter.lowercase())
+        .filter(tantivy.Filter.stemmer("English"))
+        .build(),
+    )
+    w = index.writer()
+    for id_, content in STEM_DOCS.items():
+        doc = tantivy.Document()
+        doc.add_unsigned("id", id_)
+        doc.add_text("content", content)
+        w.add_document(doc)
+    w.commit()
+    index.reload()
+    return index, schema
+
+
+@pytest.fixture
+def stemmed_reg() -> FieldRegistry:
+    """Registry counterpart to ``stemmed_index``."""
+    return FieldRegistry(
+        [
+            FieldSpec(
+                "content",
+                FieldKind.TEXT,
+                analyzer=stem_fold,
+                pattern_normalizer=stem_alternates,
+            ),
+        ]
+    )
