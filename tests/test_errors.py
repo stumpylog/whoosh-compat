@@ -60,6 +60,7 @@ def test_parse_and_emit_kind_sets_are_disjoint_and_total() -> None:
         DiagnosticKind.EXISTS_REQUIRES_FAST,
         DiagnosticKind.TEXT_RANGE,
         DiagnosticKind.PATTERN_TOO_COMPLEX,
+        DiagnosticKind.SCHEMA_FIELD_MISSING,
         DiagnosticKind.AST_UNFIELDED_TERM,
         DiagnosticKind.AST_UNKNOWN_FIELD,
         DiagnosticKind.AST_JSON_NEEDS_SUBPATH,
@@ -74,6 +75,27 @@ def test_parse_and_emit_kind_sets_are_disjoint_and_total() -> None:
     assert parse_kinds | emit_kinds == set(DiagnosticKind)
     assert parse_kinds == PARSE_KINDS
     assert emit_kinds == EMIT_KINDS
+
+
+def test_schema_field_missing_is_misconfigured() -> None:
+    """A field this library's registry knows and the tantivy schema does not
+    is a deployment drift the operator can fix. It is neither a defect in
+    this library nor a property of the query text.
+    """
+    assert cause_for(DiagnosticKind.SCHEMA_FIELD_MISSING) is Cause.MISCONFIGURED
+
+
+def test_backend_rejected_stays_internal() -> None:
+    """The bare ValueError/TypeError path from tantivy-py is a real library
+    defect and must not be swept into MISCONFIGURED by the split.
+
+    `cause` is a pure function of `kind` (`cause_for` reads a dict), so the
+    only way to re-cause the schema-drift branch was to give it a kind of
+    its own. Getting this backwards would relabel a genuine tantivy-py
+    rejection of a query this emitter built as the operator's problem,
+    routing a library bug to a 400 and hiding it from monitoring.
+    """
+    assert cause_for(DiagnosticKind.BACKEND_REJECTED) is Cause.INTERNAL
 
 
 def test_diagnostic_is_keyword_only() -> None:
@@ -97,12 +119,15 @@ def test_internal_emit_kinds_are_never_user_facing() -> None:
     """Every emit kind that is reachable from query text is non-INTERNAL.
 
     Hosts rely on this to route: INTERNAL at emit time is never the user's
-    fault, so it is a 500, not a 400.
+    fault, so it is a 500, not a 400. A MISCONFIGURED kind is reachable and
+    so belongs on the non-INTERNAL side: the operator caused it, but a user
+    request is still waiting on an answer.
     """
     reachable = {
         DiagnosticKind.EXISTS_REQUIRES_FAST,
         DiagnosticKind.TEXT_RANGE,
         DiagnosticKind.PATTERN_TOO_COMPLEX,
+        DiagnosticKind.SCHEMA_FIELD_MISSING,
     }
     for kind in reachable:
         assert cause_for(kind) is not Cause.INTERNAL

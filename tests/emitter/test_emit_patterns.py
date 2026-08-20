@@ -429,26 +429,29 @@ def test_pattern_on_field_absent_from_schema_reports_the_mismatch(
     # text. tantivy-py signals it with the same bare ValueError it uses for
     # a regex that busts the state cap, so the pattern path has to tell the
     # two apart: reporting PATTERN_TOO_COMPLEX/UNSUPPORTED here would mask
-    # a broken deployment as a permanently unsupported query.
+    # a broken deployment as a permanently unsupported query, and reporting
+    # BACKEND_REJECTED/INTERNAL would blame this library for it.
     #
-    # The bar is the sibling cell: a plain term query on the same broken
-    # field already reports the mismatch correctly through emit()'s
-    # backstop, so the pattern visitors must land on the same kind and
-    # cause rather than inventing their own.
+    # SCHEMA_FIELD_MISSING exists precisely so the two can be routed apart:
+    # cause is a pure function of kind, so sharing a kind with the backstop
+    # would have forced them to share a cause too.
     broken = FieldRegistry([*ereg, FieldSpec("ghost", FieldKind.TEXT)])
+    with pytest.raises(QueryError) as exc:
+        emit_ast(node, tindex, broken)
+    d = exc.value.diagnostic
+    assert d.kind is DiagnosticKind.SCHEMA_FIELD_MISSING
+    assert d.cause is Cause.MISCONFIGURED
+    assert d.field == FieldRef("ghost")
+    assert d.field_kind is FieldKind.TEXT
+
+    # The sibling cell, and the boundary this split does not cross: the same
+    # drift on a plain term reaches only emit()'s generic backstop, which has
+    # an exception type and no field to probe, so it stays INTERNAL.
     with pytest.raises(QueryError) as term_exc:
         emit_ast(ast.Term(field=FieldRef("ghost"), text="alice"), tindex, broken)
     term_d = term_exc.value.diagnostic
     assert term_d.kind is DiagnosticKind.BACKEND_REJECTED
     assert term_d.cause is Cause.INTERNAL
-
-    with pytest.raises(QueryError) as exc:
-        emit_ast(node, tindex, broken)
-    d = exc.value.diagnostic
-    assert d.kind is term_d.kind
-    assert d.cause is term_d.cause
-    assert d.field == FieldRef("ghost")
-    assert d.field_kind is FieldKind.TEXT
 
 
 def test_pattern_over_the_cap_on_a_real_field_is_still_unsupported(

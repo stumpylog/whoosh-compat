@@ -139,8 +139,17 @@ a host can use for routing without knowing every `DiagnosticKind`:
 | --------------- | ------------------------------------------- | ---------------------------- |
 | `INVALID_INPUT` | The query text itself is malformed          | HTTP 400                     |
 | `UNSUPPORTED`   | The query is well-formed but this backend can't run it | HTTP 400        |
-| `MISCONFIGURED` | The registry/schema setup is wrong          | Operator alert, not a 400    |
+| `MISCONFIGURED` | The registry/schema setup is wrong          | Operator alert **and** HTTP 400 |
 | `INTERNAL`      | The AST violates an invariant `parse()` would never produce | HTTP 500 |
+
+`MISCONFIGURED` is the one cause that is two responses rather than one. It
+means the registry and the index schema disagree, which only an operator can
+fix, so it must raise an alert. But every `MISCONFIGURED` kind is reachable
+from ordinary query text (`notes.user:*` for `EXISTS_REQUIRES_FAST`,
+`ghost:ali*` for `SCHEMA_FIELD_MISSING`), so a request is waiting on an
+answer that the alert does not provide. The query cannot run whether or not
+anyone reads the alert, and reporting it as a 500 would claim a defect in
+this library that isn't there, so the request gets a 400.
 
 `Diagnostic.message` (and the `QueryError` exception message, which is the
 same string) carries no stability guarantee and may reword without notice.

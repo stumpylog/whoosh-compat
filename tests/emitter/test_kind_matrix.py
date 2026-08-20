@@ -794,3 +794,68 @@ def test_json_bare_field_bare_star_existence(
     dispatch logic sits next to.
     """
     _run(qs, ereg, tindex, outcome)
+
+
+@pytest.mark.parametrize(
+    ("qs", "outcome"),
+    [
+        pytest.param(
+            "ghost:ali*",
+            Raises(
+                DiagnosticKind.SCHEMA_FIELD_MISSING,
+                Cause.MISCONFIGURED,
+                FieldKind.TEXT,
+                FieldRef("ghost"),
+            ),
+            id="prefix-star",
+        ),
+        pytest.param(
+            "ghost:a?ice",
+            Raises(
+                DiagnosticKind.SCHEMA_FIELD_MISSING,
+                Cause.MISCONFIGURED,
+                FieldKind.TEXT,
+                FieldRef("ghost"),
+            ),
+            id="wildcard",
+        ),
+        pytest.param(
+            "ghost:[a-a]lic*",
+            Raises(
+                DiagnosticKind.SCHEMA_FIELD_MISSING,
+                Cause.MISCONFIGURED,
+                FieldKind.TEXT,
+                FieldRef("ghost"),
+            ),
+            id="bracket-class",
+        ),
+        pytest.param(
+            "ghost:alice",
+            Raises(DiagnosticKind.BACKEND_REJECTED, Cause.INTERNAL),
+            id="bare",
+        ),
+    ],
+)
+def test_field_absent_from_schema_is_a_misconfiguration(
+    qs: str, outcome: object, ereg: FieldRegistry, tindex: TIndex
+) -> None:
+    """The schema-drift column: a field the registry knows and the tantivy
+    schema does not.
+
+    This is the operator's problem, not the query text's and not a defect in
+    this library, so the pattern spellings, which resolve a field before
+    calling tantivy and can therefore probe the schema on failure, report it
+    as its own kind. ``cause`` is a pure function of ``kind``, so a separate
+    kind is the only way the condition can be routed apart from the bare
+    ``ValueError``/``TypeError`` tantivy-py raises when it rejects a query
+    this emitter built.
+
+    The ``bare`` cell is the boundary, and it is deliberately asymmetric:
+    the same drift on a plain term surfaces only at ``emit``'s generic
+    backstop, which sees an exception type and no field, so it cannot tell
+    a missing field from any other tantivy-py rejection and still reports
+    ``BACKEND_REJECTED``/``INTERNAL``. Pinned here so that the asymmetry is
+    a recorded fact rather than something a host discovers in production.
+    """
+    broken = FieldRegistry([*ereg, FieldSpec("ghost", FieldKind.TEXT)])
+    _run(qs, broken, tindex, outcome)

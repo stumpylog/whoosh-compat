@@ -373,6 +373,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         (``BACKEND_REJECTED``). ``QueryError`` derives from ``Exception``
         rather than ``ValueError``, so a ``_fail`` from a nested visitor
         passes through both handlers with its own kind intact.
+
+        This last cell is a coarse one: a registry/schema mismatch on a
+        plain term also surfaces as a bare ``ValueError`` here, and lands on
+        ``BACKEND_REJECTED`` with it, because the backstop sees only an
+        exception type and has no field to probe. ``_regex_query`` does have
+        one and reports that condition precisely, as
+        ``SCHEMA_FIELD_MISSING``.
         """
         try:
             analyzed = ast.analyze(ast.normalize(node), self.registry, default_mode=Multitoken.AND)
@@ -855,9 +862,9 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         bare ``ValueError``, though: a field this library's registry knows
         but the tantivy schema does not raises the same type. That is a
         registry/schema mismatch, an operator's problem and not the query
-        text's, so it must report what the identical condition reports for
-        a plain term (``BACKEND_REJECTED``, via ``emit``'s backstop) rather
-        than being frozen into ``PATTERN_TOO_COMPLEX`` forever. The two are
+        text's, so it gets ``SCHEMA_FIELD_MISSING`` (``MISCONFIGURED``)
+        rather than being frozen into ``PATTERN_TOO_COMPLEX`` forever or
+        blamed on this library as a ``BACKEND_REJECTED`` 500. The two are
         told apart by probing the schema, which tantivy-py exposes no
         introspection for, only in the failure path so the common case
         stays a single call.
@@ -867,7 +874,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         except ValueError as exc:
             if not self._field_in_schema(resolved.spec.name):
                 self._fail(
-                    DiagnosticKind.BACKEND_REJECTED,
+                    DiagnosticKind.SCHEMA_FIELD_MISSING,
                     message=f"cannot emit query: {exc}",
                     node=node,
                     resolved=resolved,
@@ -1208,9 +1215,11 @@ def emit(
             is re-raised unchanged), a query shape this emitter
             deliberately does not support (a text range, a wildcard/prefix
             pattern on an incompatible field), a registry that cannot
-            answer an ``exists`` check on a non-fast field, and the
-            caller-built-AST backstops (an unresolvable field, a value
-            that fails a field kind's domain check). It also covers the
+            answer an ``exists`` check on a non-fast field, a registry that
+            knows a field the index schema does not
+            (``SCHEMA_FIELD_MISSING``), and the caller-built-AST backstops
+            (an unresolvable field, a value that fails a field kind's
+            domain check). It also covers the
             two catch-all backstops: ``AST_INVALID_SHAPE`` for a hand-built
             tree with a ``None`` (or otherwise non-node) value standing in
             for a required child, a node type no visitor handles, or a tree

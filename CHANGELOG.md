@@ -22,6 +22,26 @@ material; they are permanently documented, each with its rationale, in
 - `DiagnosticKind.UNSUPPORTED_PATTERN` is split into `PATTERN_ON_NUMERIC`,
   `PATTERN_ON_BOOLEAN_EXISTS`, and `PATTERN_ON_SUBPATH`, one per field kind
   a wildcard/prefix pattern cannot be honored against.
+- `DiagnosticKind.SCHEMA_FIELD_MISSING` (`Cause.MISCONFIGURED`) is split out
+  of `BACKEND_REJECTED`. A wildcard or prefix query on a field this
+  library's registry knows but the tantivy schema does not now reports the
+  mismatch as the operator's problem rather than as an internal error.
+  `BACKEND_REJECTED` keeps `Cause.INTERNAL` and its original meaning:
+  tantivy-py refusing a query this emitter built, which is a defect in this
+  library, not a deployment fault. The split was necessary because
+  `cause_for()` is keyed only on `kind`, so one kind cannot carry different
+  causes at different raise sites. A host branching on `kind` should route
+  the new member; a host branching on `cause` alone sees this condition
+  move from `INTERNAL` to `MISCONFIGURED`. Note the same drift reached
+  through a plain (non-pattern) term still reports `BACKEND_REJECTED`,
+  because `emit`'s backstop sees only an exception type and has no field to
+  probe.
+- `Cause.MISCONFIGURED` is documented as requiring **both** an operator
+  alert and an HTTP 400, not an alert alone. Every `MISCONFIGURED` kind is
+  reachable from ordinary query text, so a request is always waiting on an
+  answer the alert does not give it. No behavior changed, but the previous
+  documentation named no status code at all, which left hosts unable to
+  route it.
 
 ### Added
 

@@ -12,9 +12,18 @@ class Cause(Enum):
     """Who can act on a diagnostic, and whether the query can ever run.
 
     Not a severity tier: every cause is fatal to the query it concerns.
-    A host maps ``INVALID_INPUT``/``UNSUPPORTED`` to a 400,
-    ``MISCONFIGURED`` to an operator alert, and ``INTERNAL`` to a 500,
-    because ``INTERNAL`` at emit time is never the user's fault.
+    A host maps ``INVALID_INPUT``/``UNSUPPORTED`` to a 400 and ``INTERNAL``
+    to a 500, because ``INTERNAL`` at emit time is never the user's fault.
+
+    ``MISCONFIGURED`` is the one cause that is both: it means the registry
+    and the index schema disagree, which only an operator can fix, so it
+    must raise an operator alert *and* return a 400. The alert alone is not
+    a complete response. Every ``MISCONFIGURED`` kind is reachable from
+    ordinary query text (``notes.user:*`` for ``EXISTS_REQUIRES_FAST``,
+    ``ghost:ali*`` for ``SCHEMA_FIELD_MISSING``), so a request is waiting on
+    an answer; the query cannot run whether or not anyone reads the alert,
+    and swallowing it into a 500 would claim a library defect that isn't
+    there.
     """
 
     INVALID_INPUT = auto()
@@ -52,6 +61,7 @@ class DiagnosticKind(Enum):
     EXISTS_REQUIRES_FAST = auto()
     TEXT_RANGE = auto()
     PATTERN_TOO_COMPLEX = auto()
+    SCHEMA_FIELD_MISSING = auto()
 
     # Emit-time backstops for caller-built ASTs.
     AST_UNFIELDED_TERM = auto()
@@ -89,6 +99,7 @@ _CAUSE: dict[DiagnosticKind, Cause] = {
     DiagnosticKind.EXISTS_REQUIRES_FAST: Cause.MISCONFIGURED,
     DiagnosticKind.TEXT_RANGE: Cause.UNSUPPORTED,
     DiagnosticKind.PATTERN_TOO_COMPLEX: Cause.UNSUPPORTED,
+    DiagnosticKind.SCHEMA_FIELD_MISSING: Cause.MISCONFIGURED,
     DiagnosticKind.AST_UNFIELDED_TERM: Cause.INTERNAL,
     DiagnosticKind.AST_UNKNOWN_FIELD: Cause.INTERNAL,
     DiagnosticKind.AST_JSON_NEEDS_SUBPATH: Cause.INTERNAL,

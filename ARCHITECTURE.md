@@ -254,12 +254,19 @@ programmatically" (the JSON-subpath carve-out, §5).
 
 **Errors/diagnostics flow (`errors.py`)**: `Diagnostic` is a frozen,
 keyword-only dataclass (`kind`, `cause`, `message`, `startchar`, `endchar`,
-`field`, `field_kind`, `raw_value`, `divergence`). `DiagnosticKind` is an
-18-member enum, partitioned by `PARSE_KINDS`/`EMIT_KINDS` (`errors.py` is
+`field`, `field_kind`, `raw_value`, `divergence`). `DiagnosticKind` is a
+19-member enum, partitioned by `PARSE_KINDS`/`EMIT_KINDS` (`errors.py` is
 the authority; hosts branching exhaustively on the kind should read the
 enum itself). Every member maps to a `Cause` (`INVALID_INPUT`/
 `UNSUPPORTED`/`MISCONFIGURED`/`INTERNAL`) via `cause_for()`, which a host
-uses for coarse routing without knowing every `DiagnosticKind`. `field` and
+uses for coarse routing without knowing every `DiagnosticKind`. Because
+`cause_for()` is a lookup keyed only on `kind`, one kind has exactly one
+cause: two raise sites that need different causes need different kinds.
+That is why a registry/schema mismatch found by `_regex_query`'s schema
+probe reports `SCHEMA_FIELD_MISSING` (`MISCONFIGURED`) rather than sharing
+`BACKEND_REJECTED` (`INTERNAL`) with `emit`'s bare-`ValueError` backstop,
+which cannot identify the condition and keeps the `INTERNAL` reading.
+`field` and
 `raw_value` default to `None` and are populated wherever a `Diagnostic` is
 constructed against a known field (`DateParserPlugin._error()` in
 `dateparse.py`, and the `BAD_NUMBER` and pattern-diagnostic sites
