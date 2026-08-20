@@ -160,7 +160,14 @@ class FieldSpec:
     """Specification for a single field in the schema.
 
     ``analyzer``/``pattern_normalizer``/``multitoken`` are only consulted
-    for kinds that use them (TEXT/KEYWORD, plus JSON for ``analyzer``);
+    for kinds that use them (TEXT/KEYWORD, plus JSON, whose subpaths are
+    tokenized exactly like a TEXT/KEYWORD field's value and so honor
+    ``analyzer`` and ``multitoken`` the same way: a JSON subpath's
+    multi-token value is combined per this same spec's ``multitoken``,
+    falling back to the enclosing group's combinator on
+    ``Multitoken.DEFAULT``, identically to a plain field; see
+    ``_leaf_tokens``/``_analyze_term`` in ``ast.py``. ``pattern_normalizer``
+    is JSON-subpath-relevant too, for a subpath prefix/wildcard query);
     setting one of those three on a kind that ignores it is permitted, not
     validated against, since a host may reasonably share one ``FieldSpec``
     factory across kinds rather than branch on kind to omit them.

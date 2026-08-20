@@ -127,6 +127,33 @@ def test_json_subpath_multi_token_term_default_and() -> None:
     )
 
 
+def test_json_subpath_multi_token_term_phrase_mode_via_field_config() -> None:
+    # A JSON subpath inherits the parent JSON field's own analyzer and
+    # Multitoken policy, the same as a plain TEXT/KEYWORD field: this is
+    # the JSON-subpath sibling of
+    # test_multi_token_term_phrase_mode_via_field_config above, pinning
+    # that FieldSpec.multitoken is genuinely consulted here, not silently
+    # ignored in favor of always falling back to the enclosing group's
+    # combinator (see FieldSpec's docstring).
+    reg = FieldRegistry(
+        [
+            FieldSpec(
+                "attrs",
+                FieldKind.JSON,
+                subpaths=("user",),
+                analyzer=word_split,
+                multitoken=Multitoken.PHRASE,
+            )
+        ]
+    )
+    node = Term(field=JSON_USER, text="alice bob")
+    result = analyze(node, reg)
+    assert isinstance(result, Phrase)
+    assert result.field == JSON_USER
+    assert result.words == ("alice", "bob")
+    assert result.slop == 1
+
+
 def test_quoted_phrase_multi_word() -> None:
     node = Phrase(field=CONTENT, text="hello world", slop=1)
     result = analyze(node, REG)
