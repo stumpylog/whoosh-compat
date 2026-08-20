@@ -61,6 +61,24 @@ material; they are permanently documented, each with its rationale, in
 
 ### Added
 
+- A JSON field can declare one of its subpaths the default:
+  `FieldSpec("notes", FieldKind.JSON, subpaths={"user": SubpathSpec(),
+  "note": SubpathSpec(default=True)})`. A bare mention of the field then
+  resolves to that subpath (`make_ref("notes")` returns
+  `FieldRef("notes", "note")`, and `is_bare_json_field("notes")` is
+  `False`), while an explicitly typed subpath still wins. `SubpathSpec`
+  gains a `default: bool = False` field, and `FieldSpec.default_subpath`
+  reports the declared default or `None`. Declaring more than one per spec
+  is a `ValueError` at registry construction.
+  This exists so a host that wants `notes:` to mean `notes.note:` no longer
+  has to rewrite the raw query string before parsing: such a rewrite cannot
+  see quotes, so it silently corrupts `content:"payment notes: none"`,
+  where those characters are ordinary text and not a field prefix. Opt-in
+  per field: with no default declared, a bare JSON field name stays
+  unresolvable and demotes to text, exactly as before.
+  One behavior follows for a field that declares a default: `notes:*`
+  narrows from a whole-field existence check to the default subpath's own
+  column, matching what the host-side rewrite it replaces produced.
 - `parse()` now guarantees the exception type it can raise: the parse
   pipeline is wrapped in a backstop that converts any unexpected exception
   into `QueryParserError`, chaining the original as `__cause__`. It never
@@ -72,6 +90,16 @@ material; they are permanently documented, each with its rationale, in
 
 ### Fixed
 
+- `FieldSpec(subpaths=...)` rejects a sequence that is neither a tuple nor a
+  mapping instead of passing it to `dict()`. A list of names was read as a
+  sequence of key/value pairs, so `subpaths=['ab', 'cd']` silently became
+  `{'a': 'b', 'c': 'd'}`: the registry accepted it, the real subpaths were
+  permanently unaddressable, and every query against one degraded to
+  default-field noise with no error anywhere. Other name lengths raised, but
+  in `dict()`'s own vocabulary ("dictionary update sequence element #0 has
+  length 3; 2 is required"), naming nothing the caller wrote. Subpath
+  *values* are now checked to be `SubpathSpec` too, which matters now that
+  the type carries a flag.
 - A flat, paren-free chain of non-merging operators (`ANDNOT`, `ANDMAYBE`,
   `REQUIRE`) builds one hierarchy level per operator, which the
   parenthesization cap could not see, so a long chain raised

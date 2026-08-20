@@ -134,14 +134,25 @@ class SubpathSpec:
     """Per-subpath specification for one entry of a JSON field's
     ``subpaths``.
 
-    Deliberately trivial for now: every subpath currently behaves exactly as
-    it did when ``subpaths`` was a bare ``tuple[str, ...]`` (it inherits the
-    parent JSON field's analyzer and text semantics). This type exists to
-    freeze the *container shape* (``FieldSpec.subpaths`` as
-    ``Mapping[str, SubpathSpec]``) ahead of per-subpath typing (numeric,
-    date, or boolean subpaths), which is a separate, later change and not
-    implemented here.
+    Still nearly trivial: a subpath inherits the parent JSON field's
+    analyzer and text semantics, exactly as it did when ``subpaths`` was a
+    bare ``tuple[str, ...]``. The one thing it carries is ``default``.
+
+    ``default=True`` marks this subpath as the one a *bare* mention of the
+    parent JSON field means: with it, ``make_ref("notes")`` resolves to
+    ``FieldRef("notes", "note")`` instead of ``None``, and the field stops
+    being a bare (unresolvable) JSON field. At most one subpath per
+    ``FieldSpec`` may declare it; ``FieldRegistry.__init__`` rejects more.
+    Without it, a bare JSON field name stays unresolvable, which is still
+    the right answer for a JSON field with no privileged subpath (a host's
+    custom-field bag, say, where ``cf:`` means nothing in particular).
+
+    This is the growth the container shape was frozen for; per-subpath
+    *typing* (numeric, date, or boolean subpaths) remains a separate, later
+    change and is not implemented here.
     """
+
+    default: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,8 +172,12 @@ class FieldSpec:
 
     ``subpaths`` accepts either its canonical form, a
     ``Mapping[str, SubpathSpec]``, or a ``tuple[str, ...]`` as sugar for "all
-    of these subpaths, with the trivial default ``SubpathSpec``";
-    ``__post_init__`` normalizes either input into the stored form: a
+    of these subpaths, with the trivial default ``SubpathSpec``" (the tuple
+    form therefore cannot declare a default subpath; use the mapping form
+    for that). Any other type, a list most plausibly, is rejected outright
+    rather than passed to ``dict()``, which would read a list of names as a
+    sequence of key/value pairs. ``__post_init__`` normalizes either
+    accepted input into the stored form: a
     read-only *snapshot* (``MappingProxyType`` over a private copy), never
     the tuple or the caller's own mapping object. The copy is what keeps
     the "registry validates eagerly" contract honest: a host that retains
@@ -202,16 +217,54 @@ class FieldSpec:
                     )
                 seen.add(path)
             normalized = {path: SubpathSpec() for path in self.subpaths}
-        else:
+        elif isinstance(self.subpaths, Mapping):
             # Copy, don't alias: the caller may retain (and later mutate)
             # the mapping object it passed in, and validation has to bind
             # to what was true at construction time.
             normalized = dict(self.subpaths)
+        else:
+            # Anything else (most plausibly a list, the tuple sugar spelled
+            # with the wrong brackets) is rejected here rather than fed to
+            # dict(). dict() accepts a sequence of pairs, so a list of
+            # two-character subpath names silently became a mapping of
+            # their halves: ['ab', 'cd'] -> {'a': 'b', 'c': 'd'}. The
+            # registry then validated and accepted that, the real subpaths
+            # were permanently unaddressable, and every query against one
+            # degraded to default-field noise with no error anywhere. A
+            # list of any other name length raised, but out of dict() and
+            # in dict()'s own vocabulary ("dictionary update sequence
+            # element #0 has length 3; 2 is required"), which names nothing
+            # the caller wrote.
+            raise ValueError(  # noqa: TRY004 (registry misconfiguration is ValueError throughout)
+                f"Field '{self.name}': subpaths must be a tuple or mapping, not "
+                f"{type(self.subpaths).__name__} (a list of names silently becomes "
+                f"a mapping of their halves; use a tuple)"
+            )
         # Frozen dataclass: normalize through object.__setattr__ rather
         # than plain assignment. Every reader elsewhere sees only this
         # read-only snapshot, never the tuple sugar or the caller's own
         # mapping object.
         object.__setattr__(self, "subpaths", MappingProxyType(normalized))
+
+    @property
+    def default_subpath(self) -> str | None:
+        """The subpath a bare mention of this field means, or ``None``.
+
+        The one subpath whose ``SubpathSpec.default`` is True (see
+        :class:`SubpathSpec`), or ``None`` when no subpath declares it, in
+        which case a bare mention of this field resolves to nothing at all
+        (``FieldRegistry.make_ref`` returns ``None`` and
+        ``FieldRegistry.is_bare_json_field`` returns True).
+        ``FieldRegistry.__init__`` rejects a spec declaring more than one,
+        so "the" default is well defined for any registered spec; an
+        unregistered spec with several returns the first in iteration
+        order.
+        """
+        subpaths = cast("Mapping[str, SubpathSpec]", self.subpaths)
+        for path, subspec in subpaths.items():
+            if subspec.default:
+                return path
+        return None
 
     # The mappingproxy stored above is not picklable and breaks the
     # default slots-dataclass __reduce_ex__ path (pickle AND copy.deepcopy
@@ -326,6 +379,33 @@ class FieldRegistry:
             # also feed it unescaped into the JSON parse_query fallback
             # string.
             if spec.kind == FieldKind.JSON:
+                subpath_specs = cast("Mapping[str, SubpathSpec]", spec.subpaths)
+                # Validate: every value is a real SubpathSpec. Load-bearing
+                # now that SubpathSpec carries `default`: anything else
+                # either has no `.default` at all (an AttributeError from
+                # inside resolution, far from the misconfigured spec) or,
+                # worse, a truthy attribute of its own that would silently
+                # decide what a bare mention of this field means. Checked
+                # before `default` is read anywhere below.
+                for subpath, subspec in subpath_specs.items():
+                    if not isinstance(subspec, SubpathSpec):
+                        raise ValueError(  # noqa: TRY004 (registry misconfiguration is ValueError throughout)
+                            f"Field '{spec.name}': subpath '{subpath}' maps to "
+                            f"{type(subspec).__name__}, not a SubpathSpec"
+                        )
+                # Validate: at most one subpath may claim to be the default.
+                # Several is not a preference to resolve by iteration order
+                # (which would make the meaning of a bare `notes:` depend on
+                # dict insertion order); it is a host configuration mistake,
+                # so it raises here, eagerly, like every other registry
+                # validation.
+                defaults = [path for path, sub in subpath_specs.items() if sub.default]
+                if len(defaults) > 1:
+                    named = ", ".join(repr(path) for path in defaults)
+                    raise ValueError(
+                        f"Field '{spec.name}': at most one subpath may be the "
+                        f"default, but {named} all declare default=True"
+                    )
                 for subpath in spec.subpaths:
                     if subpath == "":
                         raise ValueError(
@@ -573,10 +653,24 @@ class FieldRegistry:
         ``base.subpath`` against a registered JSON field's ``subpaths``.
 
         A bare (undotted) name that resolves directly to a JSON-kind spec is
-        deliberately *not* recognized here: a JSON field addressed without a
-        subpath has no way to emit (``visit_term``/``visit_phrase`` require
-        one), so treating it as known here would let ``notes:foo`` parse
-        cleanly and then raise at emit time. Note that "clean parse" is
+        deliberately *not* recognized here **unless the spec declares a
+        default subpath** (``SubpathSpec(default=True)``, see
+        :attr:`FieldSpec.default_subpath`), in which case the bare name
+        resolves to that subpath: ``make_ref("notes")`` returns
+        ``FieldRef("notes", "note")``. That is the whole point of declaring
+        one, and it exists so a host does not have to rewrite ``notes:`` to
+        ``notes.note:`` in the raw query string before parsing: such a
+        rewrite cannot see quotes, so it also corrupts
+        ``content:"payment notes: none"``, where the same characters are
+        ordinary text and not a field prefix at all. An explicitly typed
+        subpath still wins: a default only decides what the *bare* name
+        means. The reasoning below applies to a JSON field with no declared
+        default.
+
+        A JSON field addressed without a subpath has no way to emit
+        (``visit_term``/``visit_phrase`` require one), so treating it as
+        known here would let ``notes:foo`` parse cleanly and then raise at
+        emit time. Note that "clean parse" is
         *not*, on its own, a guarantee that emitting will succeed: a
         text-field range (``title:[a TO b]``) also parses with no
         diagnostics and then raises ``QueryError`` at emit time
@@ -601,11 +695,16 @@ class FieldRegistry:
 
         Returns:
             A canonical :class:`FieldRef`, or None if ``raw`` names neither
-            a registered field nor a registered JSON subpath.
+            a registered field nor a registered JSON subpath, nor a JSON
+            field with a declared default subpath.
         """
         spec = self._by_name.get(raw)
-        if spec is not None and spec.kind is not FieldKind.JSON:
-            return FieldRef(spec.name)
+        if spec is not None:
+            if spec.kind is not FieldKind.JSON:
+                return FieldRef(spec.name)
+            default_subpath = spec.default_subpath
+            if default_subpath is not None:
+                return FieldRef(spec.name, default_subpath)
 
         if "." in raw:
             name, subpath = raw.split(".", 1)
@@ -617,7 +716,14 @@ class FieldRegistry:
 
     def is_bare_json_field(self, raw: str) -> bool:
         """Whether ``raw`` resolves directly (as a canonical name or alias)
-        to a JSON-kind spec, addressed without a subpath.
+        to a JSON-kind spec that is addressed without a subpath *and has no
+        way to supply one*, i.e. declares no default subpath.
+
+        A JSON field that declares a default subpath (see
+        :class:`SubpathSpec`) is not this shape: ``make_ref`` resolves its
+        bare name to that subpath, so it is an ordinary recognized field and
+        this returns False. Only a JSON field with no default is "bare" in
+        the sense this method means, that is, unresolvable.
 
         A narrower, separate query from :meth:`make_ref`: ``make_ref``
         deliberately returns ``None`` for this exact shape, so a
@@ -640,10 +746,10 @@ class FieldRegistry:
 
         Returns:
             True if ``raw`` names a registered JSON field directly (not via
-            a dotted subpath lookup).
+            a dotted subpath lookup) that declares no default subpath.
         """
         spec = self._by_name.get(raw)
-        return spec is not None and spec.kind is FieldKind.JSON
+        return spec is not None and spec.kind is FieldKind.JSON and spec.default_subpath is None
 
     def exists_strategy(self, spec: FieldSpec) -> ExistsStrategy | None:
         """Return ``spec``'s resolved "exists" execution strategy.

@@ -230,6 +230,7 @@ behavior intentionally differs from real Whoosh.
 | Dates | `created:2020`, `created:today`, `created:'previous month'`, `created:now-7d` | full grammar: ISO/compact forms, natural-language keywords, relative offsets (`now-7d`, `-1 week`); multi-word keywords need quoting, see `DIVERGENCES.md` entry 19 |
 | RFC3339 datetimes | `created:[2020-01-01T00:00:00Z TO 2020-06-01T00:00:00Z]`, `created:'2020-01-01T00:00:00Z'` | `T` joins the separator class and a trailing `Z` is honored as the UTC designator (an absolute instant, not local time); an extension over Whoosh, which cannot parse these correctly (quoted `T`/`Z` values parse to nothing; range bounds collapse to their leading year), see `DIVERGENCES.md` entries 12 and 48-50 |
 | JSON subpaths | `notes.user:alice` | an extension with no equivalent in Whoosh itself (registered per-field via `FieldSpec.subpaths`) |
+| Default JSON subpath | `notes:alice` → `notes.user:alice` | per-field opt-in: the one subpath declared `SubpathSpec(default=True)` is what a bare mention of the field means, so a host never has to rewrite `notes:` in the raw query string. Without a default, a bare JSON field name stays unrecognized and demotes to text |
 
 Not carried over from Whoosh (not currently implemented, kept cheap to add
 via the forked plugin architecture): `asn:>100` (`GtLtPlugin`), `term~2`

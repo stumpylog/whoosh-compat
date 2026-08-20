@@ -183,16 +183,40 @@ names or behavior, it all comes from the registry a caller constructs.
 
 `FieldSpec.subpaths` (only meaningful for JSON-kind fields) is
 `Mapping[str, SubpathSpec]`: each registered subpath maps to a
-`SubpathSpec`, a deliberately trivial dataclass (no fields yet) that exists
-to freeze this container's shape ahead of per-subpath typing (a numeric- or
-date-typed subpath), which is a separate, later change. Construction also
+`SubpathSpec`, a near-trivial dataclass carrying one flag, `default`, whose
+container shape was frozen ahead of per-subpath typing (a numeric- or
+date-typed subpath), which is still a separate, later change. Construction also
 accepts the older `tuple[str, ...]` form as sugar for "every one of these
 subpaths, with the trivial default `SubpathSpec`"; `FieldSpec.__post_init__`
 normalizes a tuple into the mapping form immediately, so the value actually
 stored on a constructed instance, and read everywhere else in the library
 (`FieldRegistry.resolve`'s `ref.json_path not in spec.subpaths`,
 `make_ref`'s `subpath in spec.subpaths`, the JSON-path-support probe in
-`emitters/tantivy_.py`), is always the mapping. `FieldRegistry.__init__`
+`emitters/tantivy_.py`), is always the mapping. Anything that is neither a
+tuple nor a `Mapping` is rejected there, rather than passed to `dict()`:
+`dict()` reads a sequence of two-character strings as key/value pairs, so
+the plausible mis-spelling `subpaths=['ab', 'cd']` used to construct,
+validate, and register as `{'a': 'b', 'c': 'd'}`, leaving the real subpaths
+permanently unaddressable and every query against one degrading to
+default-field noise with no error anywhere.
+
+`SubpathSpec(default=True)` marks the one subpath a *bare* mention of the
+parent JSON field means: with it, `make_ref("notes")` resolves to
+`FieldRef("notes", "note")` rather than `None`, and
+`is_bare_json_field("notes")` is False, since the name is no longer
+unresolvable. An explicitly typed subpath still wins; the default only
+decides the bare name. This exists so a host that wants `notes:` to mean
+`notes.note:` does not have to rewrite the raw query string before parsing:
+such a rewrite cannot see quotes, so it also corrupts
+`content:"payment notes: none"`, where the same characters are ordinary
+text. It is opt-in per field because a JSON field with no privileged
+subpath (a custom-field bag, say) is better left unresolvable.
+`FieldRegistry.__init__` rejects more than one default per spec, and checks
+every subpath *value* is really a `SubpathSpec` (load-bearing now that the
+type carries a flag: anything else either has no `.default` or has a truthy
+attribute of its own that would silently decide what a bare mention means).
+
+`FieldRegistry.__init__`
 validates the mapping's keys: an empty subpath string, a subpath containing
 whitespace, `:`, or `"` (or any other character outside the fieldname tagger's
 expression, `r"(?P<text>[\w.]+|[*]):"`, which can only ever produce word
@@ -213,12 +237,20 @@ is the single place a dotted parser-level fieldname (`"notes.user"`) is
 interpreted: it resolves an alias to its canonical name and decides, once,
 whether the name addresses a plain field or a registered JSON field's
 subpath, returning `None` for a name that resolves as neither, and also for
-a bare JSON field name addressed without a subpath (`FieldsPlugin` demotes
+a bare JSON field name addressed without a subpath *and declaring no default
+subpath* (`FieldsPlugin` demotes
 either case back to text before it can reach an AST leaf, except for one
 carve-out: a bare JSON field name followed by a lone `*` is the
 existence-check special case, not a term to demote, and still reaches
 `Every(FieldRef(name))` via `FieldRegistry.is_bare_json_field`; see
-DIVERGENCES.md entry 20). Once a `FieldRef` exists, `FieldRegistry.resolve(ref) -> ResolvedField
+DIVERGENCES.md entry 20). A declared default subpath moves the field out of
+that demotion path entirely: `notes:` is then an ordinary recognized field
+prefix, so the carve-out is never consulted for it and `notes:*` is an
+ordinary recognized-field existence check. That is the one emit-side
+consequence of declaring a default: `notes:*` narrows from the whole-field
+question `exists_query(name, json_subpaths=True)` to the default subpath's
+own column, which is exactly what a `notes:` → `notes.note:` rewrite in the
+host would have produced. Once a `FieldRef` exists, `FieldRegistry.resolve(ref) -> ResolvedField
 | None` is the single resolver for it, plain or JSON subpath alike: nothing
 downstream of `make_ref`, including the emitter, inspects a field name for a
 literal `.` again. A registered *plain* field whose own name happens to

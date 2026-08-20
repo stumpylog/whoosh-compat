@@ -1153,3 +1153,127 @@ def test_field_spec_frozen() -> None:
     spec = FieldSpec(name="title", kind=FieldKind.TEXT)
     with pytest.raises(dataclasses.FrozenInstanceError):
         spec.name = "new_title"  # type: ignore[misc]
+
+
+# ============================================================================
+# Default subpath: a bare JSON field name that resolves
+# ============================================================================
+
+
+def _default_subpath_registry() -> FieldRegistry:
+    """A registry whose JSON field declares one of its subpaths the default."""
+    return FieldRegistry(
+        [
+            FieldSpec("content", FieldKind.TEXT, analyzer=lambda t: [t]),
+            FieldSpec(
+                "notes",
+                FieldKind.JSON,
+                subpaths={"user": SubpathSpec(), "note": SubpathSpec(default=True)},
+            ),
+        ]
+    )
+
+
+def test_bare_json_name_resolves_to_the_default_subpath() -> None:
+    """A bare JSON field name resolves to its declared default subpath."""
+    assert _default_subpath_registry().make_ref("notes") == FieldRef("notes", "note")
+
+
+def test_explicit_subpath_still_wins() -> None:
+    """Declaring a default does not shadow an explicitly typed subpath."""
+    assert _default_subpath_registry().make_ref("notes.user") == FieldRef("notes", "user")
+
+
+def test_default_subpath_field_is_recognized_by_contains() -> None:
+    """__contains__ follows make_ref, so the bare name is a known field."""
+    assert "notes" in _default_subpath_registry()
+
+
+def test_default_subpath_ref_resolves() -> None:
+    """The ref make_ref returns for the bare name resolves to the subpath."""
+    registry = _default_subpath_registry()
+    ref = registry.make_ref("notes")
+    assert ref is not None
+    resolved = registry.resolve(ref)
+    assert resolved is not None
+    assert resolved.spec.name == "notes"
+    assert resolved.json_path == "note"
+    assert resolved.dotted_name == "notes.note"
+
+
+def test_default_subpath_is_no_longer_a_bare_json_field() -> None:
+    """A defaulted JSON field is resolvable, so it is not "bare" anymore."""
+    assert _default_subpath_registry().is_bare_json_field("notes") is False
+
+
+def test_default_subpath_resolves_through_an_alias() -> None:
+    """An alias of a defaulted JSON field resolves the same way."""
+    registry = FieldRegistry(
+        [
+            FieldSpec(
+                "notes",
+                FieldKind.JSON,
+                aliases=("note",),
+                subpaths={"body": SubpathSpec(default=True)},
+            ),
+        ]
+    )
+    assert registry.make_ref("note") == FieldRef("notes", "body")
+    assert registry.is_bare_json_field("note") is False
+
+
+def test_default_subpath_exposed_on_the_spec() -> None:
+    """FieldSpec.default_subpath names the declared default, or None."""
+    spec = FieldSpec(
+        "notes",
+        FieldKind.JSON,
+        subpaths={"user": SubpathSpec(), "note": SubpathSpec(default=True)},
+    )
+    assert spec.default_subpath == "note"
+    assert FieldSpec("cf", FieldKind.JSON, subpaths=("a", "b")).default_subpath is None
+
+
+def test_json_field_without_a_default_is_still_unresolvable() -> None:
+    """Without a declared default, a bare JSON name stays unresolvable."""
+    registry = FieldRegistry([FieldSpec("cf", FieldKind.JSON, subpaths=("a", "b"))])
+    assert registry.make_ref("cf") is None
+    assert registry.is_bare_json_field("cf") is True
+
+
+def test_at_most_one_default_subpath() -> None:
+    """Two defaults are a registry-construction error, not a silent pick."""
+    with pytest.raises(ValueError, match="default"):
+        FieldRegistry(
+            [
+                FieldSpec(
+                    "n",
+                    FieldKind.JSON,
+                    subpaths={"a": SubpathSpec(default=True), "b": SubpathSpec(default=True)},
+                )
+            ]
+        )
+
+
+def test_list_subpaths_are_rejected_not_mangled() -> None:
+    """A list fell through to dict(), turning ['ab','cd'] into {'a':'b','c':'d'}
+    and making the host's real subpaths permanently unaddressable."""
+    with pytest.raises(ValueError, match="tuple or mapping"):
+        FieldRegistry([FieldSpec("n", FieldKind.JSON, subpaths=["ab", "cd"])])  # type: ignore[arg-type]
+
+
+def test_single_element_list_subpaths_are_rejected_clearly() -> None:
+    """['abc'] used to raise a cryptic dict-update ValueError instead."""
+    with pytest.raises(ValueError, match="tuple or mapping"):
+        FieldRegistry([FieldSpec("n", FieldKind.JSON, subpaths=["abc"])])  # type: ignore[arg-type]
+
+
+def test_string_subpaths_are_rejected() -> None:
+    """A bare string is a sequence too, and would iterate character by character."""
+    with pytest.raises(ValueError, match="tuple or mapping"):
+        FieldRegistry([FieldSpec("n", FieldKind.JSON, subpaths="note")])  # type: ignore[arg-type]
+
+
+def test_subpath_values_must_be_subpath_specs() -> None:
+    """Values are load-bearing now that SubpathSpec carries a field."""
+    with pytest.raises(ValueError, match="SubpathSpec"):
+        FieldRegistry([FieldSpec("n", FieldKind.JSON, subpaths={"a": "not a spec"})])  # type: ignore[dict-item]
