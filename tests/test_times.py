@@ -307,12 +307,25 @@ def test_fill_in_datetime_passthrough() -> None:
 def test_fill_in_timespan_basedate_passthrough() -> None:
     # A handful of grammar elements ("previous week"/"previous quarter")
     # resolve to an already-disambiguated timespan used as the basedate.
+    # Nothing has been collected yet (the merging pass starts from an empty
+    # adatetime), so the span passes straight through.
     ts = timespan(datetime(2020, 1, 1), datetime(2020, 1, 7))
     # fill_in's own implementation explicitly special-cases a timespan
     # basedate (see its docstring), even though its declared basedate type
     # is the narrower `datetime` (a pre-existing, unrelated looseness in
     # that signature, out of scope here).
-    assert fill_in(adatetime(year=2021), ts) is ts  # type: ignore[arg-type]
+    assert fill_in(adatetime(), ts) is ts  # type: ignore[arg-type]
+
+
+def test_fill_in_rejects_merging_a_timespan_with_other_units() -> None:
+    # A period keyword written together with a time of day ("3pm previous
+    # week" / "previous week 3pm"): a period names a span, so there is
+    # nothing coherent to merge, in either direction.
+    ts = timespan(datetime(2020, 1, 1), datetime(2020, 1, 7))
+    with pytest.raises(TimeError):
+        fill_in(adatetime(hour=15), ts)  # type: ignore[arg-type]
+    with pytest.raises(TimeError):
+        fill_in(ts, adatetime(hour=15))  # type: ignore[arg-type]
 
 
 def test_fill_in_fills_missing_units_from_basedate() -> None:

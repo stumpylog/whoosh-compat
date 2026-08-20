@@ -1955,3 +1955,71 @@ parse-then-emit pipeline).
     `test_no_separator_t_value_parses_as_year_t_month`;
     `tests/emitter/test_acceptance_property.py`'s
     `test_no_separator_t_value_is_a_result_level_divergence`.
+
+51. **A range whose start is a bare time of day and whose end is already a
+    concrete instant (`added:"noon to now"`, `added:[noon TO now]`) is
+    diagnosed as a BAD_DATE instead of crashing with an `AttributeError`
+    (whoosh-bug, not reproduced).** Whoosh's range disambiguation resolves a
+    date-less start against the end's date, and to decide whether copying
+    the end's month/day would invert the range it compares
+    `start.floor().time()` with `end.ceil().time()`. `ceil()` is an
+    `adatetime` method: it exists only while a bound is still ambiguous. The
+    `now` keyword (and anything else that resolves straight to a concrete
+    `datetime`) reaches that line fully specified, so whoosh calls `ceil()`
+    on a plain `datetime` and raises `AttributeError: 'datetime.datetime'
+    object has no attribute 'ceil'` out of the parser. That is a defect, not
+    intended semantics, and this fork's bar is that confirmed whoosh bugs
+    are not reproduced -- least of all ones that break `parse()`'s "never
+    raises for query input" invariant. `parser/times.py`'s
+    `timespan.disambiguated` therefore raises the grammar's own `TimeError`
+    for that combination, which `DateParserPlugin` turns into
+    `Diagnostic(kind=BAD_DATE)` and an `ErrorLeaf`, like any other unusable
+    date value. Reading the concrete bound through the module-level `ceil()`
+    helper (which passes a `datetime` straight through) would have been the
+    other option, but that invents a range semantics whoosh has never had,
+    so the conservative "this input has no meaning here" answer is the one
+    taken. Only this one asymmetric shape is affected: a range whose bounds
+    are both still ambiguous (`added:[noon to 3am]`, `added:[3pm to 10am]`)
+    never reaches the guard and resolves exactly as before.
+
+    Test references: `tests/test_parser_period_keywords.py`'s
+    `test_period_keyword_with_a_time_is_a_bad_date` (its
+    `added:"noon to now"` case).
+
+52. **A period keyword written together with a time of day
+    (`added:"previous week 3pm"`, `added:"3pm previous week"`,
+    `added:"previous quarter noon"`) is diagnosed as a BAD_DATE, in both
+    word orders.** `previous week` and `previous quarter` are whoosh-compat
+    grammar additions (entry 19's family of new keywords) and, unlike every
+    other date element, they resolve directly to a fully-built `timespan`: a
+    calendar week or quarter doesn't align with any single `adatetime` unit,
+    so it can't be expressed as one. The date grammar's merging pass (`Bag`,
+    via `parser/times.py`'s `fill_in`) then has nothing coherent to do when
+    a time of day appears alongside one, and the two word orders used to
+    disagree about it: "previous week 3pm" fed the `timespan` into the pass
+    that expects per-unit attributes and raised `AttributeError: 'timespan'
+    object has no attribute 'month'` out of `parse()`, while
+    "3pm previous week" silently discarded the time and returned the whole
+    week -- a wider range than the user asked for, with no diagnostic to say
+    so. Both are now rejected with the same `Diagnostic(kind=BAD_DATE)`, on
+    the semantic ground that a period names a *span*, and a time of day on a
+    span names nothing.
+
+    This is deliberately narrow and does not touch time handling elsewhere
+    in the grammar. Ordinary date keywords combine with a time correctly in
+    either order and still do: `added:"3pm yesterday"` and
+    `added:"yesterday 3pm"` both give 15:00-16:00. So do the
+    `adatetime`-valued members of the "previous ..." family
+    (`added:"previous month 3pm"`, `added:"previous year 3pm"`), which are
+    month- and year-precision `adatetime`s rather than spans and merge with
+    a time the ordinary way. A bare period keyword (`added:"previous week"`)
+    is entirely unaffected. Real whoosh has no equivalent behavior to
+    diverge from here -- it has no `previous week` or `previous quarter` at
+    all (entry 19) -- so this constrains only whoosh-compat's own extension;
+    the rejected spellings number four, and paperless-ngx's auto-quoting
+    never generates any of them.
+
+    Test references: `tests/test_parser_period_keywords.py` (whole file);
+    `tests/test_times.py`'s
+    `test_fill_in_rejects_merging_a_timespan_with_other_units` and
+    `test_fill_in_timespan_basedate_passthrough`.

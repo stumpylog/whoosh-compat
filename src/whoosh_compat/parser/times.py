@@ -350,9 +350,19 @@ class timespan:
             start_dm = not (start.month is None and start.day is None)
             end_dm = not (end.month is None and end.day is None)
             if end_dm and not start_dm:
-                # start/end are only mutated here when they are adatetime
-                # instances (guarded by the has_no_date/*_dm checks above),
-                # never plain (immutable) datetime objects.
+                if isinstance(end, datetime):
+                    # ``end`` reaches here fully concrete (a plain datetime,
+                    # e.g. the "now" keyword) whenever the start is a bare
+                    # time of day, as in "noon to now" -- and a datetime has
+                    # no ceil(). Whoosh raises AttributeError here; this fork
+                    # doesn't reproduce confirmed whoosh bugs, and parsing
+                    # reports bad input through diagnostics rather than
+                    # exceptions, so report it as an unusable date
+                    # (see DIVERGENCES.md).
+                    raise TimeError(f"can't resolve the start of {start!r} against {end!r}")
+                # ``start`` is only mutated below when it is an adatetime
+                # instance (guaranteed by the has_no_date/*_dm checks above),
+                # never a plain (immutable) datetime object.
                 if start.floor().time() > end.ceil().time():  # type: ignore[union-attr]
                     start.month = basedate.month  # type: ignore[misc]
                     start.day = basedate.day  # type: ignore[misc]
@@ -421,11 +431,29 @@ def fill_in(at: DateLike, basedate: datetime,
     nothing ambiguous left to resolve), so it's returned as-is rather than
     having ``getattr(basedate, unit)`` raise on ``timespan``, which has no
     per-unit attributes.
+
+    Merging anything else INTO such a span, or merging it into an ``at``
+    that already carries units of its own, raises ``TimeError`` (which the
+    grammar turns into a ``BAD_DATE`` diagnostic; see
+    ``parser.dateparse.DateParserPlugin``). That combination only arises
+    from a period keyword written together with a time of day
+    ("previous week 3pm", "3pm previous week"): a period names a span, so a
+    time of day on it names nothing. Rejecting it in both word orders is a
+    deliberate divergence from whoosh, which crashes on one order and
+    silently discards the time on the other (see DIVERGENCES.md).
     """
 
     if isinstance(at, datetime):
         return at
+    if isinstance(at, timespan):
+        # A resolved span with something merged in after it, e.g. the
+        # "previous week" + "3pm" word order.
+        raise TimeError(f"can't merge {basedate!r} into the period {at!r}")
     if isinstance(basedate, timespan):
+        if any(getattr(at, unit) is not None for unit in units):
+            # A resolved span merged into units already collected, e.g. the
+            # "3pm" + "previous week" word order.
+            raise TimeError(f"can't merge the period {basedate!r} into {at!r}")
         return basedate
 
     args: dict[str, Any] = {}
