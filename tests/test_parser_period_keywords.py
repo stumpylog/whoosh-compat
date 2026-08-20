@@ -22,6 +22,8 @@ import pytest
 from whoosh_compat import FieldKind
 from whoosh_compat import FieldRegistry
 from whoosh_compat import FieldSpec
+from whoosh_compat import ParseResult
+from whoosh_compat import ast
 from whoosh_compat import parse
 from whoosh_compat.errors import DiagnosticKind
 
@@ -36,8 +38,23 @@ def registry() -> FieldRegistry:
     )
 
 
-def _parse(registry: FieldRegistry, q: str, basedate: datetime | None = None):
+def _parse(registry: FieldRegistry, q: str, basedate: datetime | None = None) -> ParseResult:
     return parse(q, registry=registry, default_fields=["content"], tz=UTC, basedate=basedate)
+
+
+def _date_range(registry: FieldRegistry, q: str, basedate: datetime | None = None) -> ast.DateRange:
+    """Parse a query that must resolve cleanly to a single ``DateRange``.
+
+    Every bound-checking test below shares the same two preconditions (no
+    diagnostics, and a ``DateRange`` at the root), so they live here once
+    rather than being restated per test. Narrowing the node type is also what
+    lets the ``.lo``/``.hi``/``.incl_*`` reads below type-check: ``ast.Node``
+    has no such attributes.
+    """
+    result = _parse(registry, q, basedate=basedate)
+    assert not result.diagnostics
+    assert isinstance(result.ast, ast.DateRange)
+    return result.ast
 
 
 # An afternoon "now", so that "noon to now" reads forward within one day.
@@ -102,13 +119,12 @@ def test_time_of_day_lower_bound_against_a_concrete_upper_bound_resolves(
     Both spellings are pinned: the bracketed form is the one that used to
     crash without being listed in the task brief.
     """
-    result = _parse(registry, q, basedate=AFTERNOON)
-    assert not result.diagnostics
-    assert result.ast.lo == datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
-    assert result.ast.incl_lo is True
-    assert result.ast.hi == expected_hi
-    assert result.ast.incl_hi is expected_incl_hi
-    assert result.ast.lo < result.ast.hi
+    rng = _date_range(registry, q, basedate=AFTERNOON)
+    assert rng.lo == datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
+    assert rng.incl_lo is True
+    assert rng.hi == expected_hi
+    assert rng.incl_hi is expected_incl_hi
+    assert rng.lo < rng.hi
 
 
 @pytest.mark.parametrize("q", ['added:"noon to now"', "added:[noon TO now]"])
@@ -119,11 +135,11 @@ def test_time_of_day_lower_bound_before_noon_carries_past_midnight(
     forward overnight rather than inverting -- whoosh's own rule for
     time-only bounds, which "[3pm to 10am]" already relies on.
     """
-    result = _parse(registry, q, basedate=PREDAWN)
-    assert not result.diagnostics
-    assert result.ast.lo == datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
-    assert result.ast.hi.date() == datetime(2026, 8, 20, tzinfo=UTC).date()
-    assert result.ast.lo < result.ast.hi
+    rng = _date_range(registry, q, basedate=PREDAWN)
+    assert rng.hi is not None  # a two-sided range; DateRange bounds are Optional
+    assert rng.lo == datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
+    assert rng.hi.date() == datetime(2026, 8, 20, tzinfo=UTC).date()
+    assert rng.lo < rng.hi
 
 
 def test_time_of_day_lower_bound_against_a_relative_upper_bound_resolves(
@@ -132,11 +148,10 @@ def test_time_of_day_lower_bound_against_a_relative_upper_bound_resolves(
     """The same shape with a "-1 week" offset upper bound, which also arrives
     already concrete and so hit the same crash.
     """
-    result = _parse(registry, "added:[noon TO -1 week]", basedate=AFTERNOON)
-    assert not result.diagnostics
-    assert result.ast.lo == datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
-    assert result.ast.hi == datetime(2026, 8, 12, 15, 30, tzinfo=UTC)
-    assert result.ast.lo < result.ast.hi
+    rng = _date_range(registry, "added:[noon TO -1 week]", basedate=AFTERNOON)
+    assert rng.lo == datetime(2026, 8, 12, 12, 0, tzinfo=UTC)
+    assert rng.hi == datetime(2026, 8, 12, 15, 30, tzinfo=UTC)
+    assert rng.lo < rng.hi
 
 
 def test_characterize_predawn_relative_upper_bound_year_borrow(
@@ -155,13 +170,12 @@ def test_characterize_predawn_relative_upper_bound_year_borrow(
     input, so there is no oracle to say whether it is intended.
     See DIVERGENCES.md entry 51.
     """
-    result = _parse(registry, "added:[noon TO -1 week]", basedate=PREDAWN)
-    assert not result.diagnostics
-    assert result.ast.lo == datetime(2025, 8, 19, 12, 0, tzinfo=UTC)
-    assert result.ast.hi == datetime(2026, 8, 12, 1, 41, tzinfo=UTC)
+    rng = _date_range(registry, "added:[noon TO -1 week]", basedate=PREDAWN)
+    assert rng.lo == datetime(2025, 8, 19, 12, 0, tzinfo=UTC)
+    assert rng.hi == datetime(2026, 8, 12, 1, 41, tzinfo=UTC)
     # Well-formed (not inverted) even though it is wider than a user
     # plausibly meant -- the property that actually matters here.
-    assert result.ast.lo < result.ast.hi
+    assert rng.lo < rng.hi
 
 
 @pytest.mark.parametrize("q", ['added:"3pm yesterday"', 'added:"yesterday 3pm"'])
@@ -176,13 +190,12 @@ def test_ordinary_date_keywords_still_take_a_time_in_either_order(
     hour: rejecting a time on a period keyword must not shift the DATE that
     an ordinary keyword resolves to either.
     """
-    result = _parse(registry, q, basedate=AFTERNOON)
-    assert not result.diagnostics
+    rng = _date_range(registry, q, basedate=AFTERNOON)
     # "yesterday" relative to the pinned 2026-08-19 "now", at 15:00-16:00.
-    assert result.ast.lo == datetime(2026, 8, 18, 15, 0, tzinfo=UTC)
-    assert result.ast.hi == datetime(2026, 8, 18, 16, 0, tzinfo=UTC)
-    assert result.ast.incl_lo is True
-    assert result.ast.incl_hi is False
+    assert rng.lo == datetime(2026, 8, 18, 15, 0, tzinfo=UTC)
+    assert rng.hi == datetime(2026, 8, 18, 16, 0, tzinfo=UTC)
+    assert rng.incl_lo is True
+    assert rng.incl_hi is False
 
 
 def test_bare_period_keyword_is_unaffected(registry: FieldRegistry) -> None:
