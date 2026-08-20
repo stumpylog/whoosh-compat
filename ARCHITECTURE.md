@@ -774,11 +774,16 @@ new `FieldSpec` attribute and teaching the parser/emitter to read it, no
 plugin-architecture changes required for field-level behavior.
 
 **The JSON `parse_query` carve-out.** `TantivyEmitter._json_paths_supported()`
-probes, once per emitter instance, whether the installed `tantivy-py`'s
-`Query.term_query` can resolve a JSON subpath directly. If not, JSON-subpath
-term emission falls back to a strictly escaped, single-leaf
-`index.parse_query()` call instead of the fully-programmatic construction
-used everywhere else. This carve-out is self-retiring: once
+probes whether the installed `tantivy-py`'s `Query.term_query` can resolve a
+JSON subpath directly, cached once per `FieldRegistry` (a
+`weakref.WeakKeyDictionary`, module-level in `emitters/tantivy_.py`), not
+once per emitter instance: `emit()` builds a fresh `TantivyEmitter` on every
+call, so a cache on `self` never survived past that one call, and the real
+probe query ran on every single `emit()` against any registry with a JSON
+field. If unsupported, JSON-subpath term emission falls back to a strictly
+escaped, single-leaf `index.parse_query()` call instead of the
+fully-programmatic construction used everywhere else. This carve-out is
+self-retiring: once
 [tantivy-py#716](https://github.com/quickwit-oss/tantivy-py/pull/716) lands
 and ships, the probe starts succeeding and the fallback branch simply stops
 being taken. No code change is required in this library.

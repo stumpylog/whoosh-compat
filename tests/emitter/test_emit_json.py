@@ -15,6 +15,7 @@ import pytest
 import tantivy
 
 from whoosh_compat import ast
+from whoosh_compat.emitters import tantivy_
 from whoosh_compat.emitters.tantivy_ import TantivyEmitter
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryError
@@ -463,7 +464,7 @@ def _force_json_paths_supported(emitter: TantivyEmitter) -> None:
     real search, without depending on genuine JSON-path support that this
     installed tantivy-py doesn't have yet.
     """
-    emitter._json_paths_ok = True
+    tantivy_._json_paths_supported_cache[emitter.registry] = True
 
 
 def test_json_subpath_phrase_supported_branch_maps_slop(tindex: TIndex) -> None:

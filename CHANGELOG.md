@@ -281,6 +281,16 @@ material; they are permanently documented, each with its rationale, in
   does not make one instance safe to call `parse()` on concurrently from
   multiple threads, which the class docstrings now say explicitly.
 
+- `TantivyEmitter._json_paths_supported()`'s probe (does the installed
+  `tantivy-py`'s `Query.term_query` resolve a JSON subpath directly)
+  was cached only on the emitter instance, but `emit()` builds a fresh
+  `TantivyEmitter` on every call, so the cache never survived past the one
+  `emit()` that populated it and the real probe query ran again on every
+  single query emitted against any registry with a JSON field. Now cached
+  once per `FieldRegistry` instead (a `weakref.WeakKeyDictionary`, so a
+  registry no longer referenced anywhere else is not kept alive by this
+  cache), scoped per registry rather than shared globally so one
+  registry's schema drift cannot poison another registry's answer.
 - `ast.Visitor.visit()` dispatched on the exact concrete class name only,
   so a `Node` subclass with no `visit_<its-own-name>` method of its own
   (e.g. a caller-defined specialization of `Term`) fell straight through

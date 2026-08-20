@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import re
+import weakref
 from collections.abc import Callable
 from collections.abc import Iterator
 from datetime import UTC
@@ -45,6 +46,35 @@ from whoosh_compat.fields import ResolvedField
 
 _FALSY_TEXT = ("f", "false", "no", "0")
 _U64_MAX = 2**64 - 1
+
+# _json_paths_supported()'s probe result, cached per FieldRegistry rather
+# than per TantivyEmitter instance: emit() (the module-level function)
+# builds a fresh TantivyEmitter for every single call, so a cache living on
+# `self` never survives past the one emit() call that populated it, and the
+# real term_query("probe") call this guards against ran on every emitted
+# query for any registry with a JSON field. A FieldRegistry, by contrast,
+# is the long-lived object a host builds once and reuses across every
+# emit() call (ARCHITECTURE.md), so caching there makes the probe run once
+# per registry for the registry's whole lifetime instead.
+# Deliberately *not* a single process-wide flag: whether the installed
+# tantivy-py's term_query can resolve a JSON subpath is, in the design this
+# probe assumes, a capability of the tantivy-py build alone and so
+# genuinely registry-independent -- but the probe itself asks the question
+# by querying a specific field drawn from a specific registry against a
+# specific index's schema, so a registry whose schema has drifted on that
+# probed field would get a false answer for the wrong reason (a missing
+# field, not an unsupported dotted path). A single shared flag would let
+# that one bad probe poison every *other*, undrifted registry's answer too;
+# scoping to the registry confines a bad probe to the registry that caused
+# it, same as the pre-fix per-instance cache did within its own one-call
+# lifetime.  A `WeakKeyDictionary` is used (rather than an attribute on
+# `FieldRegistry` itself) to keep this tantivy-specific concern out of
+# `fields.py`, and lets the entry disappear on its own once a registry is
+# no longer referenced anywhere else, instead of accumulating for the life
+# of the process.
+_json_paths_supported_cache: weakref.WeakKeyDictionary[FieldRegistry, bool] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def _is_truthy(value: object) -> bool:
@@ -467,8 +497,6 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         self.index = index
         self.schema = index.schema
         self.registry = registry
-        # Cache for _json_paths_supported(): None means "not probed yet".
-        self._json_paths_ok: bool | None = None
 
     def emit(self, node: ast.Node) -> tantivy.Query:
         """Normalize, analyze, and emit ``node``, guaranteeing the documented
@@ -622,32 +650,38 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
     def _json_paths_supported(self) -> bool:
         """Whether the installed tantivy-py's ``Query.term_query`` can address
-        a JSON subpath directly (cached once per emitter instance).
+        a JSON subpath directly (cached once per ``FieldRegistry``, in
+        ``_json_paths_supported_cache``, not per emitter instance: ``emit()``
+        builds a fresh ``TantivyEmitter`` on every call, so a cache living on
+        ``self`` never survives past that one call).
 
         Probes with the first JSON-kind field/subpath found in the registry:
         JSON path resolution in ``term_query`` is a schema-level capability of
         the installed tantivy-py, not something that varies per field, so one
-        probe per emitter instance is representative for all JSON fields.
+        probe per registry is representative for all JSON fields on it.
         Retires itself once https://github.com/quickwit-oss/tantivy-py/pull/716
         ships: the probe starts succeeding and ``_emit_json_term`` stops
         taking the ``parse_query`` branch below.
         """
-        if self._json_paths_ok is None:
-            probe_path = None
-            for spec in self.registry:
-                if spec.kind is FieldKind.JSON and spec.subpaths:
-                    probe_path = f"{spec.name}.{next(iter(spec.subpaths))}"
-                    break
-            if probe_path is None:
-                # No JSON fields registered: the probe result is moot.
-                self._json_paths_ok = False
-            else:
-                try:
-                    tantivy.Query.term_query(self.schema, probe_path, "probe")
-                    self._json_paths_ok = True
-                except ValueError:
-                    self._json_paths_ok = False
-        return self._json_paths_ok
+        cached = _json_paths_supported_cache.get(self.registry)
+        if cached is not None:
+            return cached
+        probe_path = None
+        for spec in self.registry:
+            if spec.kind is FieldKind.JSON and spec.subpaths:
+                probe_path = f"{spec.name}.{next(iter(spec.subpaths))}"
+                break
+        if probe_path is None:
+            # No JSON fields registered: the probe result is moot.
+            supported = False
+        else:
+            try:
+                tantivy.Query.term_query(self.schema, probe_path, "probe")
+                supported = True
+            except ValueError:
+                supported = False
+        _json_paths_supported_cache[self.registry] = supported
+        return supported
 
     def _emit_json_term(
         self, resolved: ResolvedField, text: object, node: ast.Node
