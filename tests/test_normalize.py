@@ -337,27 +337,87 @@ class TestIterativeNormalizeDeepTree:
 # _dedupe calls _structural_key once *per sibling*, each call starting a
 # fresh discovery/memo pass: sharing between two top-level siblings in the
 # same `nodes` tuple therefore never lands inside a single _structural_key
-# call at all, and cannot exercise the bug this class exists to pin. Both
-# of the two ways sharing can actually reach a single _structural_key call
-# are covered separately below: calling it directly with the shared node
-# genuinely at the top (TestStructuralKeyToleratesSharedNode), and going
-# through the public normalize() with the shared subtree nested inside one
-# sibling, itself composite (TestNormalizeToleratesSharedSubtreeInOneSibling
-# - these six shapes were confirmed, directly against the previous commit,
+# call at all, and cannot exercise the bug below. Both of the two ways
+# sharing can actually reach a single _structural_key call are covered
+# separately below: calling it directly with the shared node genuinely at
+# the top (TestStructuralKeyToleratesSharedNode - see its own docstring
+# for which of its cases actually pin the bug and which merely
+# characterize adjacent, non-triggering shapes), and going through the
+# public normalize() with the shared subtree nested inside one sibling,
+# itself composite (TestNormalizeToleratesSharedSubtreeInOneSibling - all
+# six shapes there were confirmed, directly against the previous commit,
 # to raise KeyError there and pass here).
 class TestStructuralKeyToleratesSharedNode:
+    """Two kinds of case live here, and they are not interchangeable as
+    regression coverage: some genuinely PIN the fix (they fail with
+    ``KeyError`` on the pre-fix commit and pass now); others are
+    CHARACTERIZATION, not a regression pin - they pass on *both* commits,
+    because the shape they build cannot reach the bug at all, or happens
+    to land on the non-triggering side of it. Both kinds are legitimate
+    behavior tests (a shared node must not raise, on any shape), but only
+    the PIN cases would catch a reintroduction of this specific bug; the
+    CHARACTERIZATION cases would stay green even if the fix were reverted.
+    Confirmed directly against the pre-fix commit (`48febd4`, via a
+    temporary `git worktree`) for every case below, not asserted from the
+    shape alone.
+    """
+
     @pytest.mark.parametrize(
         "build",
         [
-            pytest.param(lambda x: And(children=(x, x)), id="same-object-twice-direct"),
-            pytest.param(lambda x: And(children=(x, Not(child=x))), id="shared-then-wrapped"),
-            pytest.param(lambda x: And(children=(Not(child=x), x)), id="wrapped-then-shared"),
+            pytest.param(
+                lambda x: And(children=(Not(child=x), x)), id="wrapped-then-shared"
+            ),
             pytest.param(
                 lambda x: AndNot(positive=Not(child=x), negative=x), id="andnot-shared"
             ),
         ],
     )
-    def test_shared_node_does_not_raise(self, build: Callable[[Node], Node]) -> None:
+    def test_shared_node_does_not_raise_pin(self, build: Callable[[Node], Node]) -> None:
+        """PIN: both shapes raise ``KeyError`` on `48febd4` and pass here."""
+        from whoosh_compat.ast import _structural_key
+
+        shared = T("x")
+        tree = build(shared)
+        _structural_key(tree)  # must not raise KeyError (or anything else)
+
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(lambda x: And(children=(x, x)), id="same-object-twice-direct"),
+            pytest.param(lambda x: And(children=(x, Not(child=x))), id="shared-then-wrapped"),
+        ],
+    )
+    def test_shared_node_does_not_raise_characterize(
+        self, build: Callable[[Node], Node]
+    ) -> None:
+        """CHARACTERIZATION, not a regression pin: both shapes pass on
+        `48febd4` too, for different reasons, so neither would catch this
+        bug coming back - they are kept because "a shared node must not
+        raise" is still a real behavior worth documenting for each shape.
+
+        ``same-object-twice-direct`` (``And(x, x)``) has only one
+        *distinct* parent (both occurrences are the same ``And``), and the
+        bug needs two - a single-parent shape was never able to trigger
+        eviction-before-second-read in the first place, fixed or not.
+
+        ``shared-then-wrapped`` (``And(x, Not(child=x))``) is the
+        non-triggering half of an order-dependent pair, and that asymmetry
+        is itself the reason this bug survived earlier testing: on
+        `48febd4`, evicting ``x``'s ``memo`` entry after its *first*
+        reader (here, ``x`` itself, processed before ``Not``) left the
+        entry gone by the time the *second* reader needed it - except
+        here the second reader is ``Not(child=x))``, which reads ``x`` on
+        its own way to becoming ready, so by the time this ``And`` itself
+        combines, both children's reads already happened in an order that
+        never left a stale gap. Swap the child order
+        (``And(children=(Not(child=x), x))``, the ``wrapped-then-shared``
+        PIN case above) and the same sharing raises: whichever of ``x``'s
+        two readers is visited second finds the entry already evicted by
+        the first. The bug was always order-dependent on which of a
+        shared node's parents got visited first, not on the tree's shape
+        alone - which is exactly what let this shape hide it.
+        """
         from whoosh_compat.ast import _structural_key
 
         shared = T("x")
@@ -365,9 +425,14 @@ class TestStructuralKeyToleratesSharedNode:
         _structural_key(tree)  # must not raise KeyError (or anything else)
 
     def test_shared_object_content_matches_unshared_equivalent(self) -> None:
-        # The key a shared node produces must match what an unshared but
-        # content-identical tree produces: sharing is an implementation
-        # detail of how the caller built the tree, not a semantic signal.
+        """PIN: raises ``KeyError`` on `48febd4` too (the shared ``x`` in
+        ``AndNot(positive=Not(child=x), negative=x)`` is read by two
+        distinct parents, ``Not`` and the ``AndNot`` itself). Also checks
+        something the raise/no-raise pins above don't: the key a shared
+        node produces must match what an unshared but content-identical
+        tree produces - sharing is an implementation detail of how the
+        caller built the tree, not a semantic signal.
+        """
         from whoosh_compat.ast import _structural_key
 
         shared = T("x")
