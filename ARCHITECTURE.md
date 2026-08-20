@@ -642,8 +642,22 @@ on a hand-built tree and using the result for something other than
 `emit()`. `_dedupe` now computes its key with its own iterative,
 memoized traversal (matching the same node-equality semantics, including
 the `Phrase.words`/`analyzed` extension described on its docstring, and
-the numeric-tower/NaN quirks `Boosted.boost` raises for a string-based
-key - see `_encode_field`'s docstring) instead of relying on `__hash__`.
+the NaN/negative-zero quirks `Boosted.boost` raises for a string-based
+key - see `_encode_field`'s docstring, including why that key
+deliberately does *not* attempt numeric-tower canonicalization: doing so
+once traded a reachable, silent data-loss bug - two distinct large
+integers on a U64/ASN field rounding to the same `float` and one query
+branch being silently dropped - for closing an unreachable one) instead
+of relying on `__hash__`. That same traversal also has to tolerate a
+node object referenced by more than one parent (a DAG, not just a tree):
+nothing `normalize()`/`parse()` ever produce shares a node this way, but
+nothing stops a caller from building one, and an early version of the
+memory fix below evicted a shared child's key as soon as its *first*
+parent read it, raising `KeyError` for its second parent - order-
+dependent on which parent happened to be visited first, not on the
+tree's actual shape. `_structural_key` now discovers the full reachable
+node set up front and tracks, per node, how many distinct parents still
+need to read it before its entry may be evicted.
 
 The cap bounds recursion depth, not CPU time: parse time is still
 quadratic in the length of a long unmatched word-character run (the

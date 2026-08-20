@@ -1,3 +1,5 @@
+from collections.abc import Callable
+
 import pytest
 
 from whoosh_compat.ast import And
@@ -185,6 +187,28 @@ class TestRule5Dedupe:
         p2 = Phrase(field=FieldRef("t"), text="a b", words=("a", "b"), analyzed=True)
         assert normalize(Or(children=(p1, p2))) == p1
 
+    def test_dedupe_keeps_distinct_large_ints_nested_in_a_composite(self) -> None:
+        # Term.text is `str | int | bool`, and U64/ASN-kind fields carry
+        # exactly the values that make float()-based canonicalization
+        # lossy: two distinct ints above 2**53 can round to the same
+        # double. A *nested* Term (inside an And, not a bare top-level
+        # sibling) is the reachable case, since only a childless leaf at
+        # the top of _dedupe's own dispatch takes _leaf_key's raw-value
+        # path; a Term one level down goes through _structural_key's
+        # atomic-value encoding instead. Real query text reaches this:
+        # `(asn:9007199254740993 AND x) OR (asn:9007199254740992 AND x)`
+        # normalizes to an And per branch, each a sibling of the other in
+        # the Or - collapsing them would silently drop a branch of a
+        # query that parsed with zero diagnostics.
+        big1 = 9007199254740993
+        big2 = 9007199254740992
+        assert float(big1) == float(big2)  # the two values this guards against
+        branch1 = And(children=(Term(field=None, text=big1), T("x")))
+        branch2 = And(children=(Term(field=None, text=big2), T("x")))
+        result = normalize(Or(children=(branch1, branch2)))
+        assert isinstance(result, Or)
+        assert len(result.children) == 2
+
 
 # Rule 6: Every() absorption in Or, dropping in And.
 class TestRule6EveryAbsorption:
@@ -299,3 +323,43 @@ class TestIterativeNormalizeDeepTree:
             node = node.child
         assert count == depth
         assert node == T("a")
+
+
+# normalize()/_dedupe() must also tolerate a node object referenced by more
+# than one parent (a DAG, not just a tree): normalize()/parse() never
+# produce one, but nothing stops a caller from building
+# And(children=(x, Not(child=x))) for the same `x` object. _structural_key's
+# own memo eviction (added to bound memory on a deep chain) is exactly the
+# kind of change that can break this without any of the *depth* tests above
+# noticing, since the failure here is about a node having two parents, not
+# about being deep or wide.
+class TestSharedSubtreeSurvivesDedupe:
+    @pytest.mark.parametrize(
+        "build",
+        [
+            pytest.param(lambda x: And(children=(x, x)), id="same-object-twice-direct"),
+            pytest.param(lambda x: And(children=(x, Not(child=x))), id="shared-then-wrapped"),
+            pytest.param(lambda x: And(children=(Not(child=x), x)), id="wrapped-then-shared"),
+            pytest.param(
+                lambda x: AndNot(positive=Not(child=x), negative=x), id="andnot-shared"
+            ),
+        ],
+    )
+    def test_shared_node_does_not_raise(self, build: Callable[[Node], Node]) -> None:
+        shared = T("x")
+        tree = build(shared)
+        normalize(tree)  # must not raise KeyError (or anything else)
+
+    def test_same_object_twice_dedupes_to_one(self) -> None:
+        shared = T("x")
+        result = normalize(And(children=(shared, shared)))
+        assert result == shared
+
+    def test_shared_object_content_matches_unshared_equivalent(self) -> None:
+        # The key a shared node produces must match what an unshared but
+        # content-identical tree produces: sharing is an implementation
+        # detail of how the caller built the tree, not a semantic signal.
+        shared = T("x")
+        shared_tree = AndNot(positive=Not(child=shared), negative=shared)
+        unshared_tree = AndNot(positive=Not(child=T("x")), negative=T("x"))
+        assert normalize(shared_tree) == normalize(unshared_tree)

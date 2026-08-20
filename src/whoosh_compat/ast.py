@@ -273,70 +273,71 @@ def _encode_field(value: object, memo: dict[int, str]) -> str:
     field value that happens to contain the joining character does not
     create a false split).
 
-    Anything else - the atomic-leaf fallback - must produce equal strings
-    for values that compare ``==`` and different strings for values that
-    do not, matching whatever the dataclass-generated field comparison
-    would have done, not just "looks distinguishable": a bare
-    ``f"{type(value).__name__}:{value!r}"`` gets this wrong two ways for
-    the numeric tower (``int``/``float``/``bool`` all compare across
-    types: ``2 == 2.0``, ``True == 1``), which is the one place in this
-    AST an atomic (non-``Node``) field sits directly on a composite node
+    Anything else - the atomic-leaf fallback - is
+    ``f"{type(value).__name__}:{value!r}"`` for almost everything, which
+    is enough to distinguish it from a different type with a colliding
+    ``repr()`` (e.g. the string ``"1"`` vs the int ``1``), and is exact
+    (round-trips losslessly, matches ``==``) for every type actually
+    reachable here except one: ``float``, the one place in this AST an
+    atomic (non-``Node``) field sits directly on a composite node
     (``Boosted.boost``) rather than being handled by :func:`_leaf_key`'s
-    fast path:
+    fast path. Two ``float``-specific quirks get this wrong:
 
-    * Two values that compare equal but type-and-repr differently
-      (``2`` vs ``2.0``) would encode as different strings and wrongly be
-      kept as distinct siblings (under-dedupe: benign, just misses a
-      merge real ``==``-based dedupe would have made).
     * Two NaN floats, which never compare equal to *anything* via a bare
-      ``==`` - not even to themselves, field-for-field, as confirmed
-      below - both ``repr()`` as ``"nan"`` and would wrongly encode as
-      the *same* string, merging two nodes real node-equality treats as
-      distinct (over-dedupe: silently drops one - the actual correctness
-      risk this module's recursive-``__hash__`` fix was about, just
-      relocated to a coarser key instead of eliminated).
+      ``==`` - not even to themselves, field-for-field, on this
+      interpreter, as measured below - both ``repr()`` as ``"nan"`` and
+      would wrongly encode as the *same* string, merging two nodes real
+      node-equality treats as distinct (over-dedupe: silently drops one -
+      the actual correctness risk this module's recursive-``__hash__``
+      fix was about, just relocated to a coarser key instead of
+      eliminated).
+    * ``-0.0`` and ``0.0`` compare equal (``-0.0 == 0.0``) but ``repr()``
+      differently, so they would wrongly encode as distinct.
 
-    A third, smaller case is the same family of bug: ``-0.0`` and ``0.0``
-    compare equal (``-0.0 == 0.0``) but ``repr()`` differently, so they
-    would wrongly encode as distinct without an explicit normalization
-    step too.
-
-    All three are handled explicitly. A NaN float draws a fresh tag from
-    ``_NAN_TAGS`` every time, so no two NaN encodings ever collide, no
-    matter what: this deliberately does *not* key off ``id(value)`` the
-    way ``__eq__`` gets to for a top-level "is this literally the same
-    node" check (:func:`_dedupe` has its own such check, for that
-    reason - see its docstring), because the field-level comparison a
-    NaN participates in here never gets that shortcut. The dataclasses'
-    own generated ``__eq__`` for a composite node compares
-    ``self.boost == other.boost`` directly, a bare ``float.__eq__`` call
-    with no identity fast path, so even the *same* NaN object nested
-    inside two otherwise-identical composite nodes compares unequal
-    (confirmed against this codebase's actual generated ``__eq__``, not
-    assumed); an ``id(value)``-based tag would have wrongly collapsed
-    that case back into a false collision one level down from the bug
-    just fixed. A zero of either sign is normalized to plain ``0.0``; and
-    any other ``int``/``float``/``bool`` is canonicalized through
-    ``float()`` so cross-type-but-equal values encode identically. Every
-    other atomic type actually reachable here (``str``, ``None``,
-    ``datetime``, ``FieldRef``, ``Diagnostic``) has no such quirk: its
-    ``repr()`` is unambiguous and equality-preserving, so the original
-    type-plus-``repr()`` fallback is kept for them. A future atomic field
-    added to a composite ``Node`` with a type not covered by either branch
-    would need the same scrutiny this docstring gives ``float``.
+    Both are handled explicitly, for ``float`` only. A NaN draws a fresh
+    tag from ``_NAN_TAGS`` every time, so no two NaN encodings ever
+    collide, no matter what: this deliberately does *not* key off
+    ``id(value)`` the way ``__eq__`` gets to for a top-level "is this
+    literally the same node" check (:func:`_dedupe` has its own such
+    check, for that reason - see its docstring), because on at least one
+    supported interpreter the field-level comparison a NaN participates
+    in here does not get that shortcut - measured (via
+    ``dis.dis(Boosted.__eq__)``) on CPython 3.14, whose slots-optimized
+    dataclass codegen compares ``self.boost == other.boost`` directly (a
+    bare ``float.__eq__`` call, no identity fast path) after a
+    ``self is other`` prologue that only ever fires for the *whole*
+    node, not a field nested inside it - so even the *same* NaN object
+    nested inside two otherwise-identical composite nodes compares
+    unequal there. This
+    does **not** hold across every interpreter this library supports
+    (3.11 through 3.14): on CPython 3.11, the generated ``__eq__``
+    instead builds and compares a tuple of the fields, which *does* get
+    ``PyObject_RichCompareBool``'s per-element identity shortcut - so the
+    same same-object-NaN case compares *equal* there. An ``id(value)``-
+    based tag would have matched 3.11 but silently over-deduped on 3.14
+    (or vice versa for a counter, depending which version's behavior one
+    tried to match) - a NaN-bearing key cannot be made to match ``__eq__``
+    exactly on every supported interpreter simultaneously with a design
+    this simple. Always-unique per encounter (this function's actual
+    choice) never over-dedupes on *any* version: 3.11's identity-based
+    "equal" case just lands in the always-safe under-dedupe direction
+    there instead (see :func:`_dedupe`'s docstring for why the merge that
+    exact case is entitled to, at the *whole-node* level, is restored
+    separately). A zero of either sign is normalized to plain ``0.0``; no
+    other type reachable here needs the same scrutiny, but a future
+    atomic field added to a composite ``Node`` would.
     """
     if isinstance(value, Node):
         return memo[id(value)]
     if isinstance(value, tuple):
         parts = [_encode_field(v, memo) for v in value]
         return "(" + "|".join(f"{len(p)}:{p}" for p in parts) + ")"
-    if isinstance(value, (int, float)):
-        as_float = float(value)
-        if math.isnan(as_float):  # NaN: never `==`-equal to anything, not even itself
+    if isinstance(value, float):
+        if math.isnan(value):  # NaN: never `==`-equal to anything, not even itself
             return f"nan:{next(_NAN_TAGS)}"
-        if as_float == 0.0:  # normalize -0.0 to 0.0: they compare equal but repr differently
-            as_float = 0.0
-        return f"num:{as_float!r}"
+        if value == 0.0:  # normalize -0.0 to 0.0: they compare equal but repr differently
+            value = 0.0
+        return f"num:{value!r}"
     return f"{type(value).__name__}:{value!r}"
 
 
@@ -363,15 +364,37 @@ def _leaf_key(node: Node) -> tuple[object, ...]:
 
 
 def _structural_key(root: Node) -> str:
-    """Computes a string that is equal for two nodes precisely when their
-    ``compare=True`` fields are, at every depth - the same information
-    the dataclasses' generated ``__eq__``/``__hash__`` uses - without ever
-    calling either. This holds for every atomic field type actually
-    reachable in this AST (see :func:`_encode_field`'s docstring for the
-    numeric-tower/NaN handling that makes it hold for ``float``
-    specifically); a hypothetical future atomic field type outside what
-    :func:`_encode_field` already special-cases would need the same
-    scrutiny before this claim would still be true of it.
+    """Computes a string built from the same information the dataclasses'
+    generated ``__eq__``/``__hash__`` uses (``compare=True`` fields, at
+    every depth), without ever calling either.
+
+    This is *equal for two nodes precisely when their fields are* for
+    every case actually reachable here except one, deliberate exception,
+    documented on :func:`_encode_field`: an atomic ``int``/``float``/
+    ``bool`` value does not get numeric-tower canonicalization (``2`` and
+    ``2.0`` encode differently, even though ``2 == 2.0``), because the one
+    field this matters for (``Boosted.boost``) also carries a field type
+    (``float``) with a real over-dedupe risk (NaN) that a
+    canonicalization step aggravated in an earlier version of this
+    function - see :func:`_encode_field`'s docstring for the full
+    reasoning and why under-dedupe (kept as distinct siblings when
+    ``==`` would have merged them - harmless, a redundant clause matches
+    the same documents) is the direction this function accepts on the
+    rare occasions its key is coarser than ``==``, never the reverse
+    (silently dropping a distinct query branch). A hypothetical future
+    atomic field type outside what :func:`_encode_field` already handles
+    would need the same scrutiny before any exactness claim would hold of
+    it.
+
+    It also does *not* hold across two separate calls to this function
+    for the same NaN-bearing node: :func:`_encode_field` deliberately
+    gives every NaN a fresh, ever-incrementing tag, so
+    ``_structural_key(n) == _structural_key(n)`` can be ``False``.
+    Nothing relies on that holding across calls today - :func:`_dedupe`
+    calls this once per sibling within a single pass over one ``nodes``
+    tuple, never compares a memoized key from one call against a freshly
+    computed one from another - but a future caller comparing keys
+    computed in two separate calls would need to know this.
 
     Traverses iteratively (an explicit work stack, keyed by node identity,
     mirroring :func:`normalize`'s own traversal), so a node that is itself
@@ -391,35 +414,94 @@ def _structural_key(root: Node) -> str:
     string's own equality and hashing are computed over its flat
     character content, not over whatever tree shape produced it.
 
-    ``memo`` entries are dropped as soon as their parent has folded them
-    into its own string (every child is consumed exactly once, right
-    after ``kids`` is computed for its parent): a level's string embeds
-    its entire subtree's text, so keeping every level's copy alive at
-    once, all the way up a deep chain, would cost memory quadratic in
-    depth (a still-heap-only, but still real, echo of the same "one
-    sibling deep enough defeats the safeguard" shape this function exists
-    to avoid on the call-stack side). Discarding a child's entry once
-    consumed bounds the live set to the current root-to-frontier path,
-    making peak memory linear in depth instead.
+    The tree ``normalize()``/``parse()`` ever produce never shares a node
+    object between two different parents, but a hand-built one is under
+    no such obligation (nothing prevents ``And(children=(x, Not(child=x)))``
+    for the same ``x`` object), so this function is written to tolerate a
+    DAG, not just a tree - both for correctness and for memory. A single
+    top-down stack visiting each child once, as soon as its parent needs
+    it, gets both of those wrong for a shared node: whichever parent is
+    processed first can evict the child's ``memo`` entry (see below)
+    before a second, not-yet-processed parent reads it, raising
+    ``KeyError`` - and the ``KeyError`` is order-dependent on which
+    parent happens to be visited first, not on the tree's actual shape,
+    which is exactly the kind of latent trap this module exists to
+    remove, not add. So this runs in two passes instead:
+
+    1. Discovery: an identity-keyed DFS (also iterative, for the same
+       depth reason as everything else here) that visits every reachable
+       node exactly once and records, per node, its own distinct children
+       (``kids_of``) and, per node, the distinct parents that reference it
+       (``parents_of``) - "distinct" meaning by identity, so a node
+       referenced twice by the *same* parent (``AndNot(positive=x,
+       negative=x)``) counts as one parent, not two.
+    2. Combination: a worklist seeded with every node that has zero
+       distinct children (the leaves), processed in an order where a node
+       is only ever added to the worklist once every one of its distinct
+       children has already been combined - guaranteeing, for a shared
+       node with multiple parents, that its ``memo`` entry exists no
+       matter which of its parents happens to run first, and that it is
+       computed exactly once even though multiple parents read it (unlike
+       a naive stack revisit, which would recompute a shared subtree once
+       per parent - fine for correctness on its own, but exponential on a
+       pathological DAG where sharing compounds across levels).
+
+    ``memo`` entries are still evicted as early as correctness allows,
+    for the same reason as the single-pass version this replaced: a
+    level's string embeds its entire subtree's text, so keeping every
+    level's copy alive at once, all the way up a deep chain, would cost
+    memory quadratic in depth (a still-heap-only, but still real, echo of
+    the same "one sibling deep enough defeats the safeguard" shape this
+    function exists to avoid on the call-stack side). The difference from
+    the single-pass version is *when* eviction is safe: a node is only
+    evicted once every one of its distinct parents (not just the first)
+    has read it, tracked by a countdown (``remaining_reads``) seeded from
+    ``len(parents_of[...])`` and decremented once per parent as that
+    parent is combined. For a tree with no sharing at all (every node has
+    at most one parent), this reduces to exactly the earlier behavior:
+    each node is evicted right after its one and only parent reads it.
     """
-    memo: dict[int, str] = {}
-    stack: list[tuple[Node, bool]] = [(root, False)]
-    while stack:
-        current, children_ready = stack.pop()
+    kids_of: dict[int, tuple[Node, ...]] = {}
+    node_by_id: dict[int, Node] = {id(root): root}
+    parents_of: dict[int, list[Node]] = {}
+    unresolved: dict[int, int] = {}
+
+    frontier = [root]
+    discovered = {id(root)}
+    while frontier:
+        current = frontier.pop()
         kids = _dedupe_key_children(current)
-        if children_ready or not kids:
-            parts = [type(current).__name__]
-            for f in dataclass_fields(current):
-                if not f.compare:
-                    continue
-                parts.append(_encode_field(getattr(current, f.name), memo))
-            memo[id(current)] = "|".join(f"{len(p)}:{p}" for p in parts)
-            for k in kids:
-                memo.pop(id(k), None)
-        else:
-            stack.append((current, True))
-            for k in kids:
-                stack.append((k, False))
+        kids_of[id(current)] = kids
+        distinct_kids: dict[int, Node] = {}
+        for k in kids:
+            distinct_kids.setdefault(id(k), k)
+        unresolved[id(current)] = len(distinct_kids)
+        for kid_id, k in distinct_kids.items():
+            parents_of.setdefault(kid_id, []).append(current)
+            if kid_id not in discovered:
+                discovered.add(kid_id)
+                node_by_id[kid_id] = k
+                frontier.append(k)
+
+    remaining_reads = {nid: len(parents) for nid, parents in parents_of.items()}
+    memo: dict[int, str] = {}
+    ready = [n for nid, n in node_by_id.items() if unresolved[nid] == 0]
+    while ready:
+        current = ready.pop()
+        parts = [type(current).__name__]
+        for f in dataclass_fields(current):
+            if not f.compare:
+                continue
+            parts.append(_encode_field(getattr(current, f.name), memo))
+        memo[id(current)] = "|".join(f"{len(p)}:{p}" for p in parts)
+        for kid_id in {id(k) for k in kids_of[id(current)]}:
+            remaining_reads[kid_id] -= 1
+            if remaining_reads[kid_id] == 0:
+                memo.pop(kid_id, None)
+        for parent in parents_of.get(id(current), ()):
+            unresolved[id(parent)] -= 1
+            if unresolved[id(parent)] == 0:
+                ready.append(parent)
     return memo[id(root)]
 
 
