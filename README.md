@@ -239,11 +239,15 @@ tagger's regex, `[\w.]+:`, scans toward end-of-input and fails at each
 successive position). Measured on one developer machine, so treat these
 as order-of-magnitude and the ~4x-per-doubling growth as the durable
 claim: 10KB ~1 second, 20KB ~4 seconds, 40KB ~15 seconds, 60KB ~34
-seconds. The tagger regex is unchanged from upstream whoosh, so real
-whoosh has the same growth curve on the same input (measured 10KB ~1.1
-seconds, 20KB ~4.0 seconds against the pinned oracle). The cost is
-inherited deliberately rather than fixed with a rewritten tagger regex
-whose subtle behavior differences would risk parity. The parser's own
+seconds. This library's tagger regex differs from upstream whoosh's in
+exactly one way, permitting `.` inside a field name so that dotted JSON
+subpaths tag (`[\w.]+:` here against whoosh's `\w+:`); that adds no `:` to
+the run being scanned and so does not change the scan's character. The
+parity claim rests on measurement rather than on sameness: real whoosh
+shows the same curve on the same input (measured 10KB ~1.1 seconds, 20KB
+~4.0 seconds against the pinned oracle). The cost is inherited
+deliberately rather than fixed with a rewritten tagger regex whose subtle
+behavior differences would risk parity. The parser's own
 nesting-depth cap bounds recursion, not CPU time, so a host accepting
 untrusted query strings should enforce its own length limit (a few KB
 comfortably covers any human-written query) before calling `parse()`.

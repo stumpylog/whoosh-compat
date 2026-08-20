@@ -670,11 +670,15 @@ quadratic in the length of a long unmatched word-character run (the
 fieldname tagger's regex scans to end-of-input at each successive tag
 position), measured at ~15s for a 40KB pathological query and ~34s for
 60KB - order-of-magnitude, from one developer machine, like the figures
-below; the durable claim is the ~4x-per-doubling curve. The tagger regex
-is unchanged from upstream, so real whoosh has that same curve (measured
-~1.1s at 10KB and ~4.0s at 20KB, against whoosh-compat's ~1.0s and
-~3.9s). That cost is inherited deliberately (a rewritten tagger regex
-would risk parity for a purely adversarial input shape); the README's
+below; the durable claim is the ~4x-per-doubling curve. This fork's
+tagger regex is upstream's plus `.` inside the field name (`[\w.]+:`
+against `\w+:`, so dotted JSON subpaths tag), which adds no `:` to the run
+being scanned and leaves the scan's character alone; the parity claim
+rests on measuring the oracle rather than on the regexes being identical.
+Real whoosh shows that same curve (measured ~1.1s at 10KB and ~4.0s at
+20KB, against whoosh-compat's ~1.0s and ~3.9s). That cost is inherited
+deliberately (a rewritten tagger regex would risk parity for a purely
+adversarial input shape); the README's
 host-contract section tells hosts to cap query length at their own
 boundary instead.
 
