@@ -57,17 +57,26 @@ parse, emit, search, `tests/emitter/test_acceptance_e2e.py`) test suites.
      length, which every fnmatch offset in the translation is taken against.
      Only a single one-character alternative applies. A stemmer leaves
      single characters alone, so this qualification costs a realistic host
-     nothing. The two ignored answers err in *opposite* directions, though,
-     and only the first under-matches: against several alternatives the
-     class accepts the character as typed and not the other forms, so it
-     matches less than the answer offered; against an empty answer it
-     matches **more**, because "no term can match this fragment" is honored
-     outside a class (`glob_to_regex("ab", lambda _t: ())` is `None`) but
-     not inside one, where the character stays as typed
-     (`glob_to_regex("[ab]", lambda _t: ())` is `"[ab]"`, which still
-     matches `a` or `b`). Both are pinned in
-     `tests/emitter/test_pattern_alternates.py`. What neither does is
-     silently mean a different valid class.
+     nothing. What the class then matches is whatever the character as
+     typed matches, which is something *other* than the answer offered
+     rather than reliably less than it, and the three cases differ (all
+     measured):
+
+     - Several alternatives *including* the typed character: narrower, only
+       the typed form is accepted. `glob_to_regex("[ab]", lambda t: (t,
+       t.upper()))` is `"[ab]"`.
+     - Several alternatives *not* including it, or one multi-character
+       form: **disjoint**, not narrower. `glob_to_regex("[a]", lambda _t:
+       ("x", "y"))` is `"[a]"`, which matches `a` — a character neither
+       offered form matches. Same for `lambda _t: ("xy",)`.
+     - No alternatives at all: **wider**. "No term can match this fragment"
+       is honored outside a class (`glob_to_regex("ab", lambda _t: ())` is
+       `None`) but not inside one, where the character stays as typed, so
+       `glob_to_regex("[ab]", lambda _t: ())` is `"[ab]"` and still matches
+       `a` or `b`.
+
+     Pinned in `tests/emitter/test_pattern_alternates.py`. What none of the
+     three does is silently mean a different valid class.
    - The class's extent is found *before* the fold, so a character the
      normalizer maps onto `[` or `]` (`ascii_fold` maps the fullwidth `［`
      and `］` that way) can neither open a class nor close one; it is only

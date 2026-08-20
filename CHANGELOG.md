@@ -143,6 +143,15 @@ matter only to someone who installed from a git revision before this release
   answer the alert does not give it. No behavior changed, but the previous
   documentation named no status code at all, which left hosts unable to
   route it.
+- One entry under **Fixed** below also changes results for a pre-release-git
+  host, and is cross-referenced here so that reading this section alone does
+  not miss it: a reversed *relative* date range
+  (`added:[now+1h TO now-1h]`) now swaps its bounds instead of day-bumping
+  the upper one, narrowing a window that used to be roughly eleven times
+  wider. It is filed under Fixed rather than here because it repairs this
+  library's own silent wrong answer rather than changing a deliberate
+  contract, which is what a fresh 0.1.0 consumer needs it to say.
+  `DIVERGENCES.md` entry 53.
 
 ### Fixed (contract)
 
@@ -373,7 +382,6 @@ matter only to someone who installed from a git revision before this release
   start of every `parse()`. This closes sequential reuse on one thread; it
   does not make one instance safe to call `parse()` on concurrently from
   multiple threads, which the class docstrings now say explicitly.
-
 - A reversed *relative* date range now swaps its bounds instead of pushing
   the upper bound into the next day. `added:[now+1h TO now-1h]` resolves to
   the same two-hour window as `added:[now-1h TO now+1h]` (measured at

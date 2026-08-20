@@ -50,18 +50,22 @@ _TAGGER_REACHABLE = re.compile(r"[\w.]+")
 #: above does *not* apply there: a class position matches exactly one
 #: character, so an alternation cannot live inside one, and adding or
 #: dropping members would change the class body's length, which every
-#: offset in the glob translation is taken against. Which way the class
-#: then errs depends on the answer it ignored, and the two are opposite:
-#: against *several* alternatives it under-matches (only the character as
-#: typed is accepted, not the other forms), while against *none* it
-#: over-matches (the empty answer says no term can match, and outside a
-#: class it does exactly that -- ``glob_to_regex("ab", lambda _t: ())`` is
-#: ``None`` -- but the class keeps the character, so
-#: ``glob_to_regex("[ab]", lambda _t: ())`` is still ``"[ab]"`` and still
-#: matches). What it never does is silently mean a *different* valid
-#: class. This costs a stemming host nothing, since a stemmer leaves
-#: single characters alone (and its two forms then deduplicate to one).
-#: See DIVERGENCES.md entry 2.
+#: offset in the glob translation is taken against. The class then matches
+#: whatever the character as typed matches, which is something *other*
+#: than the answer offered -- not reliably less than it. Against several
+#: alternatives that includes the typed character it is narrower (only the
+#: typed form is accepted): ``glob_to_regex("[ab]", lambda t: (t,
+#: t.upper()))`` is ``"[ab]"``. Against alternatives that do not include
+#: it, the two are *disjoint*: ``glob_to_regex("[a]", lambda _t: ("x",
+#: "y"))`` is ``"[a]"``, which matches ``a``, a character neither offered
+#: form matches. Against *none* it matches more, since the empty answer
+#: says no term can match and outside a class it does exactly that
+#: (``glob_to_regex("ab", lambda _t: ())`` is ``None``) while
+#: ``glob_to_regex("[ab]", lambda _t: ())`` is still ``"[ab]"``. What it
+#: never does is silently mean a *different* valid class. This costs a
+#: stemming host nothing, since a stemmer leaves single characters alone
+#: (and its two forms then deduplicate to one). See DIVERGENCES.md
+#: entry 2.
 #:
 #: A bare ``str`` is accepted rather than rejected on purpose: ``str`` *is*
 #: a ``Sequence[str]``, so a normalizer written against the old contract
