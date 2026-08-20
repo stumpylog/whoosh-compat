@@ -72,6 +72,19 @@ matter only to someone who installed from a git revision before this release
   stem. Inside a bracket class the normalizer is still consulted per
   character and applied only when it answers with exactly one
   single-character form; see DIVERGENCES.md entry 2.
+
+  One consequence worth knowing about: an alternation group compiles to
+  more automaton states than the single literal it replaces, so tantivy's
+  1000-state regex cap - which `_regex_query` reports as
+  `DiagnosticKind.PATTERN_TOO_COMPLEX` - is now reached by a shorter
+  pattern. Measured on the pinned tantivy: a plain literal prefix compiles
+  up to 981 characters, and a two-branch alternation of equal-length
+  branches up to 491, i.e. the budget roughly halves once a fragment has two
+  distinct forms. Only *distinct* forms cost anything (equal ones
+  deduplicate), so a host returning one form keeps the old budget exactly.
+  This degrades to the same 400-able diagnostic an over-long pattern always
+  produced; it is not a new failure mode, only a lower threshold for an
+  existing one.
 - `FieldSpec(kind=FieldKind.DATE, date_only=False)` (or omitting
   `date_only`, its default) is now a `ValueError` at `FieldRegistry`
   construction instead of being silently rewritten to `date_only=True` via

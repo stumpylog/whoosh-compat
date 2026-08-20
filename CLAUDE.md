@@ -71,7 +71,8 @@ contract between them.
   monitoring), and don't treat it as a licence to skip fixing a root cause:
   `tests/test_parse_never_raises.py` is where new escape routes get pinned.
 - **`analyzer` vs `pattern_normalizer` are two different callables on purpose**
-  (full token chain vs. character-level only for wildcard/prefix literals).
+  (full token chain over a *value* vs. fragment-level forms of a
+  wildcard/prefix *literal*, returned as one form or several alternatives).
   Don't unify them; see README's "analyzer / pattern_normalizer seam".
 - **Analysis happens at emit time, not parse time**: `Term`/`Phrase` nodes
   carry raw text.

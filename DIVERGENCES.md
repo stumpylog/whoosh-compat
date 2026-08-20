@@ -16,9 +16,11 @@ parse, emit, search, `tests/emitter/test_acceptance_e2e.py`) test suites.
 
 1. Invalid dates/numbers yield diagnostics the host may turn into an HTTP
    400 response (real whoosh: silent empty results).
-2. Wildcard/prefix patterns are case-folded via `pattern_normalizer` (real
-   whoosh matched raw index terms, so `Entwä*` with a capital E failed
-   there too, this is a fix, not a regression). The fold covers every *term*
+2. Wildcard/prefix patterns are normalized via `pattern_normalizer` before
+   matching - case-folded, and on a stemmed field also offered as their
+   stem, see the alternatives paragraph below (real whoosh matched raw index
+   terms, so `Entwä*` with a capital E failed there too, this is a fix, not
+   a regression). The normalization covers every *term*
    character of the pattern, literal runs and bracket-class bodies alike
    (`title:BILL[I]NG*` matches whatever `title:BILLING*` matches), matching
    real whoosh's model of folding the whole pattern text before handing it

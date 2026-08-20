@@ -35,14 +35,20 @@ from .conftest import emit_
 from .conftest import english_stem
 from .conftest import lower_fold
 from .conftest import search_ids
+from .conftest import stem_alternates
 from .conftest import stem_fold
+
+
+def emit_query(index: TIndex, registry: FieldRegistry, query: str) -> tantivy.Query:
+    """Parse ``query`` and emit it: the whole pipeline short of searching."""
+    result = wc_parse(query, registry=registry, default_fields=["content"])
+    assert result.diagnostics == ()
+    return emit_(result.ast, index=index[0], registry=registry)
 
 
 def ids(index: TIndex, registry: FieldRegistry, query: str) -> list[int]:
     """Parse ``query``, emit it, and search: the whole pipeline, by doc id."""
-    result = wc_parse(query, registry=registry, default_fields=["content"])
-    assert result.diagnostics == ()
-    return search_ids(index[0], emit_(result.ast, index=index[0], registry=registry))
+    return search_ids(index[0], emit_query(index, registry, query))
 
 
 # -- The fixture really is stemmed -------------------------------------------
@@ -191,11 +197,21 @@ def test_an_empty_string_alternative_is_not_the_same_as_no_alternatives() -> Non
     assert glob_to_regex("inv*", lambda _t: ("",)) == ".*"
 
 
-def test_a_prefix_with_no_alternatives_emits_an_empty_query(
-    stemmed_index: TIndex,
-) -> None:
-    """``visit_prefix`` does not go through ``glob_to_regex``, so it needs its
-    own answer for the same fact.
+@pytest.mark.parametrize(
+    "query",
+    ["company*", "comp?ny*"],
+    ids=["prefix", "wildcard"],
+)
+def test_no_alternatives_emits_an_empty_query_end_to_end(stemmed_index: TIndex, query: str) -> None:
+    """Both pattern visitors, at the layer that matters.
+
+    ``visit_prefix`` does not go through ``glob_to_regex``, so it needs its
+    own answer for the same fact, and ``visit_wildcard`` has to actually turn
+    ``glob_to_regex``'s ``None`` into ``empty_query()`` rather than into a
+    regex over the empty string. Asserting the emitted query (its repr is
+    stable and short, unlike a compiled regex query's) as well as the empty
+    result set, since "no documents" alone would also be true of a regex that
+    simply matches no term.
     """
     registry = FieldRegistry(
         [
@@ -207,7 +223,8 @@ def test_a_prefix_with_no_alternatives_emits_an_empty_query(
             )
         ]
     )
-    assert ids(stemmed_index, registry, "company*") == []
+    assert repr(emit_query(stemmed_index, registry, query)) == "Query(EmptyQuery)"
+    assert ids(stemmed_index, registry, query) == []
 
 
 # -- The bracket-class length invariant --------------------------------------
@@ -237,18 +254,40 @@ def test_a_single_single_character_alternative_still_folds_the_class() -> None:
     assert glob_to_regex("BILL[I]NG*", lambda t: (t.lower(),)) == "bill[i]ng.*"
 
 
+def test_dedup_is_what_keeps_the_class_fold_applying() -> None:
+    """The realistic normalizer returns *two* forms of every fragment, and a
+    class member is only folded when exactly one survives. For an uppercase
+    member the two forms are equal ("I" -> ("i", "i")), so it is
+    deduplication, not the screening, that lets ``[I]`` still fold to
+    ``[i]``. Without the dedup this class would be left as typed and
+    ``title:BILL[I]NG*`` would silently stop matching a folded index.
+    """
+    assert glob_to_regex("BILL[I]NG*", stem_alternates) == "bill[i]ng.*"
+
+
 @pytest.mark.parametrize(
     "pattern",
-    ["[a-z]x", "[!a-z]x", "[]a]x", "[a\\b]x", "x[0-3]y"],
-    ids=["range", "negated", "leading-close", "backslash", "digits"],
+    ["[a-z]x", "[!a-z]x", "[]a]x", "[a\\b]x", "x[0-3]y", "[A-Z]x", "BILL[I]NG*"],
+    ids=[
+        "range",
+        "negated",
+        "leading-close",
+        "backslash",
+        "digits",
+        "upper-range",
+        "upper-member",
+    ],
 )
 def test_a_stemming_normalizer_never_corrupts_a_class(pattern: str) -> None:
     """The realistic host normalizer (fold + stem, as alternatives) run over
     class-bearing patterns: the stemmer is a no-op on single characters, so
-    every class comes out exactly as the plain single-form fold leaves it.
+    after deduplication every class comes out exactly as the plain
+    single-form fold leaves it. The uppercase cases are the load-bearing
+    ones: a lowercase ASCII body folds and stems to itself, so it could not
+    tell a working fold from a skipped one.
     """
     folded = glob_to_regex(pattern, str.lower)
-    assert glob_to_regex(pattern, lambda t: (t.lower(), english_stem(t.lower()))) == folded
+    assert glob_to_regex(pattern, stem_alternates) == folded
 
 
 def test_an_expanding_fold_is_screened_per_alternative() -> None:

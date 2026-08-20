@@ -1152,7 +1152,10 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
         tantivy caps a compiled regex at 1000 states, and a pattern short
         enough to type by hand can exceed that (a term followed by ~100
-        single-character wildcards, or a ~1000-character prefix). That is
+        single-character wildcards, or a ~1000-character prefix; a fragment
+        with two distinct alternatives roughly halves that last budget,
+        measured at 981 characters plain against 491 for a two-branch
+        alternation, since each branch compiles its own states). That is
         unusual input, not a defect in this library or in the caller's AST,
         so it must not reach ``emit``'s internal-error backstop: a host
         maps ``INTERNAL`` to a 500, and this deserves a 400.

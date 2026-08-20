@@ -27,6 +27,13 @@ _TAGGER_REACHABLE = re.compile(r"[\w.]+")
 #: wildcard/prefix pattern in, and *one or more* forms of it out, any of
 #: which a term may match.
 #:
+#: The fragment is a whole literal run of the pattern (``inv*oices`` calls
+#: this twice, with "inv" and with "oices"), or a ``Prefix`` node's whole
+#: text, *or a single character of a bracket class's body* (``BILL[I]NG*``
+#: calls it with "I"). A fragment is therefore often not a word, and the
+#: class-body case is a single character that must stay a single character;
+#: see the class-body rule below.
+#:
 #: Returning a bare ``str`` means exactly one form and is the plain
 #: case-folding contract this hook has always had. Returning a sequence
 #: means the emitter should accept a term matching *any* of the forms, ORed
@@ -36,10 +43,24 @@ _TAGGER_REACHABLE = re.compile(r"[\w.]+")
 #: prefix of the other). An empty sequence means "no term can match this
 #: fragment", and the whole pattern then matches nothing.
 #:
+#: **Inside a bracket class the answer is used only when it is exactly one
+#: alternative exactly one character long**; anything else (several
+#: alternatives, a multi-character alternative, or none at all) leaves that
+#: character as the user typed it. In particular the empty-sequence rule
+#: above does *not* apply there: a class position matches exactly one
+#: character, so an alternation cannot live inside one, and adding or
+#: dropping members would change the class body's length, which every
+#: offset in the glob translation is taken against. The class
+#: under-matches rather than silently meaning something else. This costs a
+#: stemming host nothing, since a stemmer leaves single characters alone
+#: (and its two forms then deduplicate to one). See DIVERGENCES.md entry 2.
+#:
 #: A bare ``str`` is accepted rather than rejected on purpose: ``str`` *is*
 #: a ``Sequence[str]``, so a normalizer written against the old contract
 #: type-checks against the new one and would otherwise be read, silently, as
-#: one alternative per character.
+#: one alternative per character. No type checker can tell the two apart, so
+#: the distinction is made at runtime instead, by the emitter's own
+#: ``isinstance`` (``_alternatives`` in ``emitters/tantivy_.py``).
 PatternNormalizer = Callable[[str], "str | Sequence[str]"]
 
 

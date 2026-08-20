@@ -504,8 +504,11 @@ def test_issue_13568_acceptance(
 # The analyzer/pattern_normalizer split (fields.py's FieldSpec) exists
 # specifically so a *full* token-level analysis chain (lowercase + fold +
 # stem, used for Term/Phrase queries) never leaks into wildcard/prefix
-# pattern matching, which only ever gets character-level transforms
-# (lowercase + fold, never stemming). This uses real whoosh's
+# pattern matching, which gets fragment-level forms instead. This module's
+# registry supplies a fold-only pattern normalizer, which is what pins the
+# caveat below; a host may additionally offer a fragment's stem as an
+# *alternative* (see test_pattern_alternates.py), which widens the match
+# without replacing the literal spelling. This uses real whoosh's
 # `StemmingAnalyzer() | CharsetFilter(accent_map)` on the oracle side and an
 # equivalent pair of plain Python functions (built on the *same* underlying
 # porter stemmer/accent map real whoosh uses, so both sides stem/fold
@@ -527,9 +530,13 @@ def _stem_fold_analyzer(text: str) -> list[str]:
 
 
 def _fold_lower(text: str) -> str:
-    """pattern_normalizer: character-level transforms ONLY (lowercase +
-    accent-fold): NEVER stemming, per the analyzer/pattern_normalizer
-    contract (fields.py's FieldSpec docstring).
+    """pattern_normalizer: lowercase + accent-fold, one form, no stem.
+
+    A single-form normalizer, which is what makes this module's proof points
+    (below) about the stemming caveat mean what they say. The contract
+    permits returning the stem as an added alternative
+    (``whoosh_compat.PatternNormalizer``); doing that here would widen the
+    matches these tests pin.
     """
     return text.lower().translate(accent_map)
 
@@ -629,9 +636,9 @@ def test_stemming_term_query_matches_other_inflected_forms(
 def test_folded_wildcard_matches_diacritic_variant(
     windex_stem: WhooshStemIndex, tindex_stem: TIndex, ereg_stem: FieldRegistry
 ) -> None:
-    # pattern_normalizer folds "Wär" -> "war" (character-level only, no
-    # stemming attempted on a wildcard fragment): proof point 2: folded
-    # wildcard matches.
+    # pattern_normalizer folds "Wär" -> "war" (this registry's normalizer
+    # returns one folded form and no stem): proof point 2: folded wildcard
+    # matches.
     q = "content:Wär*"
     expected = [4]
     assert _windex_stem_ids(windex_stem, q) == expected
@@ -647,10 +654,13 @@ def test_stemmed_wildcard_caveat_diverges(
     query text. Doc 3 ("running") is indexed as the stem "runn"
     (`_stem_fold_analyzer`).
 
-    whoosh-compat's `pattern_normalizer` never stems (by design, see the
-    FieldSpec docstring), so the emitted prefix stays the literal "running",
+    This module's `pattern_normalizer` (`_fold_lower`) returns one folded
+    form and no stem, so the emitted prefix stays the literal "running",
     which is *not* a prefix of the indexed token "runn", and the query
-    matches nothing.
+    matches nothing. A host that returned the stem as an *added* alternative
+    (`whoosh_compat.PatternNormalizer`, and `test_pattern_alternates.py`)
+    would match here too, without losing the literal spelling; that is a
+    property of the registry, not of the library.
 
     Real whoosh, by contrast, still runs a wildcard/prefix pattern through
     `field.process_text(text, tokenize=False)`, and a StemFilter is a filter

@@ -312,11 +312,15 @@ Two separate callables on `FieldSpec`, deliberately not unified into one:
   host's index-time analyzer does) applied to `Term`/`Phrase` query text at
   emit time, so query tokens match what's actually in the index.
 - **`pattern_normalizer`** (`PatternNormalizer`, i.e.
-  `Callable[[str], str | Sequence[str]]`): a *lighter*, character-level
-  transform (lowercase + ASCII-fold, no tokenization) applied to each
-  literal segment of a `Wildcard`/`Prefix` pattern. It may return **one**
-  form of the segment (a bare `str`) or **several alternatives** (a
-  sequence); the emitter matches a term satisfying *any* of them.
+  `Callable[[str], str | Sequence[str]]`): a *narrower*, fragment-level
+  transform applied to each literal segment of a `Wildcard`/`Prefix`
+  pattern. It never tokenizes and never drops a fragment; beyond that it is
+  usually lowercase + ASCII-fold, and on a stemmed field it also offers the
+  segment's stem. It may return **one** form of the segment (a bare `str`)
+  or **several alternatives** (a sequence); the emitter matches a term
+  satisfying *any* of them. Inside a bracket class it is additionally held
+  to being character-level, because that is the one place a fragment is a
+  single character and must stay one (see below).
 
 These have to be different callables. The analyzer answers "what tokens does
 this *value* become"; the pattern normalizer answers "what could this

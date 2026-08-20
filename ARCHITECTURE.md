@@ -446,16 +446,20 @@ later, once a host presents a real query that under-matches because of the
 first consequence, is a deliberate product decision and deferred until then.
 
 `FieldSpec.pattern_normalizer` is a second, narrower callable used only for
-the *term* characters of `Wildcard`/`Prefix` patterns: character-level
-(lowercase, ASCII-fold), never tokenization. Term characters means whole
+the *term* characters of `Wildcard`/`Prefix` patterns: fragment-level, never
+tokenization. In practice that is lowercase and ASCII-fold, plus - on a
+stemmed field, and only as an *added alternative* rather than a replacement
+- the fragment's stem. Term characters means whole
 literal runs and, one character at a time, the body of a bracket character
 class (`BILL[I]NG*` folds to `bill[i]ng.*`: a class member is an index
 character exactly as a literal run's characters are). The per-character
 application inside a class is deliberate: a normalizer may expand one
 character into several (`ascii_fold` maps `ß` -> `ss`), which a range endpoint
 cannot survive and a class cannot express, so such characters are left exactly
-as typed rather than corrupting the class. See `_normalize_class_body` in the
-tantivy emitter.
+as typed rather than corrupting the class. Inside a class the callable is
+therefore effectively held to being *character-level* whatever it does
+elsewhere: its answer is used only when it is exactly one alternative exactly
+one character long. See `_normalize_class_body` in the tantivy emitter.
 
 Its type is `PatternNormalizer` (`Callable[[str], str | Sequence[str]]`): it
 returns either one form of a fragment or several *alternatives*, any of which
