@@ -361,17 +361,30 @@ class FieldRegistry:
         self._exists_strategies: dict[str, ExistsStrategy | None] = {}
         specs_list = list(specs)
 
-        # First pass: normalize DATE specs and collect all specs
-        normalized_specs = []
+        # First pass: validate and build indices
         for spec in specs_list:
+            # Validate: date_only is required on DATE, and only on DATE.
+            # DATE has exactly one supported granularity (whole calendar
+            # days; see dateparse.py's _to_utc), so date_only=True is not
+            # optional configuration here, it is a statement of that fact
+            # the caller must make explicitly, and date_only=False (the
+            # dataclass default, so the common case for an otherwise
+            # unremarkable DATE spec) does not describe a real, different
+            # granularity DATE could instead have. A DATE spec silently
+            # rewritten from date_only=False to date_only=True via
+            # dataclasses.replace() used to paper over that (and, since
+            # every other kind is rejected for date_only=True just below,
+            # the flag could never actually vary on a *registered* spec:
+            # always exactly spec.kind is FieldKind.DATE). Besides carrying
+            # no information, the rewrite replaced the object the caller
+            # passed in with a copy for every ordinary DATE spec, breaking
+            # `list(registry)[0] is my_spec`-style identity.
             if spec.kind == FieldKind.DATE and not spec.date_only:
-                # Normalize: DATE with date_only=False -> date_only=True
-                spec = dataclasses.replace(spec, date_only=True)
-            normalized_specs.append(spec)
-
-        # Second pass: validate and build indices
-        for spec in normalized_specs:
-            # Validate: date_only only on DATE
+                raise ValueError(
+                    f"Field '{spec.name}': DATE requires date_only=True (DATE "
+                    f"has exactly one supported granularity, whole calendar "
+                    f"days; use DATETIME for a field with a time component)"
+                )
             if spec.date_only and spec.kind != FieldKind.DATE:
                 raise ValueError(f"Field '{spec.name}': date_only=True only valid on DATE kind")
 

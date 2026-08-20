@@ -42,6 +42,22 @@ material; they are permanently documented, each with its rationale, in
   `ValueError` from tantivy-py still reaches `emit`'s backstop as
   `BACKEND_REJECTED`, so a genuine library defect is not hidden behind a
   400.
+- `FieldSpec(kind=FieldKind.DATE, date_only=False)` (or omitting
+  `date_only`, its default) is now a `ValueError` at `FieldRegistry`
+  construction instead of being silently rewritten to `date_only=True` via
+  `dataclasses.replace()`. DATE has exactly one supported granularity
+  (whole calendar days), so `date_only=True` is not optional configuration,
+  it is a statement of that fact the caller must now make explicitly.
+  Besides carrying no real information (`date_only` could never actually
+  end up `False` on a registered DATE spec, nor `True` on any other kind,
+  the sibling validation just below already having rejected that), the
+  silent rewrite replaced the caller's own spec object with a copy for
+  every ordinary DATE spec (`date_only` defaults `False`), breaking
+  `FieldRegistry` iteration/resolution identity (`next(iter(registry)) is
+  my_spec`) for DATE fields specifically. Every DATE spec in this
+  library's own tests and fixtures already declared `date_only=True`
+  explicitly, so this is not expected to affect a real caller; a host that
+  omitted it must add it.
 - `Cause.MISCONFIGURED` is documented as requiring **both** an operator
   alert and an HTTP 400, not an alert alone. Every `MISCONFIGURED` kind is
   reachable from ordinary query text, so a request is always waiting on an

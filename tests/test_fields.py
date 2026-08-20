@@ -1112,13 +1112,54 @@ def test_validation_date_only_on_date_true() -> None:
     assert resolved.spec.date_only is True
 
 
-def test_validation_date_only_on_date_false_normalized() -> None:
-    """DATE spec with date_only=False is normalized to date_only=True."""
+def test_validation_date_only_on_date_false_rejected() -> None:
+    """A DATE spec must declare ``date_only=True`` explicitly; leaving it
+    ``False`` (the dataclass default, and so the common case) is a
+    ``ValueError`` at registry construction, not a silent rewrite.
+
+    Previously this was silently normalized via
+    ``dataclasses.replace(spec, date_only=True)``: DATE could never
+    actually end up ``date_only=False`` (this normalization) nor could any
+    other kind ever be ``date_only=True`` (the sibling validation just
+    below), so the flag carried no information on a registered spec at
+    all -- always exactly ``spec.kind is FieldKind.DATE``. Silently
+    rewriting the *common* case (an omitted ``date_only``, defaulting
+    False) also meant the object the registry actually registered,
+    resolved, and iterated was never the object the caller passed in for
+    any ordinary DATE spec; see
+    ``test_date_only_true_on_date_preserves_spec_identity``.
+    """
     spec = FieldSpec(name="created", kind=FieldKind.DATE, date_only=False)
+    with pytest.raises(ValueError, match="created"):
+        FieldRegistry([spec])
+
+
+def test_validation_date_only_omitted_on_date_rejected() -> None:
+    """Same rejection as ``test_validation_date_only_on_date_false_rejected``,
+    but via the ``FieldSpec`` default rather than an explicit ``False``:
+    this is the shape every ordinary DATE spec used to hit silently.
+    """
+    spec = FieldSpec(name="created", kind=FieldKind.DATE)
+    with pytest.raises(ValueError, match="created"):
+        FieldRegistry([spec])
+
+
+def test_date_only_true_on_date_preserves_spec_identity() -> None:
+    """A DATE spec declaring ``date_only=True``, as now required, is
+    registered by reference.
+
+    Before this fix, an ordinary DATE spec (one that left ``date_only`` at
+    its ``False`` default) was silently rewritten via
+    ``dataclasses.replace()``, so the object the registry actually
+    registered, resolved, and iterated (``list(registry)[0]``) was a
+    *copy*, never the object the caller constructed and passed in.
+    """
+    spec = FieldSpec(name="created", kind=FieldKind.DATE, date_only=True)
     registry = FieldRegistry([spec])
+    assert next(iter(registry)) is spec
     resolved = registry.resolve(FieldRef("created"))
     assert resolved is not None
-    assert resolved.spec.date_only is True
+    assert resolved.spec is spec
 
 
 def test_validation_date_only_on_non_date_invalid() -> None:
