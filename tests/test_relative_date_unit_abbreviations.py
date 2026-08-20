@@ -2,16 +2,25 @@
 
 Real whoosh's ``English.units`` table (parser/dateparse.py) recognizes each
 of these abbreviated unit words as a synonym for the corresponding full unit
-(years/months/weeks/hours/minutes/seconds) inside a ``now[+-]<n><unit>``
-relative offset. The differential corpus (tests/differential/corpus_paperless.txt)
-carries several of these spellings as *bracketed range bounds*
-(``created:[-999yrs to now]``), and those already pass the oracle comparison
-there -- but nothing in this repo pinned, in one place, that each abbreviation
-resolves to the *correct* offset (as opposed to, say, "wks" silently being
-read as "weeks" but "mos" being misread as "minutes"), nor that the bare,
-non-bracketed spelling (``added:-2yrs``, a whoosh-compat extension with no
-whoosh equivalent -- see DIVERGENCES.md entry 25 / the allowlist entry citing
-it) does the same. This is the direct, human-readable pin for both.
+(years/months/weeks/hours/minutes/seconds) inside a bare or bracketed
+``-<n><unit>`` relative offset, and whoosh-compat parses the *same* offset to
+the *same* instant on both sides -- verified directly against the pinned
+oracle for every unit below, bare and bracketed alike (see DIVERGENCES.md
+entry 25's correction: an earlier claim that a bare ``-<n><unit>`` spelling
+like ``added:-2yrs`` was a whoosh-compat-only extension was wrong; only the
+``now±<n><unit>`` spelling is). The differential corpus
+(tests/differential/corpus_paperless.txt) carries several of these
+spellings as *bracketed range bounds* (``created:[-999yrs to now]``), but
+those lines are allowlisted under DIVERGENCES.md entry 12 (a real,
+unrelated divergence about timezone handling in range bounds) with an
+*inverted* assertion (the differential harness checks the trees DIFFER,
+not that they match) -- so despite superficially "passing", nothing in the
+differential suite actually confirms those bracketed spellings resolve to
+the *correct* offset either. Nothing in this repo pinned, in one place, that
+each abbreviation resolves to the *correct* offset (as opposed to, say,
+"wks" silently being read as "weeks" but "mos" being misread as "minutes").
+This is the direct, human-readable pin for that, for the bare (non-bracketed)
+spelling, both quoted and unquoted.
 """
 
 from __future__ import annotations
@@ -38,7 +47,6 @@ def dparse(q: str, reg: FieldRegistry) -> ast.Node:
 @pytest.mark.parametrize(
     ("unit", "n", "delta"),
     [
-        pytest.param("yrs", 2, timedelta(days=365 * 2), id="years"),
         pytest.param("wks", 2, timedelta(weeks=2), id="weeks"),
         pytest.param("hrs", 5, timedelta(hours=5), id="hours"),
         pytest.param("mins", 10, timedelta(minutes=10), id="minutes"),
@@ -53,16 +61,17 @@ def test_unit_abbreviation_resolves_to_the_correct_offset(
     delta: timedelta,
     quoted: bool,
 ) -> None:
+    # "yrs" is excluded here (calendar-year, not fixed-width, arithmetic;
+    # see test_years_abbreviation_resolves_two_calendar_years_back below,
+    # which already covers it fully) and "mos" likewise (calendar-month
+    # arithmetic; see test_months_abbreviation_resolves_three_calendar_
+    # months_back below).
     value = f"-{n}{unit}"
     query = f"added:'{value}'" if quoted else f"added:{value}"
     r = dparse(query, reg)
     assert isinstance(r, ast.DateRange)
     assert r.lo is not None
-    # "yrs" is a calendar-year offset (365-or-366-day arithmetic), not a
-    # fixed 365-day delta, so it is checked separately below; every other
-    # unit here is a fixed-width timedelta and can be checked directly.
-    if unit != "yrs":
-        assert BASE - r.lo == delta
+    assert BASE - r.lo == delta
 
 
 @pytest.mark.parametrize("quoted", [True, False], ids=["quoted", "bare"])

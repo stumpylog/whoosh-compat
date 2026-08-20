@@ -1019,19 +1019,31 @@ parse-then-emit pipeline).
     `ZERO_TOKEN_WORDS` (the same verified-zero-token vocabulary used to
     generate both this case and entry 23's).
 
-25. **A bare (non-bracketed) relative date offset is a whoosh-compat-only
-    feature (design, found by the grammar-aware fuzzer).** `created:now-7d`
-    and `created:-3mos` parse to a real `DateRange` in whoosh-compat: this
-    is documented directly in README.md's syntax table, which lists
-    `created:now-7d` as a bare example, not just something usable inside a
-    bracketed range's bounds. Real whoosh's date grammar only recognizes
-    this relative-offset syntax (`-1 week`, etc.) as a *range bound*; a
-    bare, non-bracketed value in this shape fails to parse as a date on the
-    real-whoosh side and falls back to `NullQuery`. Confirmed directly
-    against the pinned oracle: `oracle_parse("created:now-7d", ...)`
-    returns `NullQuery`. Not a bug on either side: whoosh-compat's
-    single-value date grammar simply accepts a syntax real whoosh's does
-    too, just only in the other position.
+25. **A bare (non-bracketed) "now"-relative date offset is a
+    whoosh-compat-only feature (design, found by the grammar-aware
+    fuzzer).** `created:now-7d` parses to a real `DateRange` in
+    whoosh-compat: this is documented directly in README.md's syntax
+    table, which lists `created:now-7d` as a bare example, not just
+    something usable inside a bracketed range's bounds. Real whoosh has no
+    `now±<n><unit>` grammar at all (entry 53), bare or bracketed; a bare
+    value in this shape fails to parse as a date on the real-whoosh side
+    and falls back to `NullQuery`. Confirmed directly against the pinned
+    oracle: `oracle_parse("created:now-7d", ...)` returns `NullQuery`. Not
+    a bug on either side: whoosh-compat's single-value date grammar simply
+    accepts a syntax real whoosh has nowhere at all.
+
+    Correction: an earlier version of this entry additionally claimed
+    `created:-3mos` (a bare *word-unit* offset, not a `now±` one) shared
+    this divergence. That was wrong, and is corrected here rather than
+    left standing: real whoosh's "simple"/plusdate grammar *does*
+    recognize a bare `-<n><unit>` offset with no `now` prefix (`-3mos`,
+    `-2yrs`, `-7d`, `-1y2mo3w`, etc.) as a single-value date, identically
+    to whoosh-compat -- verified directly against the pinned oracle: the
+    parsed, normalized trees are structurally equal for `-2yrs`,
+    `-10mins`, `-30secs`, `-5hrs`, `-7d`, `-1y2mo3w`, `-999yrs`, `'-3mos'`
+    and `-0d`. Only the `now±` spelling is whoosh-compat-only; the
+    allowlist regex (`tests/differential/allowlist.py`) is scoped to
+    `now[+-]` accordingly, not to any bare `-\d`.
 
     Correction: an earlier version of this entry additionally claimed
     `oracle_parse("created:[now-7d TO now]", ...)` "parses the identical

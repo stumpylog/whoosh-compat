@@ -809,28 +809,34 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         DivergenceKind.MISMATCH,
     ),
     # design (DIVERGENCES.md entry 25, found by the grammar-aware fuzzer): a
-    # bare (non-bracketed) relative date offset ("created:now-7d",
-    # "created:-3mos") parses to a real DateRange in whoosh-compat (README's
-    # syntax table documents this directly: "created:now-7d" is listed as a
-    # bare example, not just a range bound), but real whoosh's date grammar
-    # only recognizes this relative-offset syntax inside a bracketed range's
-    # bounds; a bare value in this shape fails to parse as a date on the
-    # oracle side and falls back to NullQuery. Confirmed directly:
-    # oracle_parse("created:now-7d", ...) -> NullQuery, while
-    # oracle_parse("created:[now-7d TO now]", ...) parses the exact same
-    # relative-offset text correctly. A whoosh-compat feature with no whoosh
-    # equivalent, not a bug either side. Scoped to a value starting with
-    # "now" immediately followed by a sign, or a bare "-" immediately
-    # followed by a digit (a relative offset with a *space*, e.g.
-    # "created:-1 week", already fails to parse as a single token on both
+    # bare (non-bracketed) "now"-relative date offset ("created:now-7d")
+    # parses to a real DateRange in whoosh-compat (README's syntax table
+    # documents this directly: "created:now-7d" is listed as a bare
+    # example, not just a range bound), but real whoosh has no
+    # `now±<n><unit>` grammar at all (entry 53): a bare value in this shape
+    # fails to parse as a date on the oracle side and falls back to
+    # NullQuery. Confirmed directly: oracle_parse("created:now-7d", ...) ->
+    # NullQuery, while oracle_parse("created:[now-7d TO now]", ...) also
+    # fails to honor the offset (entry 25's own correction). A
+    # whoosh-compat feature with no whoosh equivalent, not a bug either
+    # side. Scoped to a value starting with "now" immediately followed by a
+    # sign. NOT scoped to a bare "-" immediately followed by a digit
+    # (e.g. "created:-3mos", "created:-2yrs"): those spellings are *not* a
+    # whoosh-compat-only extension -- real whoosh parses them to the exact
+    # same DateRange whoosh-compat does (verified directly against the
+    # pinned oracle: `to_ast`/`normalize`-equal trees for -2yrs, -10mins,
+    # -30secs, -5hrs, -7d, -1y2mo3w, -999yrs, '-3mos', -0d), so widening
+    # this entry to cover them would suppress a comparison that actually
+    # passes. A relative offset written with a space (e.g.
+    # "created:-1 week", unquoted) fails to parse as a single token on both
     # sides and is skipped separately via the DIVERGENCES.md entry 6
-    # diagnostics check, not by this entry).
+    # diagnostics check, not by this entry.
     (
-        re.compile(r"\b(?:created|modified|added):'?(?:now[+-]|-\d)"),
+        re.compile(r"\b(?:created|modified|added):'?now[+-]"),
         (
-            "DIVERGENCES.md entry 25: a bare relative date offset parses as a"
-            " DateRange in whoosh-compat (a documented feature/extension) but"
-            " whoosh's grammar only supports this syntax inside a bracketed range"
+            "DIVERGENCES.md entry 25: a bare 'now'-relative date offset parses"
+            " as a DateRange in whoosh-compat (a documented feature/extension)"
+            " but whoosh has no now±<n><unit> grammar at all"
         ),
         DivergenceKind.MISMATCH,
     ),
