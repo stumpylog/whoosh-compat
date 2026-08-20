@@ -227,19 +227,34 @@ class Sequence(MultiBase):
         print_debug(debug, "Seq %s sep=%r text=%r", self.name, self.sep_pattern, text[pos:])
         for e in self.elements:
             print_debug(debug, "Seq %s text=%r", self.name, text[pos:])
+            # A non-whitespace separator is consumed only provisionally
+            # (into elempos), and pos advances past it only if the element
+            # after it also matches. Whoosh advances pos unconditionally
+            # here, so a progressive sequence that then fails still reports
+            # having consumed a separator that led nowhere; in the "simple"
+            # numeric grammar (sep "[- .:/T]*", the only progressive
+            # sequence here) that makes a value cut off mid-token, e.g.
+            # "2005-01-", a whole match for all of January 2005. Whitespace
+            # keeps whoosh's behavior: "simple"'s own `(?=(\s|$))` guard
+            # already treats whitespace as a valid end of a date value, so a
+            # trailing space is a clean token boundary where a trailing
+            # "-"/":"/"/"/"."/"T" is not. See DIVERGENCES.md entry 54.
+            elempos = pos
             if self.sep_expr and not first:
                 print_debug(debug, "Seq %s looking for sep", self.name)
                 m = self.sep_expr.match(text, pos)
                 if m:
-                    pos = m.end()
+                    elempos = m.end()
+                    if not text[pos:elempos].strip():
+                        pos = elempos
                 else:
                     print_debug(debug, "Seq %s didn't find sep", self.name)
                     break
 
-            print_debug(debug, "Seq %s trying=%r at=%s", self.name, e, pos)
+            print_debug(debug, "Seq %s trying=%r at=%s", self.name, e, elempos)
 
             try:
-                at, newpos = e.parse(text, dt, pos=pos, debug=debug + 1)
+                at, newpos = e.parse(text, dt, pos=elempos, debug=debug + 1)
             except TimeError:
                 failed = True
                 break

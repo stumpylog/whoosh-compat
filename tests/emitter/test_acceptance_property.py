@@ -109,6 +109,7 @@ from tests.emitter.conftest import whoosh_search_ids
 from tests.emitter.result_allowlist import allowed_result_reason
 from whoosh_compat import parse as wc_parse
 from whoosh_compat.emitters.tantivy_ import emit as emit_
+from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryError
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRegistry
@@ -511,16 +512,21 @@ def test_no_separator_t_value_is_a_result_level_divergence(
 
 
 def test_bare_rfc3339_value_is_a_result_level_divergence() -> None:
-    """DIVERGENCES.md entry 49: the bare unquoted T-separated spelling
-    truncates to the same month period on both sides, ANDed with the
-    stray time tokens, so both sides normally return nothing and the
-    shared DOCS_PROP fixture (no bare-number tokens anywhere) can never
-    exhibit the divergence. This test builds its own one-document dual
-    index (the same dedicated-corpus convention as
-    test_acceptance_e2e.py's issue-13568 scenario) whose content
-    contains exactly one of the stray tokens ("30"): whoosh-compat's OR
-    over the leftover tokens matches it, real whoosh's per-field AND
-    (needing "30" and "00" both) does not.
+    """DIVERGENCES.md entry 54, superseding entry 49: the bare unquoted
+    T-separated spelling is cut mid-token by the colon tokenizer. Real
+    whoosh swallows the dangling separator, searches the truncated
+    month/year window ANDed with the stray time tokens, and returns
+    nothing at all here -- silently, for a document that IS inside every
+    window the fragment names. whoosh-compat refuses to build a query for
+    it and reports BAD_DATE instead, so the user learns the spelling is
+    wrong rather than being told there are no matching documents.
+
+    This test builds its own one-document dual index (the same
+    dedicated-corpus convention as test_acceptance_e2e.py's issue-13568
+    scenario) rather than using the shared DOCS_PROP fixture, whose
+    documents carry no bare-number tokens: the content here contains one
+    of the stray tokens ("30"), which is what real whoosh's per-field AND
+    (needing "30" and "00" both) still fails to match on.
     """
 
     added = datetime(2020, 6, 15, 14, 0, tzinfo=BERLIN)
@@ -565,10 +571,10 @@ def test_bare_rfc3339_value_is_a_result_level_divergence() -> None:
         assert not result.diagnostics
         return search_ids(tix, emit_(result.ast, index=tix, registry=_PROP_REGISTRY))
 
-    # The no-day spelling exercises the year-window truncation face of
-    # the same entry: the document sits inside 2020 just as it sits
-    # inside June, and its leftover tokens ("06t10", "30") again include
-    # exactly one match.
+    # The no-day spelling exercises the year-window face of the same
+    # entry: the fragment left behind is "2026-"-shaped rather than
+    # "2026-08-"-shaped, and whoosh reads it as the whole of 2020, which
+    # the document also sits inside.
     for q in (
         "added:2020-06-15T10:30:00",
         "added:2020-06-15T10:30:00Z",
@@ -576,14 +582,16 @@ def test_bare_rfc3339_value_is_a_result_level_divergence() -> None:
     ):
         assert allowed_result_reason(q) is not None
         assert whoosh_search_ids(wix, q, BASE, BERLIN) == []
-        assert tantivy_ids(q) == [7]
+        diagnostics = wc_parse(
+            q, registry=_PROP_REGISTRY, default_fields=V2_FIELDS, basedate=BASE, tz=BERLIN
+        ).diagnostics
+        assert [d.kind for d in diagnostics] == [DiagnosticKind.BAD_DATE]
 
-    # Controls: times whose stray tokens appear in NO document agree
-    # empty on both sides, isolating the OR-vs-AND leftover handling as
-    # the only divergence axis above.
-    for q_control in ("added:2020-06-15T10:45:00", "added:2020-06T10:45"):
-        assert whoosh_search_ids(wix, q_control, BASE, BERLIN) == []
-        assert tantivy_ids(q_control) == []
+    # Control: the same instant in the spelling entry 48 recommends (and
+    # the one paperless-ngx generates) is honored, so the rejection above
+    # is about the unquoted spelling being cut in half, not about the
+    # value or the document.
+    assert tantivy_ids("added:'2020-06-15T14:00:00'") == [7]
 
 
 def test_not_under_andnot_is_a_result_level_divergence(

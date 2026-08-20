@@ -274,24 +274,24 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
             " whoosh but a correct DateRange in whoosh-compat"
         ),
     ),
-    # design (DIVERGENCES.md entry 49, value-dependent): the BARE unquoted
-    # sibling. Both sides truncate to the same month period and AND it
-    # with the stray time tokens, so both usually return nothing; when a
-    # document inside the window contains one (but not all) of the stray
-    # tokens, whoosh-compat's OR over them matches where real whoosh's
-    # per-field AND does not. Ordered before the entry-15 dashed-token
-    # pattern, whose TEXT-multitoken framing does not describe the date
-    # truncation face. The optional day group admits the no-day spelling
-    # ("2026-06T10:30"), which truncates to the year window by the same
+    # whoosh-bug (DIVERGENCES.md entry 54, superseding DIVERGENCES.md
+    # entry 49): the BARE unquoted sibling. whoosh truncates the
+    # colon-cut fragment to a whole shorter period and ANDs the stray
+    # time tokens onto it, so it silently returns nothing (or, when a
+    # document happens to carry one of those tokens, a hit from a window
+    # the user never named); whoosh-compat runs no query at all for this
+    # spelling, diagnosing BAD_DATE instead. Ordered before the entry-15
+    # dashed-token pattern, whose TEXT-multitoken framing does not
+    # describe the date-value rejection. The optional day group admits
+    # the no-day spelling ("2026-06T10:30"), cut to "2026-" by the same
     # mechanism.
     (
         re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):\d{{4}}-\d\d(?:-\d\d)?[Tt]"),
         (
-            "design (DIVERGENCES.md entry 49, value-dependent): a bare"
-            " unquoted T-separated datetime value truncates to the same"
-            " month period on both sides; results differ only when a"
-            " document contains some but not all of the leftover time"
-            " tokens (whoosh-compat ORs them, real whoosh ANDs them)"
+            "whoosh-bug (DIVERGENCES.md entry 54, superseding DIVERGENCES.md"
+            " entry 49): a bare unquoted T-separated datetime value silently"
+            " searches a truncated period ANDed with the leftover time tokens"
+            " in whoosh; whoosh-compat diagnoses BAD_DATE and searches nothing"
         ),
     ),
     # whoosh-bug (DIVERGENCES.md entry 50): a no-separator T-fused value

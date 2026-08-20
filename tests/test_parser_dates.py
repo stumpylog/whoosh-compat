@@ -1,4 +1,5 @@
 import time
+from collections.abc import Iterator
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -31,6 +32,14 @@ BASE = datetime(2026, 8, 4, 10, 30, tzinfo=BERLIN)
 
 def dparse(q: str, reg: FieldRegistry) -> wc.ParseResult:
     return wc.parse(q, registry=reg, default_fields=["content"], tz=BERLIN, basedate=BASE)
+
+
+def _nodes(node: ast.Node) -> Iterator[ast.Node]:
+    """``node`` and, recursively, the children of any group node under it."""
+
+    yield node
+    for child in getattr(node, "children", ()):
+        yield from _nodes(child)
 
 
 @pytest.mark.parametrize(
@@ -116,6 +125,112 @@ def test_bad_date_diagnostic(reg: FieldRegistry) -> None:
     # regex-parsing the rendered message.
     assert res.diagnostics[0].field == FieldRef("added")
     assert res.diagnostics[0].raw_value == "notadate"
+
+
+# --- A date value the grammar can only half-consume (DIVERGENCES entry 54) --
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("added:2005-01-01T00:00:00Z", id="rfc3339-utc"),
+        pytest.param("added:2005-01-01T00:00:00", id="rfc3339-no-zone"),
+        pytest.param("added:2005-01-01T12:30", id="rfc3339-to-the-minute"),
+    ],
+)
+def test_bare_unquoted_timestamp_is_rejected_not_half_consumed(
+    reg: FieldRegistry, query: str
+) -> None:
+    # DIVERGENCES.md entry 54. The colons make the grammar split the value
+    # (colons separate a field name from its value, the same rule that makes
+    # added:"-1 week" need its quotes), which leaves the date field holding
+    # the cut-off fragment "2005-01-". Real whoosh reads that fragment as
+    # "all of January 2005" -- the trailing "-" is swallowed as a separator
+    # that leads nowhere -- and ANDs the rest of the timestamp onto the query
+    # as loose text, so the user gets a silently wrong query and no
+    # diagnostic at all. A value that only half-parses is a bad date here.
+    res = dparse(query, reg)
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics[0].field == FieldRef("added")
+    assert not any(isinstance(n, ast.DateRange) for n in _nodes(res.ast))
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("added:2005-", id="year-then-dangling-dash"),
+        pytest.param("added:2005-01-", id="month-then-dangling-dash"),
+        pytest.param("added:2005-01-01T", id="day-then-dangling-t"),
+        pytest.param("added:2005.01.", id="dotted-then-dangling-dot"),
+        pytest.param("added:2005/01/", id="slashed-then-dangling-slash"),
+    ],
+)
+def test_dangling_separator_is_a_bad_date(reg: FieldRegistry, query: str) -> None:
+    # The same rule from the other side, for every non-whitespace separator
+    # in the "simple" grammar's class: a separator with no date component
+    # after it means the value was cut mid-token, not that the component is
+    # optional. Whitespace is deliberately not in this list -- it is a clean
+    # token boundary, and "simple"'s own (?=(\s|$)) guard already treats it
+    # as a valid end of a value (see the boundary discussion in
+    # DIVERGENCES.md entry 54).
+    res = dparse(query, reg)
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+
+
+@pytest.mark.parametrize(
+    ("query", "lo", "hi"),
+    [
+        pytest.param(
+            'added:"2005-01-01T00:00:00Z"',
+            datetime(2005, 1, 1, tzinfo=UTC),
+            datetime(2005, 1, 1, 0, 0, 1, tzinfo=UTC),
+            id="quoted-value",
+        ),
+        pytest.param(
+            "added:[2005-01-01T00:00:00Z to 2006-01-01T00:00:00Z]",
+            datetime(2005, 1, 1, tzinfo=UTC),
+            datetime(2006, 1, 1, 0, 0, 1, tzinfo=UTC),
+            id="bracketed-bounds",
+        ),
+    ],
+)
+def test_timestamp_spellings_the_grammar_can_consume_whole_still_parse(
+    reg: FieldRegistry, query: str, lo: datetime, hi: datetime
+) -> None:
+    # Pinned alongside the rejection above so a future change cannot "fix"
+    # the bare spelling by loosening these: quoting (or bracketing) is what
+    # keeps the colons out of the field-splitting grammar's way, and both
+    # must keep producing a whole-timestamp range.
+    res = dparse(query, reg)
+    assert not res.diagnostics
+    r = res.ast
+    assert isinstance(r, ast.DateRange)
+    assert (r.lo, r.hi) == (lo, hi)
+
+
+@pytest.mark.parametrize(
+    ("query", "text"),
+    [
+        pytest.param("added:2005-01-01 invoice", "invoice", id="day-precision-then-a-word"),
+        pytest.param("created:2020 invoice", "invoice", id="year-precision-then-a-word"),
+    ],
+)
+def test_a_whitespace_separated_term_after_a_date_is_still_a_term(
+    reg: FieldRegistry, query: str, text: str
+) -> None:
+    # The boundary the rule above must not cross: here the remainder is a
+    # separate token, not the tail of a cut-in-half value, and the date
+    # itself consumed its own text exactly. This has always meant "documents
+    # from that day that also mention invoice" and must keep meaning it.
+    res = dparse(query, reg)
+    assert not res.diagnostics
+    r = res.ast
+    assert isinstance(r, ast.And)
+    assert isinstance(r.children[0], ast.DateRange)
+    assert isinstance(r.children[1], ast.Term)
+    assert r.children[1].text == text
 
 
 def test_datetime_boost_preserved(reg: FieldRegistry) -> None:
@@ -407,52 +522,35 @@ def test_rfc3339_lowercase_t_and_z(reg: FieldRegistry) -> None:
 
 
 @pytest.mark.parametrize(
-    ("query", "expected_lo", "expected_hi", "expected_leftover"),
+    ("query", "fragment"),
     [
-        pytest.param(
-            "added:2026-08-04T10:30:00",
-            datetime(2026, 8, 1, tzinfo=BERLIN),
-            datetime(2026, 9, 1, tzinfo=BERLIN),
-            "30:00",
-            id="full-date-truncates-to-month",
-        ),
-        pytest.param(
-            "added:2026-08T10:30",
-            datetime(2026, 1, 1, tzinfo=BERLIN),
-            datetime(2027, 1, 1, tzinfo=BERLIN),
-            "08T10:30",
-            id="no-day-truncates-to-year",
-        ),
+        pytest.param("added:2026-08-04T10:30:00", "2026-08-", id="full-date"),
+        pytest.param("added:2026-08T10:30", "2026-", id="no-day"),
     ],
 )
-def test_bare_unquoted_t_value_truncates_with_leftover_terms(
+def test_bare_unquoted_t_value_is_rejected_not_truncated(
     reg: FieldRegistry,
     query: str,
-    expected_lo: datetime,
-    expected_hi: datetime,
-    expected_leftover: str,
+    fragment: str,
 ) -> None:
-    # DIVERGENCES.md entry 49: without quotes, the tokenizer splits the
-    # value at its colons before the date grammar runs, and the grammar
-    # then prefix-matches only the complete date units before the
-    # T-fused chunk ("2026-08-" -> the month window; "2026-" -> the year
-    # window), with the stray remainder surviving as an ordinary term.
-    # Real whoosh truncates to the SAME window with the same leftover
-    # (measured); keeping that truncation is deliberate parity, not a
-    # missed parse. The quoted spelling (entry 48) and the
-    # bracketed-range spelling are the ones that honor the full value.
-    r = dparse(query, reg).ast
-    assert isinstance(r, ast.And)
-    dr, leftover = r.children
-    assert isinstance(dr, ast.DateRange)
-    assert dr.lo == expected_lo.astimezone(UTC)
-    assert dr.hi == expected_hi.astimezone(UTC)
-    assert dr.incl_lo
-    assert not dr.incl_hi
-    assert isinstance(leftover, ast.Term)
-    assert leftover.field is not None
-    assert leftover.field.name == "content"
-    assert leftover.text == expected_leftover
+    # DIVERGENCES.md entry 54, superseding entry 49. Without quotes the
+    # tokenizer splits the value at its colons before the date grammar
+    # runs, leaving the date field the fragment named above -- cut off
+    # after a separator, mid-token. Real whoosh swallows that dangling
+    # separator and reads the fragment as a whole, shorter date (the
+    # August-2026 month window, or the 2026 year window), then ANDs the
+    # rest of the timestamp on as free text; entry 49 used to keep that
+    # truncation for parity. It is a silently wrong query with no
+    # diagnostic, so the fragment is now a bad date instead. The quoted
+    # spelling (entry 48, test_rfc3339_t_z_is_an_absolute_utc_instant_not_
+    # local above) and the bracketed-range spelling are the ones that
+    # honor the full value.
+    res = dparse(query, reg)
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics[0].field == FieldRef("added")
+    assert res.diagnostics[0].raw_value == fragment
+    assert not any(isinstance(n, ast.DateRange) for n in _nodes(res.ast))
 
 
 @pytest.mark.parametrize(

@@ -521,28 +521,32 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         ),
         DivergenceKind.MISMATCH,
     ),
-    # design (DIVERGENCES.md entry 49): the BARE unquoted sibling of the
-    # entry-48 spelling. Colon tokenization splits the value before any
-    # date grammar runs, and both sides then truncate the T-bearing chunk
-    # to the same month-precision period with the same surviving leftover
-    # tokens; the remaining structural divergence is a composite of two
-    # documented mechanisms (whoosh's naive NumericRange vs whoosh-compat's
-    # tz-aware DateRange, entry 12's defect family, and entry 15's
-    # multitoken AND-vs-OR over the leftover time tokens). Ordered BEFORE
-    # the entry-18 bare-ISO entry, whose fully-parses-numerically-correct
-    # prose does not describe the truncation. No quote after the colon:
-    # the quoted spellings belong to entries 48 (single) and 45 (double).
-    # The day group is optional: the no-day spelling ("2026-08T10:30")
-    # truncates to the YEAR window by the same mechanism (the T-fused
-    # unit and everything after it fall off), measured identical-window
-    # on both sides just like the full spelling's month window.
+    # whoosh-bug (DIVERGENCES.md entry 54, superseding DIVERGENCES.md
+    # entry 49): the BARE unquoted sibling of the entry-48 spelling.
+    # Colon tokenization splits the value before any date grammar runs,
+    # leaving the date field a fragment cut off mid-token ("2026-08-").
+    # Real whoosh swallows the dangling separator and reads the fragment
+    # as a whole, shorter date (the August-2026 month window), ANDing the
+    # rest of the timestamp on as free text with no diagnostic;
+    # whoosh-compat rejects the half-consumed value as BAD_DATE. In
+    # practice every query this pattern matches today therefore takes the
+    # entry-6 diagnostic skip before this entry's DivergenceKind is ever
+    # consulted; the pattern is kept for any future shape it matches that
+    # does NOT diagnose (see this module's docstring). Ordered BEFORE the
+    # entry-18 bare-ISO entry, whose fully-parses-numerically-correct
+    # prose describes neither the truncation nor the rejection. No quote
+    # after the colon: the quoted spellings belong to entries 48 (single)
+    # and 45 (double). The day group is optional: the no-day spelling
+    # ("2026-08T10:30") leaves the fragment "2026-" by the same
+    # mechanism, which whoosh reads as the whole YEAR.
     (
         re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):\d{{4}}-\d\d(?:-\d\d)?[Tt]"),
         (
-            "design (DIVERGENCES.md entry 49): a bare unquoted T-separated"
-            " datetime value truncates to the same month period on both"
-            " sides; the trees differ only via the documented naive-vs-tz"
-            " range shape and multitoken AND-vs-OR leftover mechanisms"
+            "whoosh-bug (DIVERGENCES.md entry 54, superseding DIVERGENCES.md"
+            " entry 49): a bare unquoted T-separated datetime value is cut"
+            " mid-token by the colon tokenizer; whoosh silently reads the"
+            " fragment as a shorter whole date and ANDs the remainder on as"
+            " text, whoosh-compat diagnoses BAD_DATE"
         ),
         DivergenceKind.MISMATCH,
     ),

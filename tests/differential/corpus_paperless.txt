@@ -154,10 +154,11 @@ created:'2020.01.01'
 # trailing Z as the UTC designator.
 added:'2026-08-04T10:30:00'
 added:'2026-08-04T10:30:00Z'
-# DIVERGENCES.md entry 49: the bare unquoted sibling. Colon tokenization
-# truncates the value to the same month period on both sides; the trees
-# differ only via the documented naive-vs-tz range shape and the
-# multitoken AND-vs-OR handling of the leftover time tokens.
+# DIVERGENCES.md entry 54 (superseding entry 49): the bare unquoted
+# sibling. Colon tokenization cuts the value mid-token; whoosh swallows
+# the dangling separator and searches the truncated period ANDed with
+# the leftover time tokens, whoosh-compat diagnoses BAD_DATE (so these
+# three lines take the entry-6 diagnostic skip).
 added:2026-08-04T10:30:00
 added:2026-08-04T10:30:00Z
 added:2026-08T10:30

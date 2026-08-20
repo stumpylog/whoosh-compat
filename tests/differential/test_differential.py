@@ -143,9 +143,16 @@ def test_diagnostic_skip_count_matches_corpus() -> None:
     # (`created:previous month`, ...) used to diagnose BAD_DATE on the bare
     # "previous"/"this" token, and now parse as the phrase they name, so
     # they are compared against the oracle instead of skipped.
-    assert count == 8, (
+    #
+    # Rose from 8 to 11 by DIVERGENCES.md entry 54 (the half-consumed date
+    # value fix): the three bare unquoted RFC3339 lines
+    # (`added:2026-08-04T10:30:00` and siblings) used to parse as the
+    # truncated month/year window real whoosh reads them as, and now
+    # diagnose BAD_DATE instead of silently searching a period nobody
+    # asked for.
+    assert count == 11, (
         f"{count} corpus queries now take the DIVERGENCES.md entry 6 diagnostic skip,"
-        " expected 8; if this is an intentional parser change (diagnosing a new"
+        " expected 11; if this is an intentional parser change (diagnosing a new"
         " shape, or fixing one that used to diagnose), update this pinned count and"
         " say so in the commit message, don't just silently adjust the number"
     )

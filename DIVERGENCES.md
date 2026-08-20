@@ -2073,54 +2073,67 @@ parse-then-emit pipeline).
     lines; `tests/emitter/test_acceptance_property.py`'s
     `test_quoted_rfc3339_value_is_a_result_level_divergence`.
 
-49. **A bare unquoted `T`-separated datetime value truncates to a
-    month-precision date on BOTH sides; the remaining structural
-    divergence is a composite of already-documented mechanisms
-    (design).** The unquoted sibling of entry 48's single-quoted
-    spelling: the query tokenizer splits `added:2026-08-04T10:30:00` at
-    its colons before any date grammar runs, so the date parser on each
-    side sees only `2026-08-04T10` (or `2026-08-04t10`) plus stray
-    trailing words (`30`, `00`). Measured against the pinned oracle:
-    both parsers then consume the same `2026-08-` prefix, resolve it to
-    the same August-2026 month period, and keep the same surviving
-    leftover tokens (the `04T10` chunk is dropped or retained
-    identically on both sides depending on the spelling), so the two
-    sides AGREE on interpretation. The no-day spelling
-    (`added:2026-08T10:30`) truncates one unit further by the same
-    mechanism: the `T`-fused `08T10` chunk falls off the date parse, and
-    both sides resolve the surviving `2026-` prefix to the same
+49. **A bare unquoted `T`-separated datetime value truncated to a
+    month-precision date on BOTH sides; whoosh-compat now rejects it as a
+    bad date instead (superseded by entry 54, which generalizes the rule
+    to any half-consumed date value).** The unquoted sibling of entry 48's
+    single-quoted spelling: the query tokenizer splits
+    `added:2026-08-04T10:30:00` at its colons before any date grammar
+    runs, so the date parser on each side sees only `2026-08-04T10` (or
+    `2026-08-04t10`) plus stray trailing words (`30`, `00`). Measured
+    against the pinned oracle: both parsers used to consume the same
+    `2026-08-` prefix, resolve it to the same August-2026 month period,
+    and keep the same surviving leftover tokens (the `04T10` chunk is
+    dropped or retained identically on both sides depending on the
+    spelling), so the two sides AGREED on interpretation. The no-day
+    spelling (`added:2026-08T10:30`) truncated one unit further by the
+    same mechanism: the `T`-fused `08T10` chunk falls off the date parse,
+    and both sides resolved the surviving `2026-` prefix to the same
     year-precision window with the same `08t10`/`30` leftover tokens
-    (measured). What still differs structurally is
-    exactly two known mechanisms: real whoosh renders the truncated
-    period as a timezone-naive `NumericRange` (its `datetime_to_long`
-    conversion never applies the query timezone, the same defect family
-    entry 12 documents for range bounds; whoosh-compat deliberately does
-    not reproduce it and emits a tz-aware `DateRange`), and the leftover
-    time tokens combine per entry 15's multitoken split (real whoosh
-    ANDs the analyzed tokens per field, whoosh-compat ORs them).
+    (measured). Real whoosh still does exactly that.
 
-    Result level, value-dependent: for realistic document sets both
-    sides return NOTHING for this spelling (the query is an `And` of the
-    month window with the leftover time tokens, and documents rarely
-    contain bare `30`/`00` text tokens), so the truncation is invisible
-    as a results difference. When a document does contain one (but not
-    all) of the stray tokens inside the month window, whoosh-compat's OR
-    matches it while real whoosh's AND does not, a genuine result-level
-    divergence (proven on a dedicated two-backend index). Users wanting
-    the RFC3339 value actually honored should use the quoted (entry 48)
-    or bracketed-range spellings, which is what paperless-ngx generates.
+    What whoosh-compat does now: entry 54 stopped its grammar from
+    reading the dangling separator at the end of a cut-off value
+    (`2026-08-`, `2026-`) as the end of a shorter, whole date, so the
+    truncated fragment no longer parses at all and the value reports
+    `Diagnostic(kind=BAD_DATE)` instead. The interpretation-level
+    agreement described above is therefore gone by choice: the two sides
+    no longer agree, because agreeing meant answering a query nobody
+    asked (the month or year around a timestamp, ANDed with pieces of
+    that same timestamp as free text) with no diagnostic to say so. The
+    two structural mechanisms that used to make the trees differ anyway
+    (whoosh's timezone-naive `NumericRange`, the same defect family entry
+    12 documents for range bounds; and entry 15's multitoken AND-vs-OR
+    over the leftover time tokens) are no longer reachable for this
+    shape, since whoosh-compat produces no comparable tree at all.
+
+    Result level: real whoosh returns NOTHING for this spelling on
+    realistic document sets (the query is an `And` of the month window
+    with the leftover time tokens, and documents rarely contain bare
+    `30`/`00` text tokens) and says nothing about why; when a document
+    *does* contain some of the stray tokens it can even return a hit,
+    from a window the user never named. whoosh-compat returns a
+    `BAD_DATE` diagnostic, which a host turns into a 400 naming the field
+    and the offending value. Users wanting the RFC3339 value honored
+    should use the quoted (entry 48) or bracketed-range spellings, which
+    is what paperless-ngx generates; that advice is unchanged, it is now
+    enforced instead of merely recommended.
 
     Test references: `tests/differential/allowlist.py`'s bare
     T-separated-value entry (ordered before the entry-18 bare-ISO entry,
     whose fully-parses-numerically-correct prose does not describe the
     truncation, and requiring no quote, complementing entry 48's
-    quote-required entry); `tests/emitter/result_allowlist.py`'s
-    matching entry (ordered before the entry-15 dashed-token pattern);
+    quote-required entry; its pattern is kept, and now cites entry 54,
+    for any future query shape it matches that does NOT diagnose);
+    `tests/emitter/result_allowlist.py`'s matching entry (ordered before
+    the entry-15 dashed-token pattern);
     `tests/differential/corpus_paperless.txt`'s
     `added:2026-08-04T10:30:00`, `added:2026-08-04T10:30:00Z` and
-    `added:2026-08T10:30` lines;
+    `added:2026-08T10:30` lines (all three now take the entry-6
+    diagnostic skip, counted by
+    `test_diagnostic_skip_count_matches_corpus`);
     `tests/test_parser_dates.py`'s
-    `test_bare_unquoted_t_value_truncates_with_leftover_terms`;
+    `test_bare_unquoted_t_value_is_rejected_not_truncated`;
     `tests/emitter/test_acceptance_property.py`'s
     `test_bare_rfc3339_value_is_a_result_level_divergence`.
 
@@ -2344,3 +2357,98 @@ parse-then-emit pipeline).
 
     Test references: `tests/test_parser_dates.py`'s
     `test_reversed_relative_range_swaps_like_the_absolute_case`.
+
+54. **A date value the grammar can only half-consume is rejected
+    (`Diagnostic(kind=BAD_DATE)`) instead of silently parsing the
+    fragment before the cut (whoosh-bug, not reproduced).** The shape
+    that motivated this is a bare, unquoted RFC3339 timestamp,
+    `added:2005-01-01T00:00:00Z`. The colons in it are field separators
+    in the whoosh grammar, so the tokenizer splits the value before any
+    date parsing happens and the date field is left holding the fragment
+    `2005-01-`. That split is correct and deliberately unchanged: it is
+    the same rule that makes `added:"-1 week"` and `added:"next monday"`
+    need their quotes, and the quoted (`added:"2005-01-01T00:00:00Z"`,
+    entry 48) and bracketed (`added:[2005-01-01T00:00:00Z TO ...]`)
+    spellings, which keep the colons out of the tokenizer's way, both
+    parse the whole timestamp and must keep doing so. What was wrong is
+    what happened *after* the split.
+
+    The mechanism, in `Sequence.parse` (`parser/dateparse.py`): whoosh
+    advances the sequence's position past a separator *before* trying the
+    element that should follow it, and a progressive sequence that then
+    fails on that element still reports having consumed the separator
+    that led nowhere. The only progressive sequence in the module is the
+    `simple` numeric grammar (separator class `[- .:/T]*`), so a fragment
+    cut off mid-token reads as a shorter, whole date: `2005-01-` becomes
+    "all of January 2005", `2005-` becomes "all of 2005", `2005-01-01T`
+    becomes "all of that day". The leftovers of the timestamp
+    (`00`, `00z`) survive as ordinary free-text terms and are ANDed onto
+    the query. The user gets a query they did not write, an empty result
+    set, and no diagnostic at all, while `added:now-3days` or
+    `added:"3 days ago"` (values the grammar cannot start to parse) are
+    rejected outright with `BAD_DATE`.
+
+    Checked against real whoosh first, and it degrades identically
+    (measured against the pinned oracle at `../whoosh`, basedate
+    2026-08-04 Europe/Berlin): `added:2005-01-01T00:00:00Z` gives a
+    January-2005 `NumericRange` ANDed with `content:00 AND content:00z`
+    (and the same per-field pair on every other default field), and the
+    fragments reproduce the swallow standalone as well:
+    `added:2005-01-` gives 2005-01-01 through 2005-01-31, `added:2005-`
+    gives all of 2005, `added:2005-01-01T` gives that single day. Its
+    `Sequence.parse` is the same code this fork started from. Diverged
+    from anyway, under the rule that parity never means reproducing a
+    clear whoosh bug: broken parsing that yields a silently wrong query
+    with no diagnostic is a defect, not a convention, and no working
+    query depends on a truncated value quietly widening into a month.
+
+    The rule this fork implements: a *non-whitespace* separator is
+    consumed only provisionally, and the sequence's reported end position
+    advances past it only once the element after it also matches. A
+    fragment ending in a dangling `-`/`:`/`/`/`.`/`T` therefore no longer
+    matches to the end of its text, `ToEnd` rejects it, and the value
+    diagnoses `BAD_DATE` naming the field and the offending text.
+
+    The boundary, deliberately drawn where it is. A remainder that is a
+    *clean token boundary* is still a term, not part of the value:
+    `added:2005-01-01 invoice` and `created:2020 invoice` keep meaning
+    "that date, and the word invoice", because the value there consumed
+    its own text exactly and the remainder is whitespace-separated rather
+    than glued on. Whitespace separators are for the same reason left on
+    whoosh's behavior exactly: `simple`'s own `(?=(\s|$))` guard already
+    treats whitespace as a valid end of a date value, so a trailing space
+    inside a quoted value (`added:'2005-01-01 '`) still parses, and
+    (more importantly) a numeric run followed by a space and a
+    non-numeric word still *declines* the `simple` alternative so the
+    named-month grammar gets its turn: rolling whitespace back too would
+    have made `created:'2020 august 4'` and `added:'2020 5pm'` match
+    `simple` for their leading year alone and, because `Choice` takes the
+    first alternative that matches anything at all and never backtracks,
+    never reach the alternative that can read them (both are pinned by
+    existing tests, which is how this was caught). A value with a
+    *leading* space (`added:' 2005-01-01'`) was already rejected before
+    this entry existed; the trailing-space asymmetry is whoosh's and is
+    left alone. Spellings with no dangling separator are untouched:
+    `added:2005-01-01T00` (hour precision) and `added:2026T10` (entry 50)
+    still parse, since their text ends on a date component.
+
+    `tests/differential/corpus_paperless.txt`'s three bare-timestamp
+    lines are entry 49's, and that entry (the specific, previously
+    "deliberate parity" case this rule reverses) is amended in place
+    rather than left contradicting this one. Its
+    `tests/differential/allowlist.py` and
+    `tests/emitter/result_allowlist.py` entries keep their patterns and
+    now cite this entry as well: with whoosh-compat diagnosing, those
+    corpus lines take the entry-6 diagnostic skip instead of reaching the
+    strict-xfail mismatch assertion (the pinned skip count in
+    `tests/differential/test_differential.py`'s
+    `test_diagnostic_skip_count_matches_corpus` rose from 8 to 11
+    accordingly), but the patterns still stand for any future query shape
+    they match that does not diagnose.
+
+    Test references: `tests/test_parser_dates.py`'s
+    `test_bare_unquoted_timestamp_is_rejected_not_half_consumed`,
+    `test_dangling_separator_is_a_bad_date`,
+    `test_bare_unquoted_t_value_is_rejected_not_truncated`,
+    `test_timestamp_spellings_the_grammar_can_consume_whole_still_parse`
+    and `test_a_whitespace_separated_term_after_a_date_is_still_a_term`.
