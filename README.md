@@ -207,15 +207,23 @@ are going back into a parser that will analyze them again: analysis is
 not generally idempotent (a stemmer maps `universities` to `univers` and
 then `univers` to `univ`), so re-analyzing analyzed output searches for
 something the index does not contain. In that mode the analyzer is never
-consulted. Which *nodes* contribute is unchanged (negation, patterns,
-kinds and dedupe are all structural), but the text differs in three ways
-worth sizing for:
+consulted. Which *nodes* contribute is structural (negation, patterns,
+kinds and dedupe never vary by mode) with one exception, the zero-token
+leaf in the first row below; the other two rows differ in text only:
 
 | query | `analyzed=True` | `analyzed=False` |
 | --- | --- | --- |
 | `the` (a stopword) | `()` | `('the',)` |
 | `"tax reports"` | `('tax', 'report')` | `('tax reports',)` |
 | `alpha-beta` (analyzer splits it) | `('alpha', 'beta')` | `('alpha-beta',)` |
+
+An all-stopword leaf analyzes to nothing, so it contributes no entry at
+all in analyzed mode, while unanalyzed mode reports its raw text: that is
+a node present in one mode and absent from the other, not two spellings of
+one node. Deciding *membership* by the analyzer while refusing its
+*output* would be a half-analysis this mode's contract denies; the
+re-parse downstream applies its own stopword list, in its own index's
+terms.
 
 So an entry in this mode can contain whitespace and punctuation, and the
 number of entries is the number of contributing leaves rather than of

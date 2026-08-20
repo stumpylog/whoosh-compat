@@ -160,13 +160,16 @@ material; they are permanently documented, each with its rationale, in
   again: analysis is not generally idempotent (a stemmer maps
   `universities` to `univers` and `univers` to `univ`), so re-analyzing
   analyzed output searches a stem the index does not contain. The mode
-  never consults the analyzer. Which *nodes* contribute is unchanged
-  (negation, patterns, kinds and dedupe are all structural), but the text
-  differs in three ways: an all-stopword term still contributes its raw text
-  (`the` -> `('the',)`, versus `()` analyzed), a phrase contributes one entry
-  rather than one per word (`"tax reports"` -> `('tax reports',)`), and a
-  term the analyzer would split contributes one entry (`alpha-beta` ->
-  `('alpha-beta',)`). So an entry can contain whitespace and punctuation,
+  never consults the analyzer. Which *nodes* contribute is structural
+  (negation, patterns, kinds and dedupe never vary by mode) with one
+  exception: an all-stopword term analyzes to nothing, so it contributes no
+  entry at all analyzed but does contribute its raw text here (`the` ->
+  `('the',)`, versus `()` analyzed) - a node present in one mode and absent
+  from the other. The remaining two differences are text only: a phrase
+  contributes one entry rather than one per word (`"tax reports"` ->
+  `('tax reports',)`), and a term the analyzer would split contributes one
+  entry (`alpha-beta` -> `('alpha-beta',)`). So an entry can contain
+  whitespace and punctuation,
   including characters a re-parse would read as grammar (a colon, a bracket)
   even though the query grammar around them is gone: quote or escape before
   re-parsing. The default is `analyzed=True`, so existing callers are
