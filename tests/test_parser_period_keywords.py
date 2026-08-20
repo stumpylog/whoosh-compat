@@ -67,9 +67,33 @@ def test_period_keyword_with_a_time_is_a_bad_date(registry: FieldRegistry, q: st
     assert [d.kind for d in result.diagnostics] == [DiagnosticKind.BAD_DATE]
 
 
-@pytest.mark.parametrize("q", ['added:"noon to now"', "added:[noon TO now]"])
+@pytest.mark.parametrize(
+    ("q", "expected_hi", "expected_incl_hi"),
+    [
+        # The quoted "to" range takes the exclusive +1us upper bound; the
+        # bracketed range keeps the inclusive bound the user typed. Each
+        # spelling pins its own inclusivity rather than the test reading it
+        # off the result, so a regression that flipped one spelling cannot
+        # be absorbed by the other spelling's expectation.
+        pytest.param(
+            'added:"noon to now"',
+            datetime(2026, 8, 19, 15, 30, 0, 1, tzinfo=UTC),
+            False,
+            id="quoted-to-range-exclusive-hi",
+        ),
+        pytest.param(
+            "added:[noon TO now]",
+            datetime(2026, 8, 19, 15, 30, tzinfo=UTC),
+            True,
+            id="bracketed-range-inclusive-hi",
+        ),
+    ],
+)
 def test_time_of_day_lower_bound_against_a_concrete_upper_bound_resolves(
-    registry: FieldRegistry, q: str
+    registry: FieldRegistry,
+    q: str,
+    expected_hi: datetime,
+    expected_incl_hi: bool,
 ) -> None:
     """ "noon to now" names an answerable span, so it resolves rather than
     diagnosing. Whoosh crashes here with AttributeError (it calls ceil() on
@@ -81,12 +105,9 @@ def test_time_of_day_lower_bound_against_a_concrete_upper_bound_resolves(
     result = _parse(registry, q, basedate=AFTERNOON)
     assert not result.diagnostics
     assert result.ast.lo == datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
-    # The quoted "to" range takes the exclusive +1us upper bound; the
-    # bracketed range keeps the inclusive bound the user typed.
-    if result.ast.incl_hi:
-        assert result.ast.hi == AFTERNOON
-    else:
-        assert result.ast.hi == datetime(2026, 8, 19, 15, 30, 0, 1, tzinfo=UTC)
+    assert result.ast.incl_lo is True
+    assert result.ast.hi == expected_hi
+    assert result.ast.incl_hi is expected_incl_hi
     assert result.ast.lo < result.ast.hi
 
 
@@ -118,14 +139,50 @@ def test_time_of_day_lower_bound_against_a_relative_upper_bound_resolves(
     assert result.ast.lo < result.ast.hi
 
 
+def test_characterize_predawn_relative_upper_bound_year_borrow(
+    registry: FieldRegistry,
+) -> None:
+    """CHARACTERIZATION, not a semantics assertion: this records what the
+    inherited heuristics in ``times.py``'s ``timespan.disambiguated``
+    currently do, so that if you change that function this test tells you
+    what moved. It does not claim the result is the right answer.
+
+    With a "now" before noon, "noon" cannot take the end's month/day
+    (12:00 > 01:41), so it takes the basedate's; that lands after the end,
+    so upstream's year-borrowing branch pulls the start back a year and the
+    range comes out roughly a year wide. Both branches are verbatim
+    upstream code, but real whoosh crashes before reaching them on this
+    input, so there is no oracle to say whether it is intended.
+    See DIVERGENCES.md entry 51.
+    """
+    result = _parse(registry, "added:[noon TO -1 week]", basedate=PREDAWN)
+    assert not result.diagnostics
+    assert result.ast.lo == datetime(2025, 8, 19, 12, 0, tzinfo=UTC)
+    assert result.ast.hi == datetime(2026, 8, 12, 1, 41, tzinfo=UTC)
+    # Well-formed (not inverted) even though it is wider than a user
+    # plausibly meant -- the property that actually matters here.
+    assert result.ast.lo < result.ast.hi
+
+
 @pytest.mark.parametrize("q", ['added:"3pm yesterday"', 'added:"yesterday 3pm"'])
 def test_ordinary_date_keywords_still_take_a_time_in_either_order(
     registry: FieldRegistry, q: str
 ) -> None:
-    result = _parse(registry, q)
+    """The guard on this whole change: an ordinary date keyword combines with
+    a time coherently in BOTH word orders, and must keep doing so. Only the
+    period keywords (which resolve to a span) are rejected.
+
+    Asserts the full resolved datetimes against a pinned "now", not just the
+    hour: rejecting a time on a period keyword must not shift the DATE that
+    an ordinary keyword resolves to either.
+    """
+    result = _parse(registry, q, basedate=AFTERNOON)
     assert not result.diagnostics
-    assert result.ast.lo.hour == 15
-    assert result.ast.hi.hour == 16
+    # "yesterday" relative to the pinned 2026-08-19 "now", at 15:00-16:00.
+    assert result.ast.lo == datetime(2026, 8, 18, 15, 0, tzinfo=UTC)
+    assert result.ast.hi == datetime(2026, 8, 18, 16, 0, tzinfo=UTC)
+    assert result.ast.incl_lo is True
+    assert result.ast.incl_hi is False
 
 
 def test_bare_period_keyword_is_unaffected(registry: FieldRegistry) -> None:

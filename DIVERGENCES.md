@@ -1994,6 +1994,19 @@ parse-then-emit pipeline).
     range -- the same rule already visible in `added:[3pm to 10am]`. The
     range is well-formed (lower bound below upper) in every case.
 
+    One resolved shape is recorded here rather than endorsed. With a
+    pre-noon `now` (01:41), `added:[noon TO -1 week]` resolves to
+    2025-08-19 12:00 through 2026-08-12 01:41, roughly a year wide: `noon`
+    cannot take the end's month/day, so it takes the basedate's, which lands
+    after the end, and upstream's year-borrowing branch then pulls the start
+    back a year. Both branches are verbatim upstream code, but real whoosh
+    crashes before reaching them on this input, so nothing external says
+    whether that is the intended reading -- and the fix makes it live,
+    user-facing behavior where it used to be an unreachable crash. It is
+    noted so that a pre-noon user getting back a year of documents with no
+    diagnostic is a documented outcome rather than a surprise; it is not
+    claimed to be correct, and a future task may reasonably narrow it.
+
     Only this one asymmetric shape is affected: a range whose bounds are
     both still ambiguous (`added:[noon to 3am]`, `added:[3pm to 10am]`)
     never took the crashing path and resolves exactly as before. There is
@@ -2004,7 +2017,10 @@ parse-then-emit pipeline).
     Test references: `tests/test_parser_period_keywords.py`'s
     `test_time_of_day_lower_bound_against_a_concrete_upper_bound_resolves`,
     `test_time_of_day_lower_bound_before_noon_carries_past_midnight` and
-    `test_time_of_day_lower_bound_against_a_relative_upper_bound_resolves`.
+    `test_time_of_day_lower_bound_against_a_relative_upper_bound_resolves`;
+    the year-borrow above is pinned as characterization only (explicitly not
+    a semantics assertion) by the same file's
+    `test_characterize_predawn_relative_upper_bound_year_borrow`.
 
 52. **A period keyword written together with a time of day
     (`added:"previous week 3pm"`, `added:"3pm previous week"`,
