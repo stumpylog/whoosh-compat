@@ -179,9 +179,19 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
     # DOCS_PROP row's has_* flags are explicitly False, see windex_prop):
     # "has_correspondent:'  false'" matches every document in whoosh-compat
     # (false matches everyone) and none in real whoosh (true matches no
-    # one). Same pattern as tests/differential/allowlist.py's entry-33
+    # one). Same shape as tests/differential/allowlist.py's entry-33
     # entry, reused here since the mismatch is visible at the result level
     # too, not just in the parsed tree.
+    #
+    # Deliberately kept wider than the AST-layer twin, which now requires
+    # the padded value to strip to the empty string or to one of the four
+    # falses ("f", "false", "no", "0"). This one still claims any padded
+    # value, including a padded TRUE-ish one ("has_type:'  true'"), which
+    # reads True on both sides and does NOT diverge. That is this module's
+    # documented skip-only tradeoff (see the module docstring): a few
+    # agreeing shapes are skipped, costing a little generated-example
+    # coverage, never a false assertion. The reason string below says so
+    # rather than claiming a divergence for those spellings.
     (
         re.compile(
             rf"\b(?:{BOOL_EXISTS_FIELDS_PATTERN}):"
@@ -189,10 +199,12 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
         ),
         (
             "DIVERGENCES.md entry 33 (design, result-level extension): a"
-            " whitespace-padded quoted BOOLEAN_EXISTS value reads False in"
-            " whoosh-compat (stripped before the trues/falses check) but True"
-            " in real whoosh (unstripped check falls through to"
-            " bool(qstring))"
+            " whitespace-padded quoted BOOLEAN_EXISTS value that strips to"
+            " something false-ish or empty reads False in whoosh-compat"
+            " (stripped before the trues/falses check) but True in real"
+            " whoosh (unstripped check falls through to bool(qstring)); this"
+            " skip-only pattern also covers padded true-ish values, which"
+            " agree on both sides"
         ),
     ),
     # DIVERGENCES.md entry 40 (whoosh-bug, not reproduced): NOT of a group

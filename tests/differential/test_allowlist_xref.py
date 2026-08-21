@@ -299,6 +299,55 @@ def test_result_entry23_regex_covers_every_whoosh_stopword(word: str) -> None:
         pytest.param("attrs:İ", 15, id="e15-bare-json-expanding-char"),
         pytest.param("İ-ab", 15, id="e15-bare-dashed-expanding-char"),
         pytest.param("zzz:x", None, id="e15-single-char-value-unclaimed"),
+        # The pre-release staleness-sweep narrowings. Each claimed
+        # spelling was measured diverging and each unclaimed one measured
+        # EQUAL (or, where noted, belongs to a different entry).
+        # entry 3: only the natural-date keywords the v2 pipeline rewrites
+        # away carry the divergence; a general date boost does not.
+        pytest.param("added:yesterday^2", 3, id="e3-rewritten-keyword-boost"),
+        pytest.param("created:2020^2", None, id="e3-single-value-date-boost-unclaimed"),
+        pytest.param("modified:now^2", None, id="e3-now-boost-unclaimed"),
+        pytest.param("created:[2020 TO 2021]^2", 12, id="e3-range-boost-is-the-tz-entry"),
+        # entries 12/44: a bound-less range has nothing to convert and no
+        # bound for the exclusivity to apply to.
+        pytest.param("added:[TO}", None, id="e12-44-boundless-range-unclaimed"),
+        pytest.param("created:[TO]", None, id="e12-boundless-range-unclaimed"),
+        pytest.param("added:[dec to feb]", 12, id="e12-month-name-bounds-claimed"),
+        pytest.param("added:{now TO now}", 44, id="e44-exclusive-exact-bounds"),
+        # entries 18/21: the space separator belongs to entry 21's
+        # month:day reading, not to entry 18's separated-ISO shape.
+        pytest.param("created:2020-01-01", 18, id="e18-dashed-iso"),
+        pytest.param("added:'2020 5pm'", None, id="e18-space-then-time-unclaimed"),
+        pytest.param("added:'2020 12:30'", 21, id="e21-month-day-pair"),
+        # entries 23/24: the zero-token proxy only applies to TEXT fields.
+        pytest.param("NOT (id:0)", None, id="e23-numeric-field-unclaimed"),
+        pytest.param("NOT has_tag:a", None, id="e23-boolean-field-unclaimed"),
+        pytest.param('title:"the"', 24, id="e24-text-field-phrase"),
+        pytest.param('tag_id:"in by x"', None, id="e24-keyword-field-unclaimed"),
+        # entry 27: the operator alone is not the divergence.
+        pytest.param("(title:foo) ANDNOT (title:bar)", None, id="e27-plain-andnot-unclaimed"),
+        pytest.param("title:foo (() ANDNOT title:bar)", 27, id="e27-empty-group-operand"),
+        pytest.param(
+            "title:foo ((title:the) ANDNOT title:bar)",
+            27,
+            id="e27-parenthesized-zero-token-operand",
+        ),
+        # entry 33: only a padded value that strips to something false-ish.
+        pytest.param("has_type:'  true'", None, id="e33-padded-true-unclaimed"),
+        pytest.param("has_type:'  xyz  '", None, id="e33-padded-other-unclaimed"),
+        # entry 39: a double-quoted numeric is a phrase on both sides.
+        pytest.param('id:"2147483648"', None, id="e39-double-quoted-unclaimed"),
+        pytest.param("id:'2147483648'", 39, id="e39-single-quoted-claimed"),
+        # entry 15: identical pieces are one token; a dot never splits.
+        pytest.param("ab-cd", 15, id="e15-distinct-bare-pieces"),
+        pytest.param("ab-ab", None, id="e15-identical-bare-pieces-unclaimed"),
+        pytest.param("AB-ab", None, id="e15-case-identical-pieces-unclaimed"),
+        pytest.param("ab.cd", None, id="e15-dot-never-splits-unclaimed"),
+        pytest.param("ab-cd-ab", 15, id="e15-mixed-chain-claimed"),
+        pytest.param("title:ab-cd OR title:x", 15, id="e15-text-dash-in-or"),
+        pytest.param("tag:ab,cd OR tag:x", None, id="e15-unquoted-keyword-comma-unclaimed"),
+        pytest.param("tag_id:'ab,cd' OR tag_id:x", 15, id="e15-quoted-keyword-comma-in-or"),
+        pytest.param("title:ab-ab OR title:x", None, id="e15-identical-in-or-unclaimed"),
     ],
 )
 def test_allowlist_regex_scoping(query: str, expected_entry: int | None) -> None:
@@ -324,6 +373,33 @@ def test_allowlist_regex_scoping(query: str, expected_entry: int | None) -> None
         assert int(m.group(1)) == expected_entry, (
             f"{query!r} claimed by the wrong entry: {reason!r}"
         )
+
+
+@pytest.mark.parametrize(
+    ("value", "claimed"),
+    [
+        # Entry 21 diverges exactly when the colon pair can be read as a
+        # calendar month and a valid day of that month; measured cell by
+        # cell over every HH:MM pair. These spellings cannot be pinned
+        # through allowed_reason(), because entry 15's unknown-field
+        # alternative independently claims any "<2+ chars>:<2+ chars>" run
+        # (it reads "23:59" as an unknown field), so the pattern itself is
+        # asserted instead.
+        pytest.param("12:30", True, id="december-30"),
+        pytest.param("02:29", True, id="february-29-leap-overclaim"),
+        pytest.param("11:30", True, id="november-30"),
+        pytest.param("23:59", False, id="no-month-23"),
+        pytest.param("00:00", False, id="no-month-0"),
+        pytest.param("12:00", False, id="no-day-0"),
+        pytest.param("04:31", False, id="april-has-30-days"),
+        pytest.param("02:30", False, id="february-has-at-most-29"),
+        pytest.param("12:60", False, id="no-day-60"),
+    ],
+)
+def test_entry21_claims_exactly_the_readable_month_day_pairs(value: str, claimed: bool) -> None:
+    pattern = next(p for p, reason, _kind in ALLOW if "DIVERGENCES.md entry 21" in reason)
+    query = f"added:'2020 {value}'"
+    assert bool(pattern.search(query)) is claimed, query
 
 
 def test_the_lowercase_expanding_character_set_is_exactly_i_dot() -> None:

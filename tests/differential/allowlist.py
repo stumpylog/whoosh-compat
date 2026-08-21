@@ -84,6 +84,7 @@ import re
 
 from whoosh.analysis import STOP_WORDS
 
+from tests.differential.oracle import NATURAL_DATE_KEYWORDS
 from tests.differential.oracle import ORACLE_REGISTRY
 from whoosh_compat.fields import FieldKind
 
@@ -244,6 +245,17 @@ KEYWORD_FIELDS_PATTERN = "|".join(
 )
 
 
+# A zero-width assertion, placed immediately after a range's opening
+# bracket, that the range writes at least one bound. It fails for the
+# bound-less spellings ("[TO]", "{ to ]", "[]") and succeeds for every
+# range with a real bound on either side ("[2020 TO]", "[TO 2021]",
+# "[dec to feb]"). Both date-range entries below use it: a range with no
+# bounds has neither a bound to tz-convert (entry 12) nor a bound for the
+# typed exclusivity to apply to (entry 44), and measurably compares EQUAL,
+# so claiming it discarded the comparison for no reason.
+_NON_EMPTY_RANGE = r"(?!\s*(?i:to)?\s*[\]}])"
+
+
 class DivergenceKind(enum.Enum):
     """Which strict-xfail assertion an allowlist entry's matched query
     should satisfy; see this module's docstring for the full taxonomy.
@@ -255,19 +267,36 @@ class DivergenceKind(enum.Enum):
 
 # (pattern, DIVERGENCES reference + short reason, strict-xfail taxonomy kind)
 ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
-    # #3: date-node boosts are silently dropped by whoosh's DateTimeNode/
-    # DateRangeNode.__init__ (both hardcode self.boost = 1.0), while
-    # whoosh-compat's DateParserPlugin preserves the typed boost. Scoped to a
-    # boost immediately after a created/modified/added clause (bare value or
-    # bracket range) specifically: a boost on a non-date term
-    # ("title:foo^2") is unaffected by this bug and must still compare.
+    # #3: a boost written on one of the natural-date keywords paperless-ngx
+    # v2 rewrites away before whoosh ever sees the query. The v2 pipeline
+    # (oracle._rewrite_natural_date_keywords, a clone of the real thing)
+    # substitutes "added:yesterday" for a literal bracket range, so the "^2"
+    # then sits after a whoosh syntax.RangeNode, whose has_boost is False:
+    # BoostPlugin.clean_boost (filter priority 0) demotes the BoostNode to a
+    # plain WordNode and the boost leaves the query as a stray search term.
+    # whoosh-compat never rewrites the keyword, so the boost lands on a
+    # word node and binds to the resulting date node.
+    #
+    # Deliberately NOT scoped to date boosts in general any more: measured,
+    # real whoosh PRESERVES a boost on every single-value date spelling
+    # ("created:2020^2", "created:jan^2", "modified:now^2" all keep
+    # boost=2.0 and compare EQUAL), because DateTimeNode/DateRangeNode set
+    # has_boost = True and BoostPlugin.do_boost (priority 510) runs after
+    # DateParserPlugin.do_dates (110), overwriting the constructors' dead
+    # self.boost = 1.0; and a boost after a *bracketed* date range is
+    # demoted to a stray term on BOTH sides, so it is not a divergence
+    # either. See DIVERGENCES.md entry 3.
     (
         re.compile(
-            r"\b(?:created|modified|added):"
-            r"(?:\[[^\]]*\]|\S+)"
-            r"\^\d"
+            r"\b(?:added|created|modified)\s*:\s*[\"']?"
+            r"(?i:" + "|".join(NATURAL_DATE_KEYWORDS) + r")"
+            r"[\"']?\^\d"
         ),
-        "DIVERGENCES.md entry 3: date-node boost preservation",
+        (
+            "DIVERGENCES.md entry 3: a boost on a natural-date keyword the v2"
+            " pipeline rewrites into a bracket range before whoosh parses it,"
+            " where whoosh's boost-less RangeNode drops it to a stray term"
+        ),
         DivergenceKind.MISMATCH,
     ),
     # #6: unparseable dates/numbers become a structured ErrorLeaf(diagnostic)
@@ -450,18 +479,21 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # after confirming "-foo" compares and passes structurally.
     # whoosh-bug (DIVERGENCES.md entry 44): a date range typed with an
     # exclusive bracket. whoosh's DateRangeNode never forwards
-    # startexcl/endexcl (always inclusive-both, the same plumbing oversight
-    # class as entry 3's boost drop); whoosh-compat honors the typed
+    # startexcl/endexcl (always inclusive-both, a plumbing oversight);
+    # whoosh-compat honors the typed
     # brackets on exact bounds. Ordered BEFORE the entry-12 date-range
     # entry so the exclusive spelling cites this divergence rather than
     # being absorbed under the tz-bypass paperwork (both are MISMATCH kind;
     # the ordering only affects citation accuracy). Scoped to a bracketed
     # range on a registered date field where either bracket is the
-    # exclusive one.
+    # exclusive one AND at least one bound is actually written: a
+    # bound-less range ("added:[TO}", "added:{TO]") has no bound to be
+    # exclusive OF, and measurably compares EQUAL, so claiming it only
+    # threw the comparison away (_NON_EMPTY_RANGE below).
     (
         re.compile(
             rf"\b(?:{DATE_FIELDS_PATTERN}):"
-            r"(?:\{[^\]}]*[\]}]|\[[^\]}]*\})"
+            rf"(?:\{{{_NON_EMPTY_RANGE}[^\]}}]*[\]}}]|\[{_NON_EMPTY_RANGE}[^\]}}]*\}})"
         ),
         (
             "whoosh-bug (DIVERGENCES.md entry 44): whoosh's DateRangeNode"
@@ -484,14 +516,22 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # to cover), not an intended whoosh design choice, so whoosh-compat does
     # NOT reproduce it: DateParserPlugin.range_to_node applies the same tz
     # conversion uniformly to both single values and range bounds. Covers
-    # every bracketed range on a DATE/DATETIME field in the corpus. The
+    # every bracketed range on a DATE/DATETIME field in the corpus that has
+    # at least one bound to convert. The
     # opening bracket is "[" or "{" (inclusive/exclusive): the root cause
     # (range_to_dt's missing ToEnd/override wiring) doesn't care which one
     # was typed, only that it's a range at all; broadened from "[" only
     # after the grammar-aware fuzzer generated an exclusive-bracket range
-    # ("created:{TO 1000]") that hit the identical bypass.
+    # ("created:{TO 1000]") that hit the identical bypass. A fully open
+    # range ("added:[TO]") is deliberately NOT claimed: with no bound
+    # string there is nothing for the missing override to convert, and the
+    # two sides measurably compare EQUAL. The result-level twin
+    # (tests/emitter/result_allowlist.py) has always required a digit
+    # inside the brackets for the same reason; a digit is too strict here
+    # (a month-name bound like "added:[dec to feb]" is tz-converted too,
+    # and does diverge), so this uses _NON_EMPTY_RANGE instead.
     (
-        re.compile(r"\b(?:created|modified|added):[\[{]"),
+        re.compile(rf"\b(?:created|modified|added):[\[{{]{_NON_EMPTY_RANGE}"),
         (
             "whoosh-bug (DIVERGENCES.md entry 12): LocalDateParser's"
             " tz-reversal override doesn't reach range bounds (range_to_dt"
@@ -597,13 +637,58 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # after the colon, optionally single-quoted) so it doesn't also swallow
     # the bracketed-range corpus lines above (those are covered by the
     # broader "\[" entry regardless).
+    #
+    # The separator class is "-", "." and "/" only. A SPACE is deliberately
+    # NOT a separator here, even though the date grammar accepts one: a
+    # four-digit run followed by a space is followed by *anything*, not by
+    # an ISO date part, and the shapes that pulls in are either simply
+    # equal ("added:'2020 5pm'", "created:0125 0", both measured EQUAL) or
+    # divergent for an entirely different reason ("added:'2020 12:30'",
+    # which is entry 21's month:day-vs-time-of-day reading and now has its
+    # own entry directly below), for which this entry's "numerically
+    # correct on both sides" reason is provably false.
     (
-        re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):'?\d{{4}}[-. /]\d"),
+        re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):'?\d{{4}}[-./]\d"),
         (
             "DIVERGENCES.md entry 18: bare separated-ISO date value parses"
             " correctly on both sides but via a different mechanism/AST"
             " shape (whoosh's ErrorNode-falls-back-to-field.parse_query vs"
             " whoosh-compat's single DateParserPlugin grammar path)"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
+    # DIVERGENCES.md entry 21: a year, whitespace, then a colon-separated
+    # pair that can be read as a calendar month:day. whoosh-compat reads
+    # the pair as month and day of that year ("added:'2020 12:30'" ->
+    # 30 Dec 2020); real whoosh reads it as a time of day on EVERY day of
+    # the year (2020-01-01 11:30 .. 2020-12-31 11:30:59). Entry 21 had no
+    # entry of its own until this sweep: entry 18's space-separator
+    # alternative claimed the shape first and recorded its own (here
+    # false) "numerically correct on both sides" reason for it.
+    #
+    # Scoped by what the divergence actually needs, measured cell by cell
+    # over every hour x minute pair: a two-digit left half in 01..12 (a
+    # readable month) and a right half that is a valid day of THAT month.
+    # A left half of 00 or 13..23, or a right half of 00 or 32..59,
+    # compares EQUAL (no calendar reading is available, so both sides fall
+    # back to the time of day). The month-length arms below are exact for
+    # 30- and 31-day months; February admits 29 unconditionally rather
+    # than deriving leap years from the year digits, so "…'2021 02:29'"
+    # (EQUAL) is the one residual over-claim, a single spelling per
+    # non-leap year, kept because a leap-year-aware regex here would be
+    # far less legible than the divergence it guards.
+    (
+        re.compile(
+            rf"\b(?:{DATE_FIELDS_PATTERN}):'?\d{{4}}\s+"
+            r"(?:(?:0[13578]|1[02]):(?:0[1-9]|[12]\d|3[01])"
+            r"|(?:0[469]|11):(?:0[1-9]|[12]\d|30)"
+            r"|02:(?:0[1-9]|1\d|2\d))"
+            r"(?!\d)"
+        ),
+        (
+            "DIVERGENCES.md entry 21: a year followed by a colon-separated"
+            " month:day pair reads as a calendar date in whoosh-compat but as"
+            " a time of day on every day of that year in whoosh"
         ),
         DivergenceKind.MISMATCH,
     ),
@@ -710,11 +795,17 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # (measured diverging), while a chain containing one surviving piece
     # (the-invoice) is rescued by it and compares equal, which the
     # per-piece boundary rejects via backtracking exhaustion.
-    # The field name itself is left generic (any \w+) rather than
-    # enumerated: the mechanism applies to every TEXT field in the
-    # registry, and an earlier version of this entry that spelled out only
-    # a handful of field names missed "owner" (found by the fuzzer, which
-    # samples the oracle registry's full field list). The value alternation
+    # The field is required to be a registered TEXT field
+    # (TEXT_FIELDS_PATTERN, derived from the registry so it cannot drift as
+    # fields are added or renamed), because TEXT is exactly the kind whose
+    # analyzer can drop every token: measured across the whole registry,
+    # "NOT <field>:the" and "NOT <field>:a" diverge for every TEXT field and
+    # for no other kind. An earlier version wrote any \w+ with a
+    # four-name KEYWORD lookahead carved out, which also claimed the
+    # U64/BOOLEAN_EXISTS/JSON/unknown-field spellings ("NOT (id:0)",
+    # "NOT attrs:9", "NOT zzz:the"), all of which compare EQUAL - the
+    # zero-token proxy simply does not apply to a field whose value never
+    # reaches a stopword/minsize analyzer. The value alternation
     # also includes a bare "\w" (matches exactly one word character): any
     # single-character value is zero-token too (StandardAnalyzer's
     # minsize=2 drops it), and the grammar-aware fuzzer's generic term
@@ -723,11 +814,11 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # curated word list) that enumerating specific single characters here
     # would be a losing game; the "\w" alternative, ordered last so the
     # named stopwords still match themselves rather than just their first
-    # letter, covers all of them at once. The four registered KEYWORD
-    # fields are excluded (negative lookahead): whoosh's KEYWORD analyzer
-    # only splits on commas, with no stopword/minsize filtering, so a
-    # single-character KEYWORD value is *not* zero-token and a NOT of one
-    # is a real comparison, not this divergence.
+    # letter, covers all of them at once. The registered KEYWORD fields
+    # fall outside TEXT_FIELDS_PATTERN for a reason worth naming: whoosh's
+    # KEYWORD analyzer only splits on commas, with no stopword/minsize
+    # filtering, so a single-character KEYWORD value is *not* zero-token
+    # and a NOT of one is a real comparison, not this divergence.
     (
         re.compile(
             # The prefix tolerates empty-group and nested-NOT noise
@@ -737,7 +828,7 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
             # further NOT keyword, so a real intervening term still blocks
             # the match.
             r"\bNOT\s*(?:\(\)\s*|\(\s*|NOT\s+)*"
-            rf"(?!(?:{KEYWORD_FIELDS_PATTERN}):)\w+:"
+            rf"(?:{TEXT_FIELDS_PATTERN}):"
             rf"{ZERO_TOKEN_WORD}(?:[-,/]{ZERO_TOKEN_WORD})*[-,/]?(?![\w.,/-])"
         ),
         (
@@ -758,10 +849,15 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # sides agree, entry 40's own excluded shape) stays unclaimed; per
     # the strict-xfail convention, any corpus line matching this entry
     # must be chosen to genuinely diverge.
+    # The zero-token word must be written on a registered TEXT field, the
+    # same scoping the entry-23 entry above carries and for the same
+    # measured reason: an unfielded or non-TEXT zero-token word does not
+    # produce the divergence ("NOT ((()) 0)", "NOT (() 0)" both compare
+    # EQUAL), so claiming it only discarded the comparison.
     (
         re.compile(
             r"(?=.*\bNOT\b)(?=.*\(\))"
-            rf"(?=.*(?:[\s(:]|^)(?!(?:NOT|AND|OR|ANDNOT|ANDMAYBE|REQUIRE|TO)\b)"
+            rf"(?=.*\b(?:{TEXT_FIELDS_PATTERN}):['\"]?"
             rf"{ZERO_TOKEN_WORD}(?![\w.,/-]))"
         ),
         (
@@ -785,9 +881,14 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # do), collapsing the enclosing group to Nothing() instead. Scoped to a
     # double-quoted phrase whose entire content is one or more known
     # zero-token words (the shared ZERO_TOKEN_WORD fragment, same
-    # derivation as the entry-23 allowlist entry above). The
-    # field name is left generic for the same reason entry 23's was
-    # broadened above. Each word is either a named stopword or a bare
+    # derivation as the entry-23 allowlist entry above) on a registered
+    # TEXT field, the same registry-derived scoping entry 23's entry
+    # carries above. An earlier version wrote a generic \w+ field name with
+    # no kind restriction at all, contradicting KEYWORD_FIELDS_PATTERN's own
+    # rationale in this module and the result-level twin, which does
+    # exclude them: measured, tag_id:"in by x", viewer_id:"to a x 9" and
+    # type_id:"0" all compare EQUAL, and only the TEXT fields diverge.
+    # Each word is either a named stopword or a bare
     # single character (any single char is zero-token too, StandardAnalyzer's
     # minsize=2 drops it): the trailing lookahead `(?=[\s"])` on every
     # alternative requires the match to actually end there, so a real
@@ -796,7 +897,7 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # false-positive risk fixed for entry 23 above.
     (
         re.compile(
-            r"\b\w+:"
+            rf"\b(?:{TEXT_FIELDS_PATTERN}):"
             rf'"{ZERO_TOKEN_WORD}(?=[\s"])'
             rf'(?:\s+{ZERO_TOKEN_WORD}(?=[\s"]))*"'
         ),
@@ -853,8 +954,35 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # NullQuery child instead of poisoning). No corpus line uses ANDNOT/
     # ANDMAYBE/REQUIRE at all (grep-verified), so this only affects the
     # hypothesis fuzzers, which generate these operators freely.
+    #
+    # Scoped to a query that pairs one of the three operators with an
+    # operand that already resolves to nothing BEFORE analysis: a literal
+    # empty group (however nested) or a parenthesized zero-token value on a
+    # TEXT field. That is the condition the mechanism above actually needs,
+    # and it is not implied by the operator alone. This entry used to be
+    # the bare keyword alternation, which claimed every query mentioning
+    # ANDNOT/ANDMAYBE/REQUIRE at all: roughly half of those comparisons are
+    # EQUAL ("(title:foo) ANDNOT (title:bar)"), and because the fuzzers
+    # skip a claimed shape rather than inverting it, that silently threw
+    # away the single largest block of differential coverage in this
+    # module. It also shadowed entries 15/33/37/38/39, all of which are
+    # ordered after it, whenever their shapes happened to share a query
+    # with one of these operators.
+    #
+    # Measured boundary: "title:foo (() ANDNOT title:bar)" and
+    # "title:foo ((title:the) ANDNOT title:bar)" diverge;
+    # "title:foo (title:0 ANDNOT title:bar)" (an UNparenthesized zero-token
+    # operand, which the analysis-time survivor rule handles instead, see
+    # entry 23) and "title:foo ((0) ANDNOT title:bar)" (unfielded, so it
+    # multifield-expands rather than resolving to nothing) compare EQUAL.
     (
-        re.compile(r"\bANDNOT\b|\bANDMAYBE\b|\bREQUIRE\b"),
+        re.compile(
+            r"(?=.*\b(?:ANDNOT|ANDMAYBE|REQUIRE)\b)"
+            r"(?=.*(?:\((?:\s|\(|\))*\)"
+            rf"|\(\s*(?:{TEXT_FIELDS_PATTERN}):"
+            rf"{ZERO_TOKEN_WORD}(?:[-,/]{ZERO_TOKEN_WORD})*[-,/]?"
+            r"(?![\w.,/-])\s*\)))"
+        ),
         (
             "DIVERGENCES.md entry 27: ANDNOT/ANDMAYBE/REQUIRE with a"
             " zero-token positive/required/scored side poisons an enclosing"
@@ -885,10 +1013,22 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # root cause (term_query's strip-before-check vs BOOLEAN._obj_to_bool's
     # unstripped-then-bool(qstring) fallback) is the same code path for
     # every BOOLEAN_EXISTS field, not something specific to has_tag.
+    #
+    # The padded value must also STRIP TO SOMETHING FALSE-ISH, i.e. to the
+    # empty string or to one of the four falses whoosh-compat's
+    # BOOLEAN_EXISTS coercion recognizes (parser/default.py: "f", "false",
+    # "no", "0", case-folded). That is the only way the two sides can
+    # disagree: whoosh reads True for any non-empty unstripped text, and
+    # whoosh-compat reads True for anything that survives stripping and is
+    # not one of the falses, so a padded TRUE-ish value agrees on both
+    # sides. The earlier regex claimed any padded value at all, which made
+    # its own reason string ("reads False here, True in whoosh") provably
+    # false for roughly half of what it claimed ("has_type:'  true'",
+    # "has_type:'  xyz  '", both measured EQUAL).
     (
         re.compile(
             rf"\b(?:{BOOL_EXISTS_FIELDS_PATTERN}):"
-            r"(?:'\s+\S.*'|'.*\S\s+'|'\s+')"
+            r"'(?:\s+(?i:false|no|f|0)\s*|\s*(?i:false|no|f|0)\s+|\s+)'"
         ),
         (
             "DIVERGENCES.md entry 33: a whitespace-padded quoted"
@@ -1008,14 +1148,18 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # domain's own ceiling, always out of range regardless of signedness);
     # confirmed directly that each field's own exact max (4294967295 for the
     # unsigned three, 2147483647 for the rest) is NOT included here since it
-    # parses identically on both sides.
+    # parses identically on both sides. The optional quote is the SINGLE
+    # quote only: a double-quoted numeric ("id:\"2147483648\"") is a
+    # PhrasePlugin phrase on both sides, never reaches either field's
+    # numeric parse, and measurably compares EQUAL, so the double-quote
+    # alternative this pattern used to carry only discarded comparisons.
     (
         re.compile(
-            r"\b(?:asn|num_notes|custom_field_count):'?\"?4294967296\b"
+            r"\b(?:asn|num_notes|custom_field_count):'?4294967296\b"
             r"|\b(?:id|correspondent_id|type_id|path_id|owner_id|page_count):"
-            r"'?\"?2147483648\b"
+            r"'?2147483648\b"
             r"|\b(?:id|asn|correspondent_id|type_id|path_id|owner_id|num_notes"
-            r"|custom_field_count|page_count):'?\"?18446744073709551615\b"
+            r"|custom_field_count|page_count):'?18446744073709551615\b"
         ),
         (
             "DIVERGENCES.md entry 39 (design): whoosh-compat's U64 domain is"
@@ -1066,9 +1210,27 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # diverges when nested inside a genuine user-written OR, a narrower,
     # context-dependent case covered by the next entry) isn't wrongly
     # swept in here.
+    # Two further measured corrections to the bare-value alternative's
+    # scope. The separator is a DASH only: a single dot does not split a
+    # value at all ("ab.cd" measured EQUAL, matching entry 46's own
+    # "title:foo.bar stays one token" finding), so the dot alternative
+    # claimed nothing but agreeing shapes. And the two halves must not be
+    # the same token: "ab-ab" (and any all-identical chain, "ab-ab-ab")
+    # analyzes to a single distinct token, so ANDing and ORing it come out
+    # the same and the two sides compare EQUAL. The leading negative
+    # lookahead rejects exactly the all-identical chains, case-insensitively
+    # ("AB-ab" is one token too, since the analyzer lowercases first),
+    # while "ab-cd-ab" still matches, having two distinct tokens. The
+    # chain is one-or-more separators, not exactly one: a three-piece
+    # value ("ab-cd-ab", "ab-cd-ef") diverges by the same mechanism and
+    # was previously unclaimed altogether, a latent hole the narrowing
+    # work surfaced (the current generators only ever emit a single dash,
+    # so nothing had reached it).
     (
         re.compile(
-            r"(?:^|(?<=[\s(]))(?:\w{2,}|İ)[-.](?:\w{2,}|İ)(?=[\s)]|$)"
+            r"(?:^|(?<=[\s(]))"
+            r"(?!(?i:(\w{2,}|İ)(?:-\1)*(?=[\s)]|$)))"
+            r"(?:\w{2,}|İ)(?:-(?:\w{2,}|İ))+(?=[\s)]|$)"
             rf"|\b(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared)\b)"
             r"\w{2,}:(?:[^\s():]{2,}|İ)"
         ),
@@ -1104,11 +1266,28 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # OR-bearing query, or a TEXT-field value whose 1-char half gets
     # dropped by minsize; per the strict-xfail convention, corpus lines
     # matching this entry must be chosen to genuinely diverge.
+    #
+    # Three measured scope corrections. (1) The separator/field-kind pairing
+    # is not free: a TEXT field splits on a dash or a comma
+    # ("title:ab-cd OR x", "title:ab,cd OR x", both diverge), but an
+    # UNQUOTED comma value on a comma_values KEYWORD field is split
+    # identically at parse time by both sides ("tag:ab,cd OR tag:x" is
+    # EQUAL) and only its QUOTED spelling diverges, because whoosh-compat
+    # keeps a quoted comma value as one literal (entry 17) while whoosh's
+    # KEYWORD analyzer splits it regardless. (2) A dot never splits
+    # anything ("title:foo.bar OR x" is EQUAL, see entry 46). (3) The
+    # value's pieces must not all be the same token: ANDing and ORing one
+    # distinct token coincide, so "title:ab-ab OR x" and "tag:'a,a' OR x"
+    # compare EQUAL. The earlier pattern tested none of these and threw
+    # away four out of five of the comparisons it claimed.
     (
         re.compile(
-            r"^(?=.*\bOR\b)"
-            rf"(?=.*\b(?:{_ANALYZER_SPLIT_FIELDS})"
-            r":['\"]?\w+[-.,]\w+)"
+            r"^(?=.*\bOR\b)(?=.*(?:"
+            rf"\b(?:{TEXT_FIELDS_PATTERN}):['\"]?"
+            r"(?!(?i:(\w+)(?:[-,]\1)*(?![\w,-])))\w+[-,]\w+"
+            rf"|\b(?:{KEYWORD_FIELDS_PATTERN}):['\"]"
+            r"(?!(?i:(\w+)(?:,\2)*(?![\w,])))\w+,\w+"
+            r"))"
         ),
         (
             "DIVERGENCES.md entry 15: a known TEXT/KEYWORD field's"

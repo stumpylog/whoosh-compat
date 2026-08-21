@@ -269,10 +269,28 @@ class LocalDateParser(English):
         return d
 
 
+# The exact keyword vocabulary paperless-ngx v2's own
+# rewrite_natural_date_keywords substitutes away before whoosh sees the
+# query. Exported (rather than inlined into _KEYWORD_RE below) so
+# tests/differential/allowlist.py's DIVERGENCES.md entry-3 pattern can
+# derive from the same list instead of hand-repeating it: that entry's
+# divergence exists only for values this rewrite consumes, so a keyword
+# added here and missed there would silently stop claiming a divergent
+# shape.
+NATURAL_DATE_KEYWORDS = (
+    "today",
+    "yesterday",
+    "this month",
+    "previous month",
+    "previous week",
+    "previous quarter",
+    "this year",
+    "previous year",
+)
+
 _KEYWORD_RE = re.compile(
     r"(\b(?:added|created|modified))\s*:\s*[\"']?"
-    r"(today|yesterday|this month|previous month|previous week|previous quarter"
-    r"|this year|previous year)[\"']?",
+    r"(" + "|".join(NATURAL_DATE_KEYWORDS) + r")[\"']?",
     re.IGNORECASE,
 )
 
