@@ -122,7 +122,52 @@ parse, emit, search, `tests/emitter/test_acceptance_e2e.py`) test suites.
    disagreements with the oracle; with them included, every one of the 459
    disagreements involves `［` or `］`, i.e. the qualification above and
    nothing else. Every emitted regex compiled in tantivy in both runs.
-3. Date-node boosts are preserved (whoosh silently dropped them).
+3. A boost on a natural-date keyword survives; paperless-ngx v2's own
+   pre-parse rewrite turned it into a stray search term.
+
+   **Correction, and a retracted claim.** This entry used to read
+   "date-node boosts are preserved (whoosh silently dropped them)", citing
+   the hardcoded `self.boost = 1.0` in whoosh's `DateTimeNode.__init__` and
+   `DateRangeNode.__init__` (`whoosh/qparser/dateparse.py`). That
+   hardcoding is real but **dead**: both classes set `has_boost = True`,
+   and `BoostPlugin.do_boost` runs as a filter at priority 510, after
+   `DateParserPlugin.do_dates` at 110, so it writes the typed boost back
+   onto the date node afterwards. Measured against the pinned oracle,
+   real whoosh **preserves** the boost on every single-value date
+   spelling: `created:2020^2`, `created:jan^2` and `modified:now^2` all
+   parse to a node with `boost=2.0`, and all three compare structurally
+   EQUAL to whoosh-compat's tree. There is no divergence there, and there
+   never was one.
+
+   A boost after a *bracketed* date range does get lost, but on **both**
+   sides equally, so it is not a divergence either: whoosh's
+   `syntax.RangeNode` leaves `has_boost` at its `False` default, so
+   `BoostPlugin.clean_boost` (filter priority 0, i.e. before the date
+   filter runs at all) demotes the `^2` to an ordinary `WordNode` and it
+   leaves the query as a stray search term. whoosh-compat's fork has the
+   same node kinds at the same filter priorities and does the same thing;
+   `created:[2020 TO 2021]^2` differs between the two sides only in the
+   timezone of its bounds, which is entry 12.
+
+   What is left, and what this entry now documents, is narrower and is not
+   a whoosh property at all: paperless-ngx v2's
+   `rewrite_natural_date_keywords` substitutes `added:yesterday` (and its
+   seven siblings: `today`, `this month`, `previous month`, `previous
+   week`, `previous quarter`, `this year`, `previous year`) for a literal
+   bracket range by plain string replacement *before* whoosh parses the
+   query. The boost then lands after a `RangeNode` rather than a word
+   node, and falls out as a stray term by the mechanism above:
+   `added:yesterday^2` searches for the literal text `^2` across the
+   default fields in the v2 pipeline, while whoosh-compat, which never
+   rewrites the keyword, binds the boost to the resulting `DateRange`.
+   Real whoosh *without* that rewrite keeps the boost here too
+   (measured), so this is a v2-pipeline divergence, not a whoosh one.
+
+   Test references: `tests/differential/corpus_paperless.txt`'s
+   `added:yesterday^2` line and its matching `tests/differential/allowlist.py`
+   entry, whose pattern is derived from `oracle.NATURAL_DATE_KEYWORDS` (the
+   same list the rewrite itself uses) rather than from any general
+   date-boost shape.
 4. Stopwords are not removed (a policy choice: whoosh-compat takes no
    position on stopwords, it uses whatever tokens the host's `analyzer`
    returns); this affects ranking and makes stopwords searchable, not
@@ -184,7 +229,14 @@ parse-then-emit pipeline).
     inclusive or exclusive open bracket, on a DATE/DATETIME field in the
     differential corpus, `tests/differential/corpus_*.txt`, broadened from
     `[`-only after the grammar-aware fuzzer generated an exclusive-bracket
-    case that hit the identical bypass); confirmed to *not* change actual
+    case that hit the identical bypass, and since narrowed to exclude the
+    bound-less spellings `added:[TO]`/`added:[TO}`: with no bound string
+    there is nothing for the missing override to convert, and those
+    compare EQUAL. The result-level twin in
+    `tests/emitter/result_allowlist.py` has always required a digit
+    inside the brackets; a digit is too strict for the AST layer, since a
+    month-name bound like `added:[dec to feb]` is tz-converted too and
+    does diverge); confirmed to *not* change actual
     search results for this project's small acceptance fixture in
     `tests/emitter/test_acceptance_e2e.py::test_scenario_equal[lowercase-to-open-range]`
     (see that test module's docstring for why an AST-level divergence
@@ -388,11 +440,30 @@ parse-then-emit pipeline).
     spelling is claimed under entry 14, since whoosh's mid-token tagger
     demotes it in two pieces, but the result-set difference is this
     entry's mechanism, verified against the live dual index); and the
-    single-character value İ (U+0130) defeats the allowlists' otherwise
-    reliable two-character survives-analysis proxy, because it is the
+    single-character value İ (U+0130) defeats the allowlists'
+    two-character survives-analysis proxy from below, because it is the
     only character in Unicode whose `str.lower()` expands to two
     codepoints (pinned by a derivation test), so `zzz:İ` and `attrs:İ`
     genuinely split into two surviving tokens and diverge.
+
+    İ is not the proxy's only inaccuracy, and calling it "otherwise
+    reliable" (as this entry used to) was wrong in the other direction
+    too. Two surviving *pieces* are not two surviving *tokens*: a value
+    whose pieces are all the same word (`path:ïð9-ïð9`, `ab-ab`,
+    `ab-ab-ab`, case-insensitively) analyzes to a single distinct token,
+    so ANDing and ORing it come out the same and the two sides compare
+    EQUAL. A single dot does not split a value at all (`ab.cd`,
+    `title:foo.bar`, see entry 46), so a dotted spelling is never this
+    divergence either. And the separator has to match the field kind: a
+    TEXT field's analyzer splits on both a dash and a comma, but an
+    *unquoted* comma value on a comma_values KEYWORD field is split
+    identically at parse time by both sides (`tag:ab,cd OR tag:x` is
+    EQUAL) and only its quoted spelling diverges, by entry 17's
+    comma-quote-literal mechanism meeting this entry's `Or` context. The
+    allowlist entries now test all three conditions; before the
+    pre-release staleness sweep they tested none of them, and the fielded
+    `OR` entry in particular discarded four out of five of the
+    comparisons it claimed.
 
     Test references: `tests/emitter/result_allowlist.py`'s unfielded/
     `OR`-nested dashed-word and bare-JSON-value entries;
@@ -476,7 +547,16 @@ parse-then-emit pipeline).
     directly: `tag:'foo,bar'` structurally matches under
     `tests/differential/test_differential.py::test_matches_oracle`, so this
     entry deliberately carries no allowlisted skip pattern of its own,
-    unlike a typical differential-only divergence). The design choice itself, and
+    unlike a typical differential-only divergence). That convergence is
+    context-dependent, though, and only holds where both sides combine
+    the split tokens the same way: inside a user-written `OR`,
+    whoosh-compat's still-unsplit literal resolves `Multitoken.DEFAULT`
+    against the enclosing `Or` while whoosh's already-split pair keeps
+    the parser's fixed AND default, so `tag:'ab,cd' OR tag:x` does
+    diverge at this layer. That shape is claimed by entry 15's fielded-
+    inside-`OR` allowlist entry, whose scope was widened to name it during
+    the pre-release staleness sweep; the mechanism is this entry's
+    literal, the reason it survives to the comparison is entry 15's. The design choice itself, and
     its result-level irrelevance, are still real and still covered
     directly: `tests/test_parser_fields.py`/`tests/test_plugins_unit.py`
     pin the raw parse-time distinction (`is_quoted`, an unsplit `Term`),
@@ -526,6 +606,15 @@ parse-then-emit pipeline).
     shape genuinely differs (`DateRange` vs. `NumericRange`), so this is a
     real, allowlisted AST-level divergence, not a whoosh bug to avoid
     reproducing.
+
+    The separator is `-`, `.` or `/`, not a space. A space used to be in
+    the allowlist entry's separator class, which turned "a bare
+    separated-ISO date" into "a four-digit run followed by anything" and
+    swept in shapes this entry's reason is false for: `added:'2020 5pm'`
+    and `created:0125 0` (a year and an unrelated bare term) both compare
+    EQUAL, and `added:'2020 12:30'` diverges for entry 21's
+    month:day-versus-time-of-day mechanism, not for this one. Entry 21 now
+    carries its own allowlist entry for that shape.
 
     The "both sides agree on the value" part holds for zero-padded values,
     which is what the corpus covers. It does not extend to every string the
@@ -731,7 +820,22 @@ parse-then-emit pipeline).
     reads as a time on both sides, because the separated-date alternative
     cannot match it. Forms with no time component are unaffected.
 
-    Test references: `tests/test_parser_dates.py`'s year-plus-time case.
+    The `12:30` spelling is not the whole shape. Measured cell by cell
+    over every `HH:MM` pair, the divergence is exactly "the pair can be
+    read as a calendar month and a valid day of that month": a left half
+    of `01`..`12` and a right half that is a real day number for that
+    month. `added:'2020 23:59'` (no month 23), `added:'2020 12:00'` (no
+    day 0), `added:'2020 04:31'` (April has 30 days) and
+    `added:'2021 02:29'` (2021 is not a leap year) all compare EQUAL,
+    because no calendar reading is available and both sides fall back to
+    the time of day.
+
+    Test references: `tests/test_parser_dates.py`'s year-plus-time case;
+    `tests/differential/allowlist.py`'s year-plus-`month:day` entry. That
+    entry is new as of the pre-release staleness sweep: before it, entry
+    18's separator class included a space, so entry 18's entry claimed
+    this shape first and recorded its own "numerically correct on both
+    sides" reason for it, which is provably false here.
 
 22. **JSON-subpath `index.parse_query` fallback: `AND`/`OR` now honor true
     combinator semantics for a `Term` value (fixed as a structural
@@ -927,7 +1031,14 @@ parse-then-emit pipeline).
     this entry already describes. Allowlisted in
     `tests/differential/allowlist.py` (a `NOT` directly wrapping a single
     known-zero-token TEXT-field value) rather than treated as a new
-    divergence, since the underlying behavior is this same entry.
+    divergence, since the underlying behavior is this same entry. "TEXT
+    field" is now a registry-derived requirement rather than a
+    four-name KEYWORD carve-out: measured across the whole oracle
+    registry, `NOT <field>:the` and `NOT <field>:a` diverge for every
+    TEXT field and for no other kind, so the U64/BOOLEAN_EXISTS/JSON and
+    unknown-field spellings (`NOT (id:0)`, `NOT attrs:9`, `NOT zzz:the`)
+    that the old generic `\w+:` also claimed were all discarded
+    comparisons that would have passed.
 
     The same accepted tradeoff extends to `ANDNOT`/`ANDMAYBE`/`REQUIRE`'s
     positive/required/scored operand, found by the acceptance-layer result
@@ -1032,6 +1143,15 @@ parse-then-emit pipeline).
     for a *phrase* (only single terms) until the grammar-aware fuzzer
     generated an all-stopword phrase.
 
+    Scoped to registered TEXT fields, like entry 23's own allowlist entry
+    and for the same measured reason. The regex used to write a generic
+    `\w+:` field with no kind restriction, contradicting both
+    `KEYWORD_FIELDS_PATTERN`'s own rationale in the same module (whoosh's
+    KEYWORD analyzer does no stopword or minsize filtering, so a
+    stopword-shaped KEYWORD value is not zero-token) and the result-level
+    twin, which does exclude them: `tag_id:"in by x"`,
+    `viewer_id:"to a x 9"` and `type_id:"0"` all compare EQUAL.
+
     Test references: `tests/differential/allowlist.py`'s all-zero-token
     quoted-phrase entry; `tests/differential/strategies.py`'s
     `ZERO_TOKEN_WORDS` (the same verified-zero-token vocabulary used to
@@ -1134,9 +1254,14 @@ parse-then-emit pipeline).
     tree at parse time instead of becoming a live `Nothing()`. Once a
     literal empty group can appear as an `ANDNOT`/`ANDMAYBE`/`REQUIRE`
     operand, so can a group whose only content analyzes to zero tokens
-    (e.g. `(0)`, a single character below `StandardAnalyzer`'s
+    (e.g. `(title:0)`, a single character below `StandardAnalyzer`'s
     `minsize=2`): both parse to the same "this operand resolves to
-    nothing" shape by the time `ast.normalize()` runs. Real whoosh's
+    nothing" shape by the time `ast.normalize()` runs. The value has to be
+    *fielded* and *parenthesized* for that: an unparenthesized
+    `title:0 ANDNOT title:bar` operand is handled by entry 23's
+    analysis-time survivor rule instead and compares EQUAL, and an
+    unfielded `(0)` multifield-expands rather than resolving to nothing,
+    so it compares EQUAL too (both measured). Real whoosh's
     `AndNot`/`AndMaybe`/`Require.normalize()` (`whoosh/query/compound.py`)
     already implement the correct per-operator rule for that shape
     (`AndNot`/`AndMaybe`: positive/required null -> `NullQuery`, negative/
@@ -1167,7 +1292,19 @@ parse-then-emit pipeline).
     operators freely with arbitrary short (down to one character) words.
 
     Test references: `tests/differential/allowlist.py`'s
-    `\bANDNOT\b|\bANDMAYBE\b|\bREQUIRE\b` entry; `tests/test_syntax.py`'s
+    ANDNOT/ANDMAYBE/REQUIRE-with-a-resolves-to-nothing-operand entry. That
+    entry's pattern used to be the bare alternation
+    `\bANDNOT\b|\bANDMAYBE\b|\bREQUIRE\b`, which claimed every query
+    mentioning one of the three operators without testing the zero-token
+    condition its own reason names. Since the fuzzers *skip* a claimed
+    shape rather than inverting it, and since these operators are
+    generated freely, that silently discarded roughly half of all
+    `ANDNOT`/`ANDMAYBE`/`REQUIRE` comparisons (all of which pass) and
+    shadowed entries 15, 33, 37, 38 and 39, which are ordered after it,
+    for any query that happened to use one. It now requires an operand
+    that already resolves to nothing: a literal empty group, however
+    nested, or a parenthesized zero-token value on a TEXT field.
+    `tests/test_syntax.py`'s
     `test_binarygroup_left_none_becomes_nothing_positive` and
     `test_binarygroup_right_none_becomes_nothing_negative` pin the
     corrected (and now real-whoosh-matching) per-node behavior at the
@@ -1184,7 +1321,7 @@ parse-then-emit pipeline).
     type, not intended semantics, so it is not reproduced: whoosh-compat's
     `visit_phrase` treats a double-quoted `"*"` on a `BOOLEAN_EXISTS` field
     the same as the single-quoted and unquoted forms, an existence match
-    (see entry 27's neighbor, the quoted-star existence special case's
+    (see entry 20, the bare-`field:*` existence special case's
     `_exists_query`/`Every` redirect
     through `exists_target`). The single-quoted form (`has_tag:'*'`) does
     not crash real whoosh (`BOOLEAN.parse_query` special-cases `"*"`
@@ -1490,7 +1627,19 @@ parse-then-emit pipeline).
     *whitespace-only* value (`has_tag:'  '`) IS part of it: whoosh never
     strips, so its fallthrough sees `bool('  ')`, True, while
     whoosh-compat strips down to the empty string, False; the allowlist
-    regexes (both layers) cover that spelling alongside the padded ones. Before this, whoosh-compat's rule
+    regexes (both layers) cover that spelling alongside the padded ones.
+
+    A padded value that strips to something *true*-ish is likewise not
+    part of this divergence, and the AST-layer allowlist regex used to
+    claim it anyway: `has_type:'  true'`, `has_type:'true  '` and even
+    `has_type:'  xyz  '` read True on both sides (whoosh by its non-empty
+    fallthrough, whoosh-compat because the stripped text is neither empty
+    nor one of the four falses) and compare EQUAL, making the entry's own
+    reason string false for about half of what it claimed. The regex now
+    requires the padded value to strip to the empty string or to one of
+    `f`/`false`/`no`/`0`, which is exactly the set that can disagree.
+
+    Before this, whoosh-compat's rule
     read `has_tag:''` as True (empty string is `not in` the falses tuple),
     which was a genuine bug, not an intended divergence; it is now fixed
     and compared normally against the oracle rather than allowlisted.
@@ -1698,7 +1847,7 @@ parse-then-emit pipeline).
     value shape for, so whoosh-compat does not reproduce it: a double-quoted
     value on a `BOOLEAN_EXISTS` field parses to an ordinary `ast.Phrase` and
     is coerced to a boolean at emit time (`visit_phrase`, the same
-    truthiness rule entry 32 documents for the unquoted/single-quoted form),
+    truthiness rule entry 33 documents for the unquoted/single-quoted form),
     see `tests/emitter/test_emit_phrase.py::test_phrase_on_boolean_exists_field`.
 
     Test references: `tests/differential/allowlist.py`'s
@@ -1740,6 +1889,13 @@ parse-then-emit pipeline).
     boundary is exact: a field's real maximum (`4294967295` for the three
     unsigned fields, `2147483647` for the rest) parses identically on both
     sides; one past it is the minimal reproduction of the divergence.
+
+    The out-of-range value has to reach a numeric parse for the divergence
+    to exist. A *double-quoted* spelling (`id:"2147483648"`) never does:
+    `PhrasePlugin` claims it on both sides and both build a phrase, so the
+    two compare EQUAL. The allowlist entry's optional quote is therefore
+    the single quote only; it used to admit the double quote as well and
+    discarded those comparisons for nothing.
 
     Test references: `tests/differential/allowlist.py`'s U64-field/large-value
     entry; `tests/differential/strategies.py`'s `_numeric_atom` and
@@ -1823,7 +1979,7 @@ parse-then-emit pipeline).
     101]`, `asn:[100 TO 100]`) also correctly matches only in-range
     documents, so the defect is not simply "any bracketed numeric range is
     broken" either, only ranges touching a small-magnitude bound. This
-    looks like a defect in whoosh's own `NumericRange`/`sortable_int_to_bytes`
+    looks like a defect in whoosh's own `NumericRange`/`NUMERIC.sortable_to_bytes`
     range-matching machinery, most likely in how it decomposes a range into
     Lucene-style precision-step "shift tiers" for values with few
     significant bits (not investigated further at the whoosh source level,
@@ -1938,8 +2094,9 @@ parse-then-emit pipeline).
     against the pinned oracle: `added:{now TO now}` parses inclusive-both
     in whoosh). whoosh's own `RangePlugin` captures the exclusivity flags
     and its `TermRange` honors them, so the drop is a `DateRangeNode`
-    plumbing oversight, exactly parallel to the boost drop entry 3
-    documents for the same node class, not intended query semantics.
+    plumbing oversight, not intended query semantics. (This used to cite
+    entry 3's "boost drop" as a parallel oversight in the same node class;
+    that claim was retracted, see entry 3.)
     whoosh-compat's `_range_to_node` keeps the typed flags for bounds
     classified exact (a concrete datetime such as `now`, or a
     fully-specified instant); ambiguous bounds are period-shaped and get
@@ -1957,7 +2114,10 @@ parse-then-emit pipeline).
     Test references: `tests/differential/allowlist.py`'s
     exclusive-date-bracket entry (ordered before the entry-12 date-range
     entry, so the exclusivity spelling cites this entry rather than being
-    absorbed under the tz-bypass paperwork);
+    absorbed under the tz-bypass paperwork; scoped to a range that writes
+    at least one bound, since a bound-less spelling like `added:[TO}` has
+    no bound for the typed exclusivity to apply to and measurably compares
+    EQUAL);
     `tests/differential/corpus_paperless.txt`'s `added:{now TO now}` line;
     `tests/test_parser_dates.py`'s
     `test_range_exclusive_brackets_honored_for_exact_bounds` (the direct

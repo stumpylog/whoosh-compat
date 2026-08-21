@@ -112,10 +112,15 @@ added:yesterday
 added:20231201
 modified:20231201
 
-# --- KNOWN DIVERGENCE (DIVERGENCES.md entry 3, allowlist.py): date-node
-# boost preservation. Real whoosh's DateTimeNode/DateRangeNode hardcode
-# self.boost = 1.0, silently dropping a boost written on a date value;
-# whoosh-compat's DateParserPlugin preserves the typed boost instead.
+# --- KNOWN DIVERGENCE (DIVERGENCES.md entry 3, allowlist.py): a boost on
+# a natural-date keyword. paperless-ngx v2's rewrite_natural_date_keywords
+# substitutes "added:yesterday" for a literal bracket range before whoosh
+# parses anything, and whoosh's syntax.RangeNode has has_boost = False, so
+# BoostPlugin.clean_boost demotes the "^2" to a stray search term.
+# whoosh-compat never rewrites the keyword, so the boost binds to the
+# DateRange. NOT a general date-boost divergence: real whoosh preserves a
+# boost on "created:2020^2" and friends (measured EQUAL), and a boost
+# after a bracketed range is dropped identically on both sides.
 added:yesterday^2
 
 # DIVERGENCES.md entries 36 and 46: a boost on a value the parser or
