@@ -731,6 +731,25 @@ parse-then-emit pipeline).
     is deliberately exactly `*:*` and nothing wider: `**:*` is a genuine
     instance of *this* entry's divergence (measured) and stays claimed.
 
+    That carve-out's *neighbourhood* had a blind spot, closed by a dedicated
+    adjacent allowlist entry: `*:**` (and `**:**`). whoosh's `FieldsPlugin`
+    reads the leading `*:` plus the first `*` as the unfielded match-all and
+    leaves a second bare `*` behind, which multifield-expands to a literal
+    `Wildcard("*")` per default field while whoosh-compat builds
+    `Every(field)`: this entry's own divergence, reached through a star that
+    the general entry-20 pattern cannot see (it requires the `*` to start at
+    the string start or follow whitespace/`(`/`:`, and this one follows
+    another `*`). It was measurably divergent and claimed by nothing, i.e. a
+    published-library CI flake waiting for the right fuzz draw. The new claim
+    is scoped by exhaustive measurement over every `*`/`:` string up to
+    length 5 in five syntactic contexts: exactly two trailing stars diverge,
+    while `*:***` compares EQUAL and is deliberately excluded, and the
+    left-anchored boundary leaves `:*:**`, `**:`, `**::`, `**:*:` and
+    `**:::` (all measurably divergent, all reached through different
+    mechanisms) unclaimed and reported rather than swept in.
+    Corpus lines: `tests/differential/corpus_docs.txt`'s `*:**` and `**:**`
+    lines.
+
     Test references: `tests/differential/allowlist.py`'s `:\*(?:\s|$)`
     entry; `tests/emitter/test_emit_patterns.py`'s `test_every_field`.
 

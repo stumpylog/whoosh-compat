@@ -765,6 +765,39 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         ),
         DivergenceKind.MISMATCH,
     ),
+    # design (DIVERGENCES.md entry 20, the "*:*"-carve-out's blind spot):
+    # a standalone token of the shape <star-run> ":" "**", i.e. "*:**" and
+    # "**:**". Real whoosh's FieldsPlugin consumes the "*:" + the first "*"
+    # as the unfielded match-all "*:*" and leaves a SECOND bare "*" behind,
+    # which multifield-expands to a literal Wildcard("*") per default field
+    # while whoosh-compat builds Every(field) per default field: exactly
+    # this entry's Every-vs-Wildcard divergence, just reached through a
+    # token the entry-20 regex below cannot see. That regex needs the "*"
+    # to start at the string start or after whitespace/"("/":"; here the
+    # surviving star is preceded by another star, so nothing matched and
+    # the shape was a genuine, unclaimed divergence a single unlucky fuzz
+    # draw could have failed CI with.
+    #
+    # Scoped by measurement over every string of "*"/":" up to length 5, in
+    # five contexts each (bare, parenthesized, with a leading sibling, with
+    # a trailing sibling, boosted). EXACTLY two trailing stars diverge:
+    # "*:***" (three) measurably compares EQUAL, so the trailing negative
+    # lookahead is required, not decorative, and "*:*" itself (one star,
+    # Every(field=None) on both sides, EQUAL) cannot match this pattern at
+    # all. Deliberately anchored to a whitespace/paren/start boundary on the
+    # left: ":*:**" also diverges but through a leading-colon token this
+    # claim does not describe, and is left unclaimed and reported rather
+    # than swept in here (as are "**:", "**::", "**:*:", "**:::").
+    (
+        re.compile(r"(?:^|(?<=[\s(]))\*+:\*\*(?!\*)(?:\^[\d.]+)?(?=$|[\s)])"),
+        (
+            "DIVERGENCES.md entry 20: a '*:**'/'**:**' token leaves a second"
+            " bare '*' after whoosh's own '*:*' match-all, which expands to a"
+            " literal Wildcard('*') per default field in whoosh vs"
+            " Every(field) in whoosh-compat"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
     # design: a bare "*" wildcard on a field (`title:*`) whoosh-compat
     # simplifies to Every(field) (see QueryParser.wildcard_query's
     # docstring: "the text is exactly '*' -> Every"); real whoosh's

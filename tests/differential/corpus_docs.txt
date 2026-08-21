@@ -184,3 +184,14 @@ has_correspondent:'  false'
 # the combination diverges. This is entry 23's first corpus line, so the
 # strict-xfail actually asserts the entry rather than leaving it to fuzz.
 *:* title:the
+
+# --- KNOWN DIVERGENCE (design, allowlist.py): entry 20's other star-soup
+# face. "*:**" is read by whoosh's FieldsPlugin as the unfielded match-all
+# "*:*" plus a leftover bare "*", which becomes a literal Wildcard("*") per
+# default field on the oracle side and Every(field) on whoosh-compat's: a
+# genuine entry-20 divergence that the "*:*" carve-out's neighbourhood left
+# unclaimed, i.e. a shape an unlucky fuzz draw could have failed CI with on
+# a published library. Asserted here rather than left to chance. Exactly two
+# trailing stars: "*:***" compares EQUAL and is deliberately not claimed.
+*:**
+**:**
