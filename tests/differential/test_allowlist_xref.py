@@ -46,7 +46,7 @@ _DIVERGENCES_PATH = _ROOT / "DIVERGENCES.md"
 _DIVERGENCES_TEXT = _DIVERGENCES_PATH.read_text(encoding="utf-8")
 
 _CORPUS_DIR = pathlib.Path(__file__).parent
-_CORPUS_FILES = ("corpus_paperless.txt", "corpus_docs.txt")
+_CORPUS_FILES = ("corpus_paperless.txt", "corpus_docs.txt", "corpus_realworld.txt")
 _CORPUS_LINES: dict[str, set[str]] = {
     name: {
         line

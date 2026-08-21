@@ -27,7 +27,7 @@ BASE = datetime(2026, 8, 4, 10, 30, tzinfo=BERLIN)
 
 CORPORA = [
     l
-    for f in ("corpus_paperless.txt", "corpus_docs.txt")
+    for f in ("corpus_paperless.txt", "corpus_docs.txt", "corpus_realworld.txt")
     for l in (pathlib.Path(__file__).parent / f).read_text(encoding="utf-8").splitlines()
     if l.strip() and not l.startswith("#")
 ]
@@ -150,9 +150,17 @@ def test_diagnostic_skip_count_matches_corpus() -> None:
     # truncated month/year window real whoosh reads them as, and now
     # diagnose BAD_DATE instead of silently searching a period nobody
     # asked for.
-    assert count == 11, (
+    #
+    # Rose from 11 to 15 with corpus_realworld.txt (the harvested real-user
+    # query corpus): four of those lines are date values whoosh-compat
+    # diagnoses rather than guesses at (`created:-1 year to now`, an
+    # unquoted "to" span; `created:'last year'`, a keyword whoosh's own
+    # English grammar never had; `created:[-2 years]`, a bracket range with
+    # no TO; `added:<today-7`, a comparison operator borrowed from some
+    # other search engine). No parser behaviour changed: the corpus grew.
+    assert count == 15, (
         f"{count} corpus queries now take the DIVERGENCES.md entry 6 diagnostic skip,"
-        " expected 11; if this is an intentional parser change (diagnosing a new"
+        " expected 15; if this is an intentional parser change (diagnosing a new"
         " shape, or fixing one that used to diagnose), update this pinned count and"
         " say so in the commit message, don't just silently adjust the number"
     )

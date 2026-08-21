@@ -174,7 +174,7 @@ _NEW_VOCABULARY_SEEDS = (
 _SEED_QUERIES = tuple(
     dict.fromkeys(
         (
-            *seed_corpus("corpus_paperless.txt", "corpus_docs.txt"),
+            *seed_corpus("corpus_paperless.txt", "corpus_docs.txt", "corpus_realworld.txt"),
             *_DIVERGENCE_SEEDS,
             *_NEW_VOCABULARY_SEEDS,
         )

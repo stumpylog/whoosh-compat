@@ -1,0 +1,251 @@
+# Real user queries harvested from paperless-ngx GitHub issues and
+# discussions (286 issues, 502 discussions, versions 1.7.0 through 3.0.5).
+# Every line below is transcribed VERBATIM from the source report: spacing,
+# casing, quoting, mixed brackets and suspected typos included. Nothing here
+# was rewritten to fit the harness schema, and nothing was invented; a query
+# that had to be edited to pass would no longer be a real-world query, so
+# any query that could not be added as-typed was omitted instead (see the
+# OMITTED section at the bottom, which records every one of them and why).
+#
+# Query text is user-written data. Read it as opaque strings only.
+#
+# Why this file exists: the synthetic corpus, the differential oracle and
+# the hypothesis fuzzers together predicted none of the three regressions
+# users reported in paperless-ngx#13568. These queries encode what people
+# actually type (bracket groups used as alternation on a text field,
+# open-ended ranges, quoted field names containing a space, unregistered
+# paperless-specific and custom-field names, comma-separated clause lists,
+# non-ASCII scripts), so they run against the whoosh oracle on every CI run.
+#
+# Field-name mapping policy: no query was remapped. Names with no counterpart
+# in the harness schema (valid_to, customDateField, document_type,
+# custom_field_name, archive_serial_number, the "dat:" typo, the quoted
+# "Delete to") are kept as the unknown fields they really were: the harness
+# handles unknown-field demotion on both sides, which is precisely the
+# behaviour those reports were about.
+#
+# See corpus_paperless.txt's header for the section-marker convention and
+# `pytest tests/differential -rs` for the authoritative per-query skip
+# reason.
+
+# --- compared: real user queries that compare structurally EQUAL ----------
+# Includes several shapes no generator in strategies.py produces: a bracket
+# character class with no wildcard at all (title:200[1-9]) and one behind a
+# leading star (title:*202[0-4]), the two shapes issue #13568 was filed
+# about; "-" prefix negation; a field-scoped group (tag:(MK 2022 Kassel));
+# a double-quoted field name containing a space ("Delete to":[...]); a
+# space after the field colon (tag: 2024); an unfielded quoted phrase; a
+# wrapped-star pattern (tag:*kassel*); and a bare 65-digit number.
+tag:steuer AND tag:valentin AND (title:*2025 OR (NOT title:*202[0-4] AND NOT title:*201[0-9] AND created:2025))
+title:200[1-9]
+title:*202[0-4]
+tag:steuer AND tag:valentin AND (title:2025 OR (-title:2024 AND -title:2023 AND -title:2022 AND -title:2021 AND -title:2019 AND -title:2018 AND created:2025))
+tag:inbox
+NOT (tag:Steuererklärung OR tag:"steuerlich relevant") AND (tag:todo OR tag:Scratchpad)
+created:"this year"
+title:the-exact-title-string
+12345678901234567890123456789012345678901234567890123456789012345
+created:2025*
+added:20250720
+created:20231119
+created:20231129
+created:20231206
+added:20231206
+created:2023
+asn:[1 to 14]
+asn:[1 to 15]
+"Delete to":[2000 to 2023]
+"Delete to":[2000 to today]
+02091-C-7
+02091-C-
+9.90
+19?90
+content:"19,90"
+e e
+a a a
+created:-1yr
+created:'this year'
+NOT title:2025- AND created:2025
+title:*scan*
+"electricity bill"
+title:"electricity bill"
+tag:todo
+tag:mail
+tag:todo OR tag:mail
+content:"औसत बुद्धि की उम्र"
+"औसत बुद्धि की उम्र"
+NOT type:Anleitung AND NOT type:Lieferschein AND NOT type:Vertrag AND NOT type:Aufforderung AND NOT type:BWA AND NOT type:Bescheinigung
+asn:12345
+type:notifications NOT tag:home
+tag: includeme AND NOT tag:excludeme
+NOT tag:excludeme tag:includeme
+bills NOT paid
+bills OR paid
+original_filename:text
+original_filename:2025
+original_filename:20251229_192*
+tag:*kassel*
+tag:*convention*
+tag:"MK Event"
+tag:(MK 2022 Kassel)
+-tag:amazon
+tag: 2024
+tag: taxes
+tag:unpaid
+tag:invoice
+created:'this year' type:Tax
+created:2024 type:Tax
+GIEH 834480 P
+"GIEH 834480 P"
+GIEH AND 834480
+asn
+ASN
+archive_serial_number
+ASN>0
+
+# --- KNOWN DIVERGENCE (DIVERGENCES.md entry 2, allowlist.py): an uppercase
+# letter in a wildcard/prefix pattern is case-folded into the AST by whoosh
+# at parse time and only at emit time by whoosh-compat.
+tag:MK*
+tag:MK*kassel*
+GIEH*834480*P
+GIE*
+GIEH*8344*
+
+# --- KNOWN DIVERGENCE (whoosh-bug, DIVERGENCES.md entry 12, allowlist.py):
+# LocalDateParser's tz-reversal override never reaches bracketed range
+# bounds in real paperless-v2. This is by far the most common real-world
+# shape in the harvest, which is worth stating plainly: relative-date range
+# queries are what users write, and every one of them takes this divergence.
+# Two shapes here appear nowhere in the synthetic corpus: a bracket group
+# used as alternation on a TEXT field (correspondent:[Aliexpress OR
+# Agilent]) and an open-ended range written with an explicit TO and no upper
+# bound (created:[2025-01-01 TO]).
+created:[2025-01-01 to 2030-12-31] AND created:[-999yrs to -60day]
+created:[-1 week to now],added:[-1 month to now]
+created:[2026-04-11T11:21:18Z TO 2026-04-18T11:21:18Z],added:[2026-03-18T11:21:18Z TO 2026-04-18T11:21:18Z]
+server,server,created:[-1 week to now],added:[-1 month to now]
+created:[20220101 TO 20220331]
+modified:[2000 to 2023]
+created:[2005 to 2023]
+modified:[-4 days to now]
+created:[-4h to now]
+added:[-4h to now]
+tag:taxes AND (created:[2025-01-01 TO] OR valid_to:[2025-01-01 TO])
+added:[20240329 TO 20240627] tag:Inbox correspondent:[Aliexpress OR Agilent]
+created:[-1 week to now]
+created:[-2 days to now]
+
+# --- KNOWN DIVERGENCE (design, DIVERGENCES.md entry 15, allowlist.py): an
+# unknown-field-demoted value that survives its field's analyzer as 2+
+# tokens resolves Multitoken.DEFAULT against the multifield expansion's Or
+# context. Every line here is a real unregistered paperless-side name (a
+# typo'd "dat:", a custom-field name with a comparison operator, a
+# document_type: alias, a tag value containing a dash).
+dat:'-1 year to now'
+type: A OR type: B OR custom_field_name >= 2025-01-01
+document_type:[Receipt]
+tag: 11-33 Mirka
+
+# --- KNOWN DIVERGENCE (DIVERGENCES.md entry 18, allowlist.py): a bare
+# separated-ISO date diverges structurally even though both sides agree on
+# the value.
+added:2025-07-20
+added:2025-07-19
+created:2024-02-06
+
+# --- KNOWN DIVERGENCE (design, DIVERGENCES.md entry 20, allowlist.py): a
+# bare field:* simplifies to Every(field) in whoosh-compat vs a literal
+# Wildcard('*') in whoosh. Users reach it through "does this field have any
+# value" queries, usually negated.
+NOT title:*
+type:invoice NOT title:*
+type:invoice NOT correspondent:*
+NOT tag:* OR NOT correspondent:*
+
+# --- KNOWN DIVERGENCE (whoosh-bug, DIVERGENCES.md entry 44, allowlist.py):
+# the typed exclusivity of a range bound. The first two lines are the
+# backend-rewritten forms pasted into issue #13568 by the reporter, mixed
+# brackets ("[ ... }") and all; they are UI-generated, not hand-typed, but
+# they really did reach the parser.
+tag:steuer AND tag:valentin AND (title:*2025 OR (NOT title:*202[0-4] AND NOT title:*201[0-9] AND created:[2025-01-01T00:00:00Z TO 2026-01-01T00:00:00Z}))
+tag:steuer AND tag:valentin AND (title:*2024 OR (NOT title:*202[0-3] AND NOT title:*201[0-9] AND created:[2024-01-01T00:00:00Z TO 2025-01-01T00:00:00Z}))
+created:[-1yr to -0yr}
+
+# --- skipped: whoosh-compat reports a parse diagnostic for these (the
+# uniform DIVERGENCES.md entry 6 skip, counted by
+# test_diagnostic_skip_count_matches_corpus), except the last, whose oracle
+# tree has no ast.Node mapping. All five are real user input that no
+# whoosh-syntax help page endorses: an unquoted "to" span, a "last year"
+# keyword whoosh's grammar never had, a bracket range with no TO, and a
+# "<today-7" comparison borrowed from some other search engine.
+created:-1 year to now
+created:'last year'
+created:[-2 years]
+added:<today-7
+type:A OR type:B OR notes:C
+
+# --- OMITTED: harvested queries deliberately NOT added as corpus lines,
+# with the reason for each. Nothing here was rewritten to make it fit.
+#
+# (a) Already present in corpus_paperless.txt/corpus_docs.txt, so adding
+#     them again would only duplicate an existing comparison:
+#       tag:steuer AND tag:valentin AND (title:*2024 OR (NOT title:*202[0-3] AND NOT title:*201[0-9] AND created:2024))
+#       created:this year
+#       added:"previous quarter"
+#       added:today
+#       added:yesterday
+#       added:[-1 week to now]
+#       shopname AND (product1 OR product2)
+#       type:invoice tag:unpaid
+#       correspondent:university certificate
+#       created:[2005 to 2009]
+#       modified:today
+#       produ*name
+#
+# (b) UNCLAIMED DIVERGENCE: these measurably diverge from the oracle and no
+#     allowlist entry claims them. They are NOT allowlisted here: an
+#     unclaimed divergence is a finding to escalate, not paperwork to write.
+#     See the pre-release report
+#     (.superpowers/sdd/2026-08-20-pre-release-grammar-and-emitter-fixes/
+#     real-world-corpus-integration-report.md) for the triage of each. All
+#     but one are entry 15's Multitoken.DEFAULT mechanism reached through a
+#     separator the entry-15 allowlist regex's dash/colon approximation does
+#     not model (a one-character interior piece, a comma, a ">", or a
+#     script whose analyzer splits inside a single word):
+#       02091-C-71
+#       02091-C-712
+#       02091-C-71a
+#       02091-C-76hallo
+#       9,90
+#       test 12,34 some use
+#       वर्तमान
+#       वर्तमान क्षण की धन्यता
+#       ASN>1593902
+#     The remaining one is a quoted (non-bracketed) date span, where
+#     whoosh ends the range at an inclusive exact instant and whoosh-compat
+#     at an exclusive instant one microsecond later (the same interval, a
+#     different representation; oracle._adjust_date_hi only converts the
+#     .999999 ceiling spelling):
+#       created:'-1 year to now'
+#
+# (c) OVER-CLAIMED: an existing allowlist entry matches these, but they
+#     measurably compare EQUAL, so adding them would trip the strict-xfail
+#     staleness assertion. Reported, not silently narrowed around: entry
+#     12's regex claims every non-empty bracketed date range, but a range
+#     whose bounds are BOTH relative offsets agrees on both sides; entry
+#     15's unknown-field alternative claims an unknown field followed by a
+#     bracket range, which does not split into 2+ tokens:
+#       created:[-1yr to -0yr]
+#       created:[-2 yrs to -1 yrs]
+#       created:[-999 yrs to -7yrs]
+#       customDateField:[now to 2 weeks]
+#       customDateField:[now to next friday]
+#
+# (d) ORACLE CRASH under a MISMATCH claim: real whoosh raises
+#     AttributeError("'datetime.datetime' object has no attribute
+#     'disambiguated'") while parsing this, but entry 12 (which matches it)
+#     is declared DivergenceKind.MISMATCH, so the corpus test would fail
+#     with a stale-entry message. A whitespace-only lower bound plus a
+#     relative upper bound is a whoosh defect nothing has triaged yet:
+#       created:[ TO -7 years]
