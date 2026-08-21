@@ -716,6 +716,55 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # and there is nothing left to allowlist: the remaining difference is
     # against *stock* whoosh, which cannot parse them in any spelling and so
     # is not reachable through this harness (DIVERGENCES.md entry 19).
+    # design (DIVERGENCES.md entry 23, the match-all face): an unfielded
+    # match-all "*:*" ANDed with a term whose analyzer drops every token
+    # collapses to Nothing() here but stays Every() in real whoosh. Same
+    # analysis-ordering family as the NOT face directly above, reached
+    # without any of NOT/ANDNOT/ANDMAYBE/REQUIRE: whoosh-compat's
+    # analyze() calls normalize() first, which drops the unfielded Every
+    # as the And identity, leaving a bare term that analysis then drops to
+    # nothing; whoosh analyzes at parse time, so the null child is gone
+    # before And.normalize() runs and it is left with And([Every()]).
+    # Measured: "*:* title:the" and "*:* AND title:the" -> Nothing() here,
+    # Every() there; "*:*" alone and "title:the" alone both compare EQUAL,
+    # so it is only the combination.
+    #
+    # The Every has to be the UNFIELDED one. A fielded Every is not the
+    # And identity, survives normalization, and agrees:
+    # "has_tag:* title:the" and "id:* title:the" both compare EQUAL.
+    # ("title:* title:the" diverges, but for entry 20's Every-vs-Wildcard
+    # reason, and is claimed by entry 20's entry below.)
+    #
+    # This entry's result-level twin (tests/emitter/result_allowlist.py's
+    # entry-23 row) has always named the bare-"*" face in its reason
+    # string; the AST layer simply never had the alternative, and entry
+    # 20's own "*:*" over-claim hid the shape from the fuzzer entirely
+    # until the pre-release staleness sweep narrowed it.
+    #
+    # Residual over-claim, stated rather than hidden: this is a
+    # co-occurrence test, and the divergence is really structural (the
+    # Every and the zero-token term must end up siblings of the same And
+    # with nothing else surviving), which a regex cannot express. So
+    # "*:* OR title:the", "*:* NOT title:the" and
+    # "*:* title:the title:foo" (a surviving sibling) are claimed too and
+    # actually compare EQUAL. That costs a handful of comparisons on
+    # queries that contain "*:*" at all, a much smaller surface than the
+    # entry-20 claim it replaces.
+    (
+        re.compile(
+            r"(?=.*(?:^|[\s(])\*:\*(?:\^[\d.]+)?(?:$|[\s)]))"
+            rf"(?=.*\b(?:{TEXT_FIELDS_PATTERN}):[\'\"]?"
+            rf"{ZERO_TOKEN_WORD}(?:[-,/]{ZERO_TOKEN_WORD})*[-,/]?(?![\w.,/-]))"
+        ),
+        (
+            "DIVERGENCES.md entry 23 (the match-all face): an unfielded"
+            " match-all ANDed with a zero-token term collapses to Nothing()"
+            " in whoosh-compat (normalize() drops the Every as the And"
+            " identity before analysis drops the term) but stays Every() in"
+            " whoosh, which analyzes at parse time"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
     # design: a bare "*" wildcard on a field (`title:*`) whoosh-compat
     # simplifies to Every(field) (see QueryParser.wildcard_query's
     # docstring: "the text is exactly '*' -> Every"); real whoosh's
@@ -734,8 +783,21 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # a wildcard character inside a larger pattern like "produ*name" or a
     # trailing-star fold like "abc*" (neither of those has a "*" bounded by
     # whitespace/parens/start-end on both sides).
+    #
+    # One spelling is carved back out by the two negative lookbehinds: the
+    # standalone token "*:*" (a "*"-named field, optionally boosted).
+    # Both sides read it as an unfielded match-all Every(field=None) and it
+    # compares EQUAL, so claiming it only discarded the comparison. It is
+    # not simply unclaimed, though: ANDed with a term whose analyzer drops
+    # every token it becomes the entry-23 match-all divergence, claimed by
+    # the entry directly above this one. The carve-out is deliberately
+    # exactly "*:*" and not "any star-named field": "**:*" is a genuine
+    # entry-20 divergence (measured) and stays claimed.
     (
-        re.compile(r"(?:^|(?<=[\s(:]))\*(?:\^[\d.]+)?(?=$|[\s)])"),
+        re.compile(
+            r"(?:^|(?<=[\s(:]))(?<!^\*:)(?<![\s(]\*:)"
+            r"\*(?:\^[\d.]+)?(?=$|[\s)])"
+        ),
         (
             "DIVERGENCES.md entry 20: bare field:* (or unfielded *) simplifies to"
             " Every(field) in whoosh-compat vs a literal Wildcard('*') in whoosh"

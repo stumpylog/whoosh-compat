@@ -722,6 +722,15 @@ parse-then-emit pipeline).
     fields, both cheaper than a literal wildcard scan; see
     `emitters/tantivy_.py`'s `visit_every`).
 
+    One spelling is carved out of that allowlist entry: the standalone
+    token `*:*` (a `*`-named field). Both sides read it as an unfielded
+    match-all `Every(field=None)`, so it compares EQUAL and claiming it
+    only discarded the comparison. It is not merely unclaimed: conjoined
+    with a term whose analyzer drops every token it becomes entry 23's
+    match-all face, which now has its own allowlist entry. The carve-out
+    is deliberately exactly `*:*` and nothing wider: `**:*` is a genuine
+    instance of *this* entry's divergence (measured) and stays claimed.
+
     Test references: `tests/differential/allowlist.py`'s `:\*(?:\s|$)`
     entry; `tests/emitter/test_emit_patterns.py`'s `test_every_field`.
 
@@ -1039,6 +1048,59 @@ parse-then-emit pipeline).
     unknown-field spellings (`NOT (id:0)`, `NOT attrs:9`, `NOT zzz:the`)
     that the old generic `\w+:` also claimed were all discarded
     comparisons that would have passed.
+
+    **The match-all face, found by the pre-release staleness sweep.** The
+    same analysis-ordering asymmetry is reachable with no `NOT` (and no
+    `ANDNOT`/`ANDMAYBE`/`REQUIRE`) at all, through an unfielded match-all:
+
+    ```
+    *:* title:the       whoosh-compat: Nothing()    real whoosh: Every()
+    *:* AND title:the   whoosh-compat: Nothing()    real whoosh: Every()
+    ```
+
+    Each half agrees on its own. `*:*` parses to `Every(field=None)` on
+    both sides and compares EQUAL; `title:the` is `Nothing()` on both sides
+    and compares EQUAL. Only the conjunction diverges, and for the reason
+    this entry already gives, just in a new position: `analyze()` begins by
+    calling `normalize()`, whose `And` rule drops an unfielded `Every` as
+    the identity element, leaving a bare `Term` that the analysis pass then
+    drops to zero tokens, so the whole query is `Nothing()`. Real whoosh
+    analyzes at *parse* time, so the null child is already gone by the time
+    `And.normalize()` runs and it is left with `And([Every()])` ->
+    `Every()`. Nothing here is special-cased; it falls out of the same
+    ordering the rest of this entry documents, and the same decision (keep
+    the uniform, timing-independent policy) applies for the same
+    predictability reason.
+
+    The `Every` has to be the *unfielded* one, because only that one is the
+    `And` identity. A fielded match-all survives normalization and the two
+    sides agree: `has_tag:* title:the` and `id:* title:the` both compare
+    EQUAL. (`title:* title:the` does diverge, but for entry 20's
+    `Every`-versus-`Wildcard` reason, not this one.)
+
+    **How far this reaches in practice.** The divergence needs an analyzer
+    that drops *every* token of the conjoined term, which makes it a
+    property of the host's analyzer rather than of whoosh-compat. It is
+    genuinely reachable for a host running a Whoosh-style
+    `StandardAnalyzer` with a stopword filter, which is why it is
+    documented here. It is effectively unreachable for the motivating
+    consumer: paperless-ngx's analyzer chain is `simple -> remove_long(129)
+    -> lowercase -> ascii_fold` (optionally followed by a stemmer), with
+    **no stopword filter at all**, so its only token-dropping filter is
+    `remove_long`, and hitting this would require an unfielded match-all
+    ANDed with a term every one of whose tokens exceeds 129 characters.
+
+    This face was invisible until the pre-release staleness sweep, for a
+    documented reason worth recording: `tests/emitter/result_allowlist.py`'s
+    result-level entry-23 row has always named it ("a zero-token term/phrase
+    combined with `NOT`/`ANDNOT`/`ANDMAYBE`/`REQUIRE` **or a bare `*`
+    (Every)**"), but the AST-layer allowlist had no such alternative, and
+    entry 20's own regex over-claimed the standalone `*:*` token, so the
+    differential fuzzer skipped every instance instead of comparing it. The
+    AST layer now has the alternative, entry 20's regex carves `*:*` back
+    out, and `tests/differential/corpus_docs.txt` gains a `*:* title:the`
+    line, which is this entry's first corpus line: the strict-xfail now
+    asserts the divergence instead of leaving it to chance draws.
 
     The same accepted tradeoff extends to `ANDNOT`/`ANDMAYBE`/`REQUIRE`'s
     positive/required/scored operand, found by the acceptance-layer result

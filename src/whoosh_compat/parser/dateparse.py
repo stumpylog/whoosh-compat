@@ -1530,9 +1530,12 @@ class DateRangeSyntaxNode(syntax.SyntaxNode):
     """Produced by :class:`DateParserPlugin` in place of a Text/Range node on
     a DATE/DATETIME field. Always builds a single
     :class:`whoosh_compat.ast.DateRange`: an exact instant is represented
-    as ``DateRange(dt, dt, True, True)`` rather than a term, per
-    DIVERGENCES.md entry 3 (whoosh emits ``query.Term`` for exact instants and drops
-    boost; this fork keeps both a uniform range shape and the boost).
+    as ``DateRange(dt, dt, True, True)`` rather than a term, where whoosh
+    emits ``query.Term``. This node carries the typed boost, same as
+    whoosh's own ``DateTimeNode``/``DateRangeNode`` (all three declare
+    ``has_boost = True``, so ``BoostPlugin.do_boost`` writes the boost back
+    after the date filter has run); an earlier version of this docstring
+    claimed whoosh dropped it, which DIVERGENCES.md entry 3 retracts.
     """
 
     has_fieldname = True

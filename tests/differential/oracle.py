@@ -428,6 +428,48 @@ def _field_ref(name: str | None) -> FieldRef | None:
     return FieldRef(name) if name is not None else None
 
 
+def _is_recursively_empty(q: wq.Query) -> bool:
+    """True for a compound whose every leaf is itself an empty compound.
+
+    These are the only ``None`` results :func:`_to_ast_node` produces that
+    an enclosing ``And``/``Or`` may legitimately *drop*: real whoosh's own
+    ``And.normalize()``/``Or.normalize()`` drop an empty compound child
+    rather than annihilating the parent (verified directly), so dropping
+    it here matches whoosh, and whoosh-compat's parser drops an empty
+    group before it ever becomes a live node. Every other ``None`` means
+    "this harness cannot represent that subtree", which is a reason to
+    skip the whole comparison, not to quietly delete a clause real whoosh
+    kept: see :func:`_map_group_children`.
+    """
+    return isinstance(q, wq.And | wq.Or) and all(_is_recursively_empty(c) for c in q.subqueries)
+
+
+def _map_group_children(q: wq.Query, reg: FieldRegistry) -> list[ast.Node] | None:
+    """Map an ``And``/``Or``'s children, or ``None`` if any child is
+    unmappable.
+
+    Dropping an unmappable child instead would silently compare a tree the
+    oracle does not actually have. Found by the pre-release staleness
+    sweep: ``((content:a[4-4]a) ANDMAYBE (created:0330)) OR ((0-0) AND (0))``
+    parses (with ``normalize=False``) to an ``Or`` whose first child is an
+    ``AndMaybe`` with an empty *required* side. :func:`_to_ast_node`
+    declines to map that ``AndMaybe`` at all, and the ``Or`` used to drop
+    it, so the "expected" tree lost a whole branch and the comparison
+    reported a mismatch that neither parser is responsible for. Such a
+    query is now skipped as oracle-unmappable, which is what it always
+    was.
+    """
+    subs: list[ast.Node] = []
+    for child in q.subqueries:
+        mapped = _to_ast(child, reg)
+        if mapped is None:
+            if _is_recursively_empty(child):
+                continue
+            return None
+        subs.append(mapped)
+    return subs
+
+
 def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
     if isinstance(q, wq.Term):
         fieldname = q.fieldname
@@ -452,7 +494,9 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
         return ast.Term(field=ref, text=cast("str | int | bool", text))
 
     if isinstance(q, wq.And):
-        and_subs = [s for s in (_to_ast(c, reg) for c in q.subqueries) if s is not None]
+        and_subs = _map_group_children(q, reg)
+        if and_subs is None:
+            return None
         # An empty And (whoosh's own raw parse of an empty group, e.g. the
         # "()" in "foo ()") has no meaningful mapping on its own: real
         # whoosh's And.normalize() drops a NullQuery/empty-compound child
@@ -467,7 +511,9 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
         return ast.And(children=tuple(and_subs))
 
     if isinstance(q, wq.Or):
-        or_subs = [s for s in (_to_ast(c, reg) for c in q.subqueries) if s is not None]
+        or_subs = _map_group_children(q, reg)
+        if or_subs is None:
+            return None
         if not or_subs:  # see the And branch above
             return None
         return ast.Or(children=tuple(or_subs))

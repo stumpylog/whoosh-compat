@@ -172,3 +172,15 @@ id:2147483648
 # quoted BOOLEAN_EXISTS reading applies to every registered BOOLEAN_EXISTS
 # field, not just has_tag; the allowlist entry was broadened accordingly.
 has_correspondent:'  false'
+
+# --- KNOWN DIVERGENCE (design, allowlist.py): entry 23's match-all face
+# (DIVERGENCES.md entry 23). An unfielded match-all ANDed with a term whose
+# analyzer drops every token collapses to Nothing() in whoosh-compat and
+# stays Every() in real whoosh: normalize() runs before analyze(), drops
+# the Every as the And identity, and analysis then drops the surviving
+# term; whoosh analyzes at parse time, so the null child is gone before
+# And.normalize() sees it. Each half compares EQUAL on its own ("*:*" is
+# Every(field=None) on both sides, "title:the" is Nothing() on both); only
+# the combination diverges. This is entry 23's first corpus line, so the
+# strict-xfail actually asserts the entry rather than leaving it to fuzz.
+*:* title:the
