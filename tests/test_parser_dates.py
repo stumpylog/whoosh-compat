@@ -1751,3 +1751,84 @@ def test_rfc3339_z_designator_still_recognized_on_a_long_value() -> None:
     elapsed = time.perf_counter() - start
     assert (got, is_utc) == (body, True)
     assert elapsed < 2.0
+
+
+# -- Quoted vs bracketed relative-span exactness agree (bug fix, no --------
+# -- DIVERGENCES.md entry: whoosh-compat now agrees with whoosh, see --------
+# -- tests/differential/corpus_realworld.txt's "CONFIRMED PARITY" line) ----
+
+
+def test_quoted_relative_span_exact_end_matches_bracketed_sibling(
+    reg: FieldRegistry,
+) -> None:
+    """``created:'-1 year to now'`` and ``created:[-1 year TO now]`` name the
+    same interval and must produce the same upper bound: an exact instant
+    the user actually typed ("now") keeps the inclusive treatment, not the
+    half-open exclusive-ceiling adjustment meant for an ambiguous period end.
+
+    Before the fix, text_to_node's timespan branch applied the +1-microsecond
+    exclusive adjustment to ANY multi-value span (whenever start != end),
+    with no check for whether the specific end value was already exact,
+    unlike range_to_node's per-bound start_exact/end_exact gate.
+    """
+    quoted = dparse("created:'-1 year to now'", reg).ast
+    bracketed = dparse("created:[-1 year TO now]", reg).ast
+    assert isinstance(quoted, ast.DateRange)
+    assert isinstance(bracketed, ast.DateRange)
+    assert quoted.hi == bracketed.hi
+    assert quoted.incl_hi == bracketed.incl_hi
+    assert quoted.incl_hi is True
+    assert quoted.lo == bracketed.lo
+    assert quoted.incl_lo == bracketed.incl_lo
+
+
+def test_quoted_relative_span_ambiguous_end_still_gets_ceiling_adjustment(
+    reg: FieldRegistry,
+) -> None:
+    """Control: when the end bound genuinely IS ambiguous (a bare year, not
+    an exact instant like "now"), the quoted span must still apply the
+    half-open exclusive-ceiling adjustment, matching its bracketed sibling.
+    Confirms the fix is a real exactness check, not "always inclusive".
+    """
+    quoted = dparse("created:'2019 to 2020'", reg).ast
+    bracketed = dparse("created:[2019 TO 2020]", reg).ast
+    assert isinstance(quoted, ast.DateRange)
+    assert isinstance(bracketed, ast.DateRange)
+    assert quoted.hi == bracketed.hi
+    assert quoted.incl_hi == bracketed.incl_hi
+    assert quoted.incl_hi is False
+
+
+@pytest.mark.parametrize(
+    ("quoted_query", "bracketed_query"),
+    [
+        pytest.param(
+            "created:'now to 2020'",
+            "created:[now TO 2020]",
+            id="exact-typed-first-ambiguous-second",
+        ),
+        pytest.param(
+            "created:'2027 to -1 year'",
+            "created:[2027 TO -1 year]",
+            id="ambiguous-typed-first-exact-second",
+        ),
+    ],
+)
+def test_quoted_relative_span_exactness_follows_a_backwards_swap(
+    reg: FieldRegistry, quoted_query: str, bracketed_query: str
+) -> None:
+    """A backwards two-sided span ("now to 2020": the exact value typed
+    first sorts AFTER the ambiguous one, so joint disambiguation swaps
+    which value lands at lo vs hi) must still agree with its bracketed
+    sibling: whichever value ends up at hi, that value's OWN exactness (not
+    positional "first typed" exactness) decides the ceiling adjustment,
+    mirroring range_to_node's own bounds_swapped handling.
+    """
+    quoted = dparse(quoted_query, reg).ast
+    bracketed = dparse(bracketed_query, reg).ast
+    assert isinstance(quoted, ast.DateRange)
+    assert isinstance(bracketed, ast.DateRange)
+    assert quoted.hi == bracketed.hi
+    assert quoted.incl_hi == bracketed.incl_hi
+    assert quoted.lo == bracketed.lo
+    assert quoted.incl_lo == bracketed.incl_lo

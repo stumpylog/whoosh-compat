@@ -52,8 +52,13 @@ a successful parse:
   this fork instead emits a half-open range: the ceiling plus one
   microsecond as an *exclusive* upper bound (the start of the next period),
   which is exact because ``ceil()`` always lands on a period's last
-  microsecond. An exact instant the user actually typed (a plain
-  ``datetime``, never a ``timespan``) keeps ``incl_hi=True``.
+  microsecond. An exact instant the user actually typed keeps
+  ``incl_hi=True``, whether it stands alone (a plain ``datetime``) or as
+  one side of a two-value span whose OTHER side is what's ambiguous
+  (``'-1 year to now'``, a ``timespan`` whose end is exact even though the
+  whole value is not): see :meth:`DateParserPlugin._text_to_node`'s own
+  per-value exactness check, mirroring :meth:`_range_to_node`'s
+  ``start_exact``/``end_exact``.
 * Three extensions to ``English``: relative-calendar keywords (``today``,
   ``yesterday``, ``this month``, ``previous month``, ``previous week``,
   ``previous quarter``, ``this year``, ``previous year``, ported from
@@ -1239,20 +1244,82 @@ class DateParserPlugin(Plugin):
     ) -> syntax.SyntaxNode:
         local_now = self._local_now()
         parse_text, force_utc = self._split_rfc3339_utc(text)
-        result = self.dateparser.date_from(parse_text, local_now)
-        if result is None:
+        # Raw (not yet disambiguated) first, mirroring _range_to_node's own
+        # start_exact/end_exact gate: self.dateparser.date_from would
+        # disambiguate immediately, collapsing away whether the END
+        # component of a two-sided span ("-1 year to now") was itself an
+        # exact instant ("now") before it's too late to check. ToEnd still
+        # enforces the same full-match requirement date_from's own wrapper
+        # does.
+        raw = ToEnd(self.dateparser.get_parser()).date_from(parse_text, local_now)
+        if raw is None:
             return self._error(node, text, spec)
         value_tz = UTC if force_utc else self.tz
 
+        # "Exact" mirrors range_to_node's start_exact/end_exact: a concrete
+        # datetime, or a fully-specified (non-ambiguous) adatetime, names an
+        # instant rather than a period, so it must keep inclusive treatment
+        # instead of the half-open exclusive-ceiling adjustment meant for
+        # an ambiguous period end. Computed from the RAW end/start
+        # components (raw.end/raw.start for a two-sided span like "-1 year
+        # to now", raw itself for a single value like "previous month
+        # noon", whose raw form is a bare ambiguous adatetime, not yet a
+        # timespan at all).
+        #
+        # One more wrinkle a plain type check can't resolve alone: a
+        # hand-computed keyword result ("previous week"/"previous quarter")
+        # is ALREADY a raw timespan of two plain datetimes by the time it
+        # reaches here (the function itself pre-computes the exclusive
+        # ceiling arithmetic, see previous_week_to_date/
+        # previous_quarter_to_date above), indistinguishable BY TYPE from a
+        # genuine two-sided combo's exact end ("now"). Distinguished instead
+        # by value: such a pre-computed end always sits at the period's
+        # last microsecond (adatetime.ceil()'s signature .999999, per the
+        # module docstring), which a real exact instant essentially never
+        # does by coincidence -- the same test the differential oracle
+        # harness's own oracle._adjust_date_hi relies on for the identical
+        # question on whoosh's side. (A basedate whose own microsecond
+        # happens to be exactly 999_999 could still trip this for a "now"
+        # end -- a ~1-in-a-million coincidence -- but even then the
+        # resulting DateRange denotes the same microsecond-resolution
+        # instant set, just via the exclusive-+1us representation instead
+        # of the inclusive one, so it is a representational near-miss, not
+        # a wrong answer.)
+        def _is_exact(value: object) -> bool:
+            return (isinstance(value, datetime) and value.microsecond != 999_999) or (
+                isinstance(value, adatetime) and not is_ambiguous(value)
+            )
+
+        raw_start = raw.start if isinstance(raw, timespan) else raw
+        raw_end = raw.end if isinstance(raw, timespan) else raw
+        start_exact = _is_exact(raw_start)
+        end_exact = _is_exact(raw_end)
+
+        result = raw.disambiguated(local_now) if isinstance(raw, (adatetime, timespan)) else raw
+
         if isinstance(result, timespan) and result.start != result.end:
+            # A backwards two-sided span ("now to 2020") swaps which typed
+            # value ends up at lo vs hi, the same "joint disambiguation may
+            # reorder the bounds" case range_to_node's own bounds_swapped
+            # check exists for; start_exact/end_exact (computed above, from
+            # raw_start/raw_end as originally typed) must follow the same
+            # swap or the wrong side's exactness would decide the ceiling
+            # adjustment.
+            if getattr(result, "bounds_swapped", False):
+                start_exact, end_exact = end_exact, start_exact
             # By construction (see module docstring), a timespan's start/end
-            # are always concrete datetimes by the time DateParser.date_from
-            # has disambiguated an adatetime: never an ambiguous adatetime
-            # itself: so these casts just narrow times.py's more general
-            # DateLike union for mypy.
+            # are always concrete datetimes once disambiguated: never an
+            # ambiguous adatetime itself: so these casts just narrow
+            # times.py's more general DateLike union for mypy.
             lo_naive = cast(datetime, result.start)
-            hi_naive: datetime | None = cast(datetime, result.end) + timedelta(microseconds=1)
-            incl_lo, incl_hi = True, False
+            resolved_hi = cast(datetime, result.end)
+            incl_lo = True
+            if end_exact:
+                hi_naive: datetime | None = resolved_hi
+                incl_hi = True
+            else:
+                hi_naive = resolved_hi + timedelta(microseconds=1)
+                incl_hi = False
         else:
             # Either a plain datetime, or a degenerate (start == end)
             # timespan: text like "midnight"/"noon" disambiguates to an

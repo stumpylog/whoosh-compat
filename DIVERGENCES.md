@@ -2621,8 +2621,10 @@ parse-then-emit pipeline).
 
     Resolved semantics, with `now` = 2026-08-19 15:30 UTC:
     `added:[noon TO now]` -> 2026-08-19 12:00 through 15:30 inclusive;
-    `added:"noon to now"` -> the same lower bound with the exclusive
-    +1-microsecond upper bound the quoted `to` form always takes;
+    `added:"noon to now"` -> the identical inclusive 15:30 upper bound (the
+    quoted `to` form and its bracketed sibling agree, since `now` is an
+    exact instant, not an ambiguous period end: see `_text_to_node`'s
+    exactness check, module docstring);
     `added:[noon TO -1 week]` -> 2026-08-12 12:00 through 2026-08-12 15:30.
     When `now` falls *earlier* in the day than the lower bound (a pre-noon
     `now` for `noon to now`), whoosh's own overnight rule for time-only

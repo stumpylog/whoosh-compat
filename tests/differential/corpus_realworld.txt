@@ -167,6 +167,19 @@ created:[ TO -7 years]
 created:[TO today]
 created:[TO tomorrow]
 
+# --- CONFIRMED PARITY: a quoted (non-bracketed) date span used to end at a
+# different instant than its bracketed sibling ("created:'-1 year to now'"
+# ended exclusive, one microsecond past "now", while "created:[-1 year TO
+# now]" correctly stayed at the inclusive exact instant): whoosh-compat's
+# own text_to_node applied the half-open exclusive-ceiling adjustment to
+# ANY multi-value span, with no check for whether the specific end value
+# was already an exact instant, unlike range_to_node's per-bound
+# start_exact/end_exact gate. Real whoosh keeps the inclusive form for
+# both spellings, so this was a divergence from whoosh AND from
+# whoosh-compat's own bracketed sibling. Fixed by giving text_to_node the
+# same per-bound exactness check.
+created:'-1 year to now'
+
 # --- KNOWN DIVERGENCE (design, DIVERGENCES.md entry 15, allowlist.py): an
 # unknown-field-demoted value that survives its field's analyzer as 2+
 # tokens resolves Multitoken.DEFAULT against the multifield expansion's Or
@@ -240,7 +253,7 @@ type:A OR type:B OR notes:C
 #     See the pre-release report
 #     (.superpowers/sdd/2026-08-20-pre-release-grammar-and-emitter-fixes/
 #     real-world-corpus-integration-report.md) for the triage of each. All
-#     but one are entry 15's Multitoken.DEFAULT mechanism reached through a
+#     of these are entry 15's Multitoken.DEFAULT mechanism reached through a
 #     separator the entry-15 allowlist regex's dash/colon approximation does
 #     not model (a one-character interior piece, a comma, a ">", or a
 #     script whose analyzer splits inside a single word):
@@ -253,12 +266,6 @@ type:A OR type:B OR notes:C
 #       वर्तमान
 #       वर्तमान क्षण की धन्यता
 #       ASN>1593902
-#     The remaining one is a quoted (non-bracketed) date span, where
-#     whoosh ends the range at an inclusive exact instant and whoosh-compat
-#     at an exclusive instant one microsecond later (the same interval, a
-#     different representation; oracle._adjust_date_hi only converts the
-#     .999999 ceiling spelling):
-#       created:'-1 year to now'
 #
 # (c) OVER-CLAIMED: an existing allowlist entry matches these, but they
 #     measurably compare EQUAL, so adding them would trip the strict-xfail

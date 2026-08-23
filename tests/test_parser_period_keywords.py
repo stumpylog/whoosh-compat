@@ -153,16 +153,19 @@ def test_calendar_unit_keyword_still_takes_a_time(registry: FieldRegistry) -> No
 @pytest.mark.parametrize(
     ("q", "expected_hi", "expected_incl_hi"),
     [
-        # The quoted "to" range takes the exclusive +1us upper bound; the
-        # bracketed range keeps the inclusive bound the user typed. Each
-        # spelling pins its own inclusivity rather than the test reading it
-        # off the result, so a regression that flipped one spelling cannot
-        # be absorbed by the other spelling's expectation.
+        # The quoted "to" range and the bracketed range must agree: "now" is
+        # an exact instant, not an ambiguous period, so both spellings keep
+        # the inclusive bound the user typed rather than the half-open
+        # exclusive-ceiling adjustment meant for an ambiguous end (see
+        # DIVERGENCES.md entry 51's "Resolved semantics" paragraph). Each
+        # spelling pins its own inclusivity rather than the test
+        # reading it off the result, so a regression that flipped one
+        # spelling cannot be absorbed by the other spelling's expectation.
         pytest.param(
             'added:"noon to now"',
-            datetime(2026, 8, 19, 15, 30, 0, 1, tzinfo=UTC),
-            False,
-            id="quoted-to-range-exclusive-hi",
+            datetime(2026, 8, 19, 15, 30, tzinfo=UTC),
+            True,
+            id="quoted-to-range-inclusive-hi",
         ),
         pytest.param(
             "added:[noon TO now]",
@@ -182,8 +185,10 @@ def test_time_of_day_lower_bound_against_a_concrete_upper_bound_resolves(
     diagnosing. Whoosh crashes here with AttributeError (it calls ceil() on
     the already-concrete "now"); this fork does not reproduce that bug.
 
-    Both spellings are pinned: the bracketed form is the one that used to
-    crash without being listed in the task brief.
+    Both spellings are pinned identically: this used to be a second,
+    unreported instance of the quoted-vs-bracketed exactness inconsistency
+    (the quoted form wrongly took the exclusive +1us bound where the
+    bracketed form correctly stayed inclusive); now fixed, so both agree.
     """
     rng = _date_range(registry, q, basedate=AFTERNOON)
     assert rng.lo == datetime(2026, 8, 19, 12, 0, tzinfo=UTC)
