@@ -391,19 +391,23 @@ def test_alternating_nesting_depth_cost_budget(depth: int) -> None:
             " but produced no diagnostic"
         )
 
-    # Cost budget: loose enough not to flake on a slow machine (an ordinary
-    # depth-60 alternating parse takes low milliseconds), tight enough that
-    # an exponential blowup in normalize()'s flattening or emit()'s subtree
-    # handling would blow through it by orders of magnitude rather than
-    # merely brushing it.
-    assert elapsed < 5.0, f"parse() took {elapsed:.2f}s at depth {depth}, budget is 5.0s"
+    # Cost budget: loose enough not to flake on a slow machine, tight enough
+    # that an exponential blowup in normalize()'s flattening or emit()'s
+    # subtree handling would blow through it by orders of magnitude rather
+    # than merely brushing it. An uninstrumented run costs low milliseconds
+    # at depth 199; CI's coverage-instrumented run is the dominant cost here,
+    # and its branch-tracing overhead is uneven across Python versions
+    # (measured at depth 199: parse ~2.1s/4.9s/1.7s/0.5s and emit
+    # ~4.9s/12.5s/4.0s/1.3s on 3.11/3.12/3.13/3.14 respectively, 3.12 being
+    # the outlier). Budgets below give that worst case roughly 2-3x headroom.
+    assert elapsed < 15.0, f"parse() took {elapsed:.2f}s at depth {depth}, budget is 15.0s"
 
     if not result.diagnostics:
         emit_start = time.perf_counter()
         _emit_alternating(result.ast)
         emit_elapsed = time.perf_counter() - emit_start
-        assert emit_elapsed < 5.0, (
-            f"emit() took {emit_elapsed:.2f}s at depth {depth}, budget is 5.0s"
+        assert emit_elapsed < 30.0, (
+            f"emit() took {emit_elapsed:.2f}s at depth {depth}, budget is 30.0s"
         )
 
 
