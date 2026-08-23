@@ -172,6 +172,14 @@ parse, emit, search, `tests/emitter/test_acceptance_e2e.py`) test suites.
    position on stopwords, it uses whatever tokens the host's `analyzer`
    returns); this affects ranking and makes stopwords searchable, not
    matching correctness under implicit AND.
+
+   Test references: `tests/differential/test_analyzer_boundary.py`'s
+   `test_stopwords_are_a_documented_host_analyzer_divergence`, which
+   confirms directly (bypassing the parser, which cannot observe this: see
+   that module's docstring) that whoosh's `StandardAnalyzer` drops a bare
+   English stopword to zero tokens while paperless-ngx's actual host chains
+   (`lower_fold`/`stem_fold`, neither of which filters stopwords) keep it as
+   a real, searchable one-token term.
 5. Text-field ranges are parseable but unsupported at emit time (a current
    limitation: tantivy-py has no programmatic text-range API); they worked
    in whoosh. Machine-identifiable via `Diagnostic.divergence == 5`. Applies
