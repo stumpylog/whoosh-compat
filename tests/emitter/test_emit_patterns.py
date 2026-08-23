@@ -760,7 +760,11 @@ def test_fold_created_negation_cannot_move_the_class_extent() -> None:
     pattern = _FOLD_CREATED_EMPTY_NEGATION
     assert glob_to_regex(pattern, syntax_creating_fold) == "."
     # The oracle's whole-text fold reads the same pattern as literal "[!]".
-    assert fnmatch.translate(syntax_creating_fold(pattern)) == r"(?s:\[!\])\z"
+    # Compared against a live fnmatch.translate("[!]") rather than a
+    # hardcoded string: the trailing anchor's case ("\Z" vs "\z") is a
+    # stdlib detail that differs across the Python versions this suite runs
+    # under, and is not part of what this test characterizes.
+    assert fnmatch.translate(syntax_creating_fold(pattern)) == fnmatch.translate("[!]")
     # Nothing exotic without the fold: an ordinary one-member class.
     assert glob_to_regex(pattern, None) == pattern
 
