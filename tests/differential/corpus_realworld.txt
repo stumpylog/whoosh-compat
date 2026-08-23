@@ -156,6 +156,17 @@ created:[-999 yrs to -7yrs]
 # bound, not an edge case invented for coverage.
 created:[ TO -7 years]
 
+# --- KNOWN DIVERGENCE (whoosh-bug, DIVERGENCES.md entry 56, allowlist.py):
+# a bound-less date range with no space between "[" and "TO", immediately
+# followed by a to-prefixed date keyword, crashes real whoosh's RangePlugin
+# tokenizer (its start-bound regex has no word-boundary requirement, so it
+# reads the keyword's own leading "to" as the separator). Found while
+# investigating entry 55, then fixed on whoosh-compat's side
+# (src/whoosh_compat/parser/plugins.py) rather than left as a shared parity
+# gap.
+created:[TO today]
+created:[TO tomorrow]
+
 # --- KNOWN DIVERGENCE (design, DIVERGENCES.md entry 15, allowlist.py): an
 # unknown-field-demoted value that survives its field's analyzer as 2+
 # tokens resolves Multitoken.DEFAULT against the multifield expansion's Or

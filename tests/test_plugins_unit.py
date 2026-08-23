@@ -215,6 +215,52 @@ def test_range_tagger_matches() -> None:
     assert (node.start, node.end) == ("a", "b")
 
 
+@pytest.mark.parametrize(
+    ("text", "expected_start", "expected_end"),
+    [
+        pytest.param("[TO today]", None, "today", id="no-leading-space-bound-word-starts-with-to"),
+        pytest.param("[TO tomorrow]", None, "tomorrow", id="bound-word-tomorrow"),
+        pytest.param("[TO total]", None, "total", id="bound-word-total"),
+        pytest.param("[into TO 5]", "into", "5", id="start-value-contains-to-substring"),
+        # Unaffected controls: the leading-space spelling already worked, and
+        # ordinary ranges (no "to"-prefixed word adjacent to the separator)
+        # must keep working identically.
+        pytest.param("[ TO today]", "", "today", id="leading-space-already-worked"),
+        pytest.param("[1 TO 5]", "1", "5", id="ordinary-numeric-range"),
+        pytest.param("[dec to feb]", "dec", "feb", id="ordinary-month-range"),
+        pytest.param("[town TO city]", "town", "city", id="start-value-is-a-to-prefixed-word"),
+    ],
+)
+def test_range_tagger_to_separator_requires_word_boundary(
+    text: str, expected_start: str | None, expected_end: str | None
+) -> None:
+    """A bound value that begins with, or itself is, a "to"-prefixed word
+    (``today``, ``total``, ``into``) must not be mistaken for the "TO"
+    separator token: the separator is only recognized at a word boundary,
+    never mid-word. Regression coverage for the mis-tokenization behind
+    ``created:[TO today]`` (no leading space) parsing whoosh-compat's own
+    literal "TO" as the start-bound value and "day" as the end.
+    """
+    plugin = plugins.RangePlugin()
+    tagger = plugin.RangeTagger(plugin.expr, plugin.excl_start, plugin.excl_end)
+    node = tagger.match(None, text, 0)
+    assert isinstance(node, syntax.RangeNode)
+    assert (node.start, node.end) == (expected_start, expected_end)
+
+
+def test_range_tagger_no_to_at_all_is_not_a_range() -> None:
+    """``[total 5]`` has no genuine "TO" separator anywhere (only the
+    non-word-boundary "to" inside "total"), so it must not be tagged as a
+    range at all, rather than silently mis-parsing to a garbage
+    start/end split the way the un-hardened regex did (``start=None,
+    end='tal 5'``, treating the literal chars "to" inside "total" as the
+    separator).
+    """
+    plugin = plugins.RangePlugin()
+    tagger = plugin.RangeTagger(plugin.expr, plugin.excl_start, plugin.excl_end)
+    assert tagger.match(None, "[total 5]", 0) is None
+
+
 def test_phrase_tagger_captures_slop() -> None:
     plugin = plugins.PhrasePlugin()
     tagger = plugin.PhraseTagger(plugin.expr)

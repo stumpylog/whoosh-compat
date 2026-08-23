@@ -2860,10 +2860,11 @@ parse-then-emit pipeline).
     that reason.
 
     A related but distinct shape, `created:[TO today]` (no leading space
-    before `TO`), also crashes, but through an entirely different mechanism
-    that both whoosh *and* whoosh-compat exhibit identically (a
-    mis-tokenization, not a one-sided defect): tracked separately, not
-    folded into this entry.
+    before `TO`), also crashed real whoosh, but through an entirely
+    different mechanism: a `RangePlugin` tokenizer ambiguity, not this
+    entry's `.disambiguated()` wiring defect. Originally found to affect
+    whoosh-compat identically; now fixed on whoosh-compat's side instead,
+    see entry 56.
 
     Test references: `tests/differential/corpus_realworld.txt`'s
     `created:[ TO -7 years]` line and its matching
@@ -2875,3 +2876,69 @@ parse-then-emit pipeline).
     regardless of the tz-reversal bug entry 12 describes; see entry 12's
     own text and `tests/differential/corpus_realworld.txt`'s "CONFIRMED
     PARITY" lines.
+
+56. **A range's start bound is mis-tokenized as the literal text `TO` when
+    a bound-less range's opening bracket sits directly against the `TO`
+    separator and the following bound value also begins with a "to"-shaped
+    word (whoosh bug, fixed in whoosh-compat).** whoosh's (and,
+    until now, whoosh-compat's identically-forked) `RangePlugin.expr`
+    recognizes the `TO` separator with `[^\]}]+?(?=[Tt][Oo])` for the start
+    bound followed by a bare literal `[Tt][Oo]`, with no word-boundary
+    requirement anywhere. For `created:[TO today]` (no space between `[`
+    and `TO`), the regex's greedily-attempted, internally-non-greedy start
+    group finds its *own* shortest satisfying match by walking three
+    characters into the string ("TO ", including the space before "today"),
+    because the lookahead `(?=[Tt][Oo])` is satisfied by the "to" that
+    starts "today" itself. That consumes the real separator as the start
+    bound's text and leaves "day" behind as the end bound, rather than
+    recognizing the range as bound-less (empty start) with "today" as the
+    end. Confirmed against the pinned oracle: real whoosh crashes outright
+    on this shape for a DATE field, `Exception("'TO' is not a parseable
+    date")` (`whoosh/fields.py`'s `_parse_datestring`, called on the
+    captured text `"TO"`), and silently misparses a non-crashing field type
+    the same way (`title:[total 5]` parses to a `Range` object with an
+    empty start and end `"tal 5"` in real whoosh, `total`'s own leading
+    "to" mistaken for the separator with no `TO` token anywhere else in the
+    string at all). Neither is intended whoosh semantics: a genuinely
+    ambiguous regex with no distinguishing signal for "user typed `TO` as
+    the separator" versus "the separator symbol happens to reappear inside
+    an adjacent word" is a defect, not a design choice, so whoosh-compat
+    does not reproduce it.
+
+    The fix, in whoosh-compat's own forked `RangePlugin.expr`
+    (`src/whoosh_compat/parser/plugins.py`): wrap the separator recognition
+    in `\b`, in both the start-bound lookahead and the literal match that
+    follows it, so `TO`/`to` is only recognized as the separator token at
+    an actual word boundary, never mid-word. Verified empirically across a
+    battery of shapes (ordinary numeric/month/date ranges, quoted bounds,
+    bound-less ranges, a start value that itself contains "to" as a
+    substring without being a boundary match, `into`/`town`/`tomorrow`
+    bound values) that every previously-correct spelling parses
+    identically: the fix only changes behavior for the specific ambiguous
+    shapes above. `title:[total 5]` (no genuine `TO` anywhere) is no longer
+    tagged as a range at all after the fix, rather than the garbage
+    empty-start/`"tal 5"`-end `Range` object whoosh (and, before this fix,
+    whoosh-compat too) built. Before the fix, whoosh-compat's own garbage
+    `TermRange` for this shape fell under entry 5's "text-field ranges are
+    unsupported at emit time" refusal; after the fix there is no `Range`
+    node at all to refuse, since the query resolves as ordinary multifield
+    term matching instead, outside entry 5's territory entirely.
+
+    Two allowlist claims cover the blast radius the corpus actually
+    exercises: a `DivergenceKind.ORACLE_ERROR` claim for the DATE-field
+    crash (`created:[TO today]`, matching entry 55's classification for the
+    same reason: the oracle never produces a query object to compare), and
+    a `DivergenceKind.MISMATCH` claim for the non-crashing, silently-wrong
+    case on other field kinds (`title:[total 5]`, `title:[into TO 5]`).
+    Both are scoped to the literal "to"-prefixed vocabulary measured
+    (`today`, `tomorrow`, `total`, `into`), not generalized to every English
+    word beginning with those two letters, since only those were confirmed
+    against the oracle.
+
+    Test references: `tests/test_plugins_unit.py`'s
+    `test_range_tagger_to_separator_requires_word_boundary` and
+    `test_range_tagger_no_to_at_all_is_not_a_range`;
+    `tests/differential/corpus_realworld.txt`'s `created:[TO today]` line
+    and `tests/differential/corpus_docs.txt`'s `title:[total 5]` /
+    `title:[into TO 5]` lines, with their matching
+    `tests/differential/allowlist.py` entries.

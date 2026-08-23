@@ -216,3 +216,13 @@ has_correspondent:'  false'
 # measured.
 :*:**
 **:*:
+
+# --- KNOWN DIVERGENCE (whoosh-bug, DIVERGENCES.md entry 56, allowlist.py):
+# a range value that itself begins with a to-prefixed word ("total",
+# "into") is silently misparsed by real whoosh's word-boundary-free
+# RangePlugin regex: it reads the word's own embedded "to" as the "TO"
+# separator instead of the whole word being (part of) the bound. No date
+# field involved here, so real whoosh does not crash the way the entry-55
+# neighbourhood does; it just builds the wrong Range object silently.
+title:[total 5]
+title:[into TO 5]

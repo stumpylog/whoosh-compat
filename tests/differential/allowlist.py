@@ -555,6 +555,57 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         ),
         DivergenceKind.ORACLE_ERROR,
     ),
+    # whoosh-bug (DIVERGENCES.md entry 56, ORACLE_ERROR): a bound-less date
+    # range whose opening bracket sits directly against "TO" (no leading
+    # space), immediately followed by a recognized "to"-prefixed date
+    # keyword ("today", "tomorrow"), crashes real whoosh's RangePlugin
+    # tokenizer: its start-bound regex has no word-boundary requirement, so
+    # it walks into the keyword's own leading "to" looking for a separator,
+    # consuming "TO " as the (bogus) start-bound text and leaving a
+    # truncated fragment ("day"/"morrow") as the end. whoosh-compat's own
+    # forked RangePlugin.expr now requires a word boundary around the
+    # separator (src/whoosh_compat/parser/plugins.py) and parses this
+    # cleanly. Scoped to exactly the two recognized date keywords measured:
+    # "total"/"into" as the bound word instead produce a whoosh-compat
+    # parse *diagnostic* (unrecognized date text), which takes the entry-6
+    # diagnostic skip uniformly and needs no claim here.
+    (
+        re.compile(r"\b(?:created|modified|added):\[(?i:to)\s+(?i:to(?:day|morrow))\s*\]"),
+        (
+            "whoosh-bug (DIVERGENCES.md entry 56): a bound-less date range"
+            " glued directly to 'TO' and followed by a to-prefixed date"
+            " keyword ('today'/'tomorrow') crashes real whoosh's RangePlugin"
+            " tokenizer (no word-boundary around the separator); whoosh-compat's"
+            " own forked copy requires one and parses it cleanly"
+        ),
+        DivergenceKind.ORACLE_ERROR,
+    ),
+    # whoosh-bug (DIVERGENCES.md entry 56, MISMATCH): the same RangePlugin
+    # tokenizer ambiguity as the ORACLE_ERROR entry directly above, but on a
+    # non-date field, where real whoosh does not crash: it silently
+    # misparses instead, since its start-bound regex has no word-boundary
+    # requirement. "title:[total 5]" (no "TO" anywhere in the string at
+    # all) reads whoosh's own embedded "to" inside "total" as the
+    # separator, producing a Range with an empty start and end "tal 5";
+    # "title:[into TO 5]" similarly stops the start bound at "in" (the "to"
+    # inside "into" satisfies the lookahead) rather than the whole word.
+    # whoosh-compat's word-boundary-hardened regex no longer does either:
+    # "title:[total 5]" is not tagged as a range at all (falls through to
+    # ordinary term parsing) and "title:[into TO 5]" resolves the full
+    # "into"/"5" bounds. Scoped to exactly the two words measured
+    # ("total", "into"); not generalized to every word beginning with
+    # those letters.
+    (
+        re.compile(r"\btitle:\[(?:total\s|into\s+(?i:to)\s)"),
+        (
+            "whoosh-bug (DIVERGENCES.md entry 56): a range value that itself"
+            " begins with a to-prefixed word ('total', 'into') is silently"
+            " misparsed by real whoosh's word-boundary-free RangePlugin regex;"
+            " whoosh-compat's own forked copy requires a word boundary and"
+            " parses it correctly (or declines to treat it as a range at all)"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
     # whoosh-bug (DIVERGENCES.md entry 12): real whoosh's range-bound date parsing
     # (DateParserPlugin.range_to_dt) calls
     # `self.dateparser.get_parser().date_from(...)`, the *grammar object's*

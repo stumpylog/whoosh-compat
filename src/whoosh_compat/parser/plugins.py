@@ -674,16 +674,26 @@ class PhrasePlugin(Plugin):
 
 
 class RangePlugin(Plugin):
-    """Adds the ability to specify term ranges."""
+    """Adds the ability to specify term ranges.
+
+    Deliberately diverges from whoosh's own ``RangePlugin.expr``: whoosh's
+    start-bound lookahead and its literal "to"/"TO" separator match have no
+    word-boundary requirement, so a bound value beginning with (or being) a
+    "to"-prefixed word ("today", "total", "into") can be mistaken for the
+    separator itself, e.g. ``[TO today]`` crashes real whoosh outright and
+    ``[total 5]`` silently misparses. Confirmed a whoosh defect, not
+    intended semantics, so not reproduced here: the two ``\\b`` word-boundary
+    assertions below are the whole fix. See DIVERGENCES.md entry 56.
+    """
 
     expr = rcompile(r"""
     (?P<open>\{|\[)               # Open paren
     (?P<start>
         ('[^']*?'\s+)             # single-quoted
         |                         # or
-        ([^\]}]+?(?=[Tt][Oo]))    # everything until "to"
+        ([^\]}]+?(?=\b[Tt][Oo]\b))    # everything until "to"
     )?
-    [Tt][Oo]                      # "to"
+    \b[Tt][Oo]\b                  # "to"
     (?P<end>
         (\s+'[^']*?')             # single-quoted
         |                         # or
