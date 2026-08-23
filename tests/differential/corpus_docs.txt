@@ -173,16 +173,16 @@ id:2147483648
 # field, not just has_tag; the allowlist entry was broadened accordingly.
 has_correspondent:'  false'
 
-# --- KNOWN DIVERGENCE (design, allowlist.py): entry 23's match-all face
-# (DIVERGENCES.md entry 23). An unfielded match-all ANDed with a term whose
-# analyzer drops every token collapses to Nothing() in whoosh-compat and
-# stays Every() in real whoosh: normalize() runs before analyze(), drops
-# the Every as the And identity, and analysis then drops the surviving
-# term; whoosh analyzes at parse time, so the null child is gone before
-# And.normalize() sees it. Each half compares EQUAL on its own ("*:*" is
-# Every(field=None) on both sides, "title:the" is Nothing() on both); only
-# the combination diverges. This is entry 23's first corpus line, so the
-# strict-xfail actually asserts the entry rather than leaving it to fuzz.
+# --- CONFIRMED PARITY: entry 23's match-all face used to diverge here
+# (an unfielded match-all ANDed with a term whose analyzer
+# drops every token collapsed to Nothing() in whoosh-compat, stayed
+# Every() in real whoosh: analyze()'s own leading normalize pass dropped
+# the unfielded Every as the And identity before analysis ever got a
+# chance to protect it from the sibling that was about to empty out).
+# Fixed: analyze()'s pre-pass now keeps the Every as an ordinary sibling
+# until the real analysis pass knows whether it needs protecting. Kept as
+# a live, ordinary comparison (not removed) to pin the fix: see
+# DIVERGENCES.md entry 23's "match-all face" subsection.
 *:* title:the
 
 # --- KNOWN DIVERGENCE (design, allowlist.py): entry 20's other star-soup
@@ -226,3 +226,12 @@ has_correspondent:'  false'
 # neighbourhood does; it just builds the wrong Range object silently.
 title:[total 5]
 title:[into TO 5]
+
+# --- KNOWN DIVERGENCE (design, DIVERGENCES.md entry 24, allowlist.py): an
+# unfielded all-zero-token quoted phrase, the same mechanism as the fielded
+# "title:\"to\"" shape already covered by the fuzzer, just not previously
+# anchored in a static corpus line. Confirmed unrelated to entry 23's
+# match-all face Every/And-identity ordering bug despite the superficial
+# similarity ("a zero-token thing survives in whoosh but not
+# whoosh-compat"): no Every node is involved here at all.
+"to"

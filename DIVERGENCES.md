@@ -1111,46 +1111,94 @@ parse-then-emit pipeline).
     that the old generic `\w+:` also claimed were all discarded
     comparisons that would have passed.
 
-    **The match-all face, found by the pre-release staleness sweep.** The
-    same analysis-ordering asymmetry is reachable with no `NOT` (and no
-    `ANDNOT`/`ANDMAYBE`/`REQUIRE`) at all, through an unfielded match-all:
+    **The match-all face, found by the pre-release staleness sweep, now
+    fixed.** The same analysis-ordering asymmetry used to be
+    reachable with no `NOT` (and no `ANDNOT`/`ANDMAYBE`/`REQUIRE`) at all,
+    through an unfielded match-all:
 
     ```
-    *:* title:the       whoosh-compat: Nothing()    real whoosh: Every()
-    *:* AND title:the   whoosh-compat: Nothing()    real whoosh: Every()
+    *:* title:the       (before the fix) whoosh-compat: Nothing()    real whoosh: Every()
+    *:* AND title:the   (before the fix) whoosh-compat: Nothing()    real whoosh: Every()
     ```
 
-    Each half agrees on its own. `*:*` parses to `Every(field=None)` on
+    Each half agreed on its own. `*:*` parses to `Every(field=None)` on
     both sides and compares EQUAL; `title:the` is `Nothing()` on both sides
-    and compares EQUAL. Only the conjunction diverges, and for the reason
-    this entry already gives, just in a new position: `analyze()` begins by
+    and compares EQUAL. Only the conjunction diverged, and for the reason
+    this entry already gives, just in a new position: `analyze()` began by
     calling `normalize()`, whose `And` rule drops an unfielded `Every` as
     the identity element, leaving a bare `Term` that the analysis pass then
-    drops to zero tokens, so the whole query is `Nothing()`. Real whoosh
-    analyzes at *parse* time, so the null child is already gone by the time
-    `And.normalize()` runs and it is left with `And([Every()])` ->
-    `Every()`. Nothing here is special-cased; it falls out of the same
-    ordering the rest of this entry documents, and the same decision (keep
-    the uniform, timing-independent policy) applies for the same
-    predictability reason.
+    drops to zero tokens, so the whole query became `Nothing()`. Real
+    whoosh analyzes at *parse* time, so the null child is already gone by
+    the time `And.normalize()` runs and it is left with `And([Every()])`
+    -> `Every()`.
+
+    Unlike the rest of this entry, this face was **fixed, not documented as
+    accepted**: the "keep the uniform, timing-independent
+    policy" reasoning above applies to bare `NOT`/`ANDNOT`/`ANDMAYBE`/
+    `REQUIRE`, where whoosh-compat's own behavior is at least internally
+    consistent regardless of when the emptiness was discovered. This face
+    was different: whoosh-compat's behavior here depended on an
+    implementation accident (`analyze()`'s own leading `normalize()` pass
+    discarding the `Every`'s protection before analysis ever got a chance
+    to apply the *same* "newly-emptied sibling doesn't poison" rule the
+    `ANDNOT`/`ANDMAYBE`/`REQUIRE` extension below already implements
+    correctly for its own operands), not a considered design choice, so it
+    did not meet the bar the rest of this entry sets for "accept the
+    disagreement". The fix: `analyze()`'s leading normalize pass
+    (`whoosh_compat.ast._normalize_before_analysis`, distinct from the
+    public `normalize()`, which keeps its documented, tested behavior of
+    dropping the unfielded `Every` unconditionally for any caller invoking
+    it directly) keeps an unfielded `Every` as an ordinary `And` sibling
+    instead of dropping it immediately, so the main analysis pass's
+    existing survivor rule can protect it if the sibling empties out, or
+    correctly re-apply the AND-identity simplification if it doesn't.
+
+    Fixing `analyze()`'s own leading pass alone was not enough: both
+    `whoosh_compat.parse()` (whose result is documented as
+    normalized-but-not-yet-analyzed, analysis happening later, at emit
+    time) and `TantivyEmitter.emit()` each independently called plain
+    `normalize()` on the tree before `analyze()` ever ran, so the
+    unfielded `Every` was still being destroyed one step upstream of the
+    fix, for any caller going through the real `parse()` -> `emit()` API
+    (proven with a real search, not just an AST comparison: see the test
+    reference below). All three call sites (`parse()`, `emit()`,
+    `analyze()`'s own leading pass) now use
+    `_normalize_before_analysis` instead.
+
+    `*:* title:the` and `*:* AND title:the` now compare EQUAL, along with
+    the structural variants entry 23's old AST-level allowlist entry also
+    claimed (`*:* title:the title:foo`, `*:* OR title:the`, `*:* NOT
+    title:the`, `title:the *:*`, `(*:*) AND (title:the)`: all measured
+    EQUAL after the fix). One spelling that regex also matched is
+    unaffected and still genuinely diverges for an unrelated reason: a
+    *quoted* zero-token value (`*:* title:"the"`) is entry 24's mechanism
+    (a real empty-words `Phrase` object in whoosh vs. whoosh-compat
+    dropping the phrase), not this one, and now falls through to entry
+    24's own (broadened above) claim instead. That old
+    allowlist entry is removed; its `tests/differential/corpus_docs.txt`
+    corpus line is kept, repurposed into a live "CONFIRMED PARITY"
+    comparison pinning the fix instead of deleted.
 
     The `Every` has to be the *unfielded* one, because only that one is the
-    `And` identity. A fielded match-all survives normalization and the two
-    sides agree: `has_tag:* title:the` and `id:* title:the` both compare
-    EQUAL. (`title:* title:the` does diverge, but for entry 20's
-    `Every`-versus-`Wildcard` reason, not this one.)
+    `And` identity. A fielded match-all was never affected: `has_tag:*
+    title:the` and `id:* title:the` compared EQUAL before the fix too.
+    (`title:* title:the` does diverge, but for entry 20's
+    `Every`-versus-`Wildcard` reason, not this one, and is unaffected by
+    this fix.)
 
-    **How far this reaches in practice.** The divergence needs an analyzer
-    that drops *every* token of the conjoined term, which makes it a
-    property of the host's analyzer rather than of whoosh-compat. It is
-    genuinely reachable for a host running a Whoosh-style
-    `StandardAnalyzer` with a stopword filter, which is why it is
-    documented here. It is effectively unreachable for the motivating
-    consumer: paperless-ngx's analyzer chain is `simple -> remove_long(129)
-    -> lowercase -> ascii_fold` (optionally followed by a stemmer), with
-    **no stopword filter at all**, so its only token-dropping filter is
-    `remove_long`, and hitting this would require an unfielded match-all
-    ANDed with a term every one of whose tokens exceeds 129 characters.
+    **How far this reached in practice, before the fix.** The divergence
+    needed an analyzer that drops *every* token of the conjoined term,
+    which made it a property of the host's analyzer rather than of
+    whoosh-compat. It was genuinely reachable for a host running a
+    Whoosh-style `StandardAnalyzer` with a stopword filter. It was
+    effectively unreachable for the motivating consumer: paperless-ngx's
+    analyzer chain is `simple -> remove_long(129) -> lowercase ->
+    ascii_fold` (optionally followed by a stemmer), with **no stopword
+    filter at all**, so its only token-dropping filter is `remove_long`,
+    and hitting this would have required an unfielded match-all ANDed with
+    a term every one of whose tokens exceeds 129 characters. Fixed anyway,
+    since a host running a stock Whoosh-style analyzer is not a hypothetical
+    user of this library.
 
     This face was invisible until the pre-release staleness sweep, for a
     documented reason worth recording: `tests/emitter/result_allowlist.py`'s
@@ -1159,10 +1207,26 @@ parse-then-emit pipeline).
     (Every)**"), but the AST-layer allowlist had no such alternative, and
     entry 20's own regex over-claimed the standalone `*:*` token, so the
     differential fuzzer skipped every instance instead of comparing it. The
-    AST layer now has the alternative, entry 20's regex carves `*:*` back
-    out, and `tests/differential/corpus_docs.txt` gains a `*:* title:the`
-    line, which is this entry's first corpus line: the strict-xfail now
-    asserts the divergence instead of leaving it to chance draws.
+    result-level allowlist entry's "bare `*`" alternative is a loosely
+    scoped, skip-only (not strict-xfail) match at that layer, kept as-is
+    for now: narrowing it to exclude specifically the now-fixed shape
+    without also losing coverage of the still-genuinely-divergent
+    `NOT`/`ANDNOT`/`ANDMAYBE`/`REQUIRE` shapes it shares a pattern with was
+    explicitly noted as impractical when that entry was written, and
+    remains a real, but non-urgent (it costs coverage, not a false
+    assertion), follow-up.
+
+    Test references: `tests/test_analyze.py`'s
+    `test_and_unfielded_every_survives_a_newly_zero_token_sibling` and its
+    neighboring control cases (a fielded `Every`, a real surviving sibling,
+    a genuinely pre-existing `Nothing`, and a direct `normalize()` call
+    proving the public function's own behavior is unchanged); and, proving
+    the fix reaches the real public API rather than just the AST-level
+    `analyze()` call the harness exercises directly,
+    `tests/emitter/test_acceptance_property.py`'s `SCENARIOS_EQUAL` entry
+    `entry23-match-all-face`, which runs `whoosh_compat.parse()`
+    -> `emit()` against a live tantivy index built with a real
+    stopword-dropping analyzer and asserts the matched-document-id set.
 
     The same accepted tradeoff extends to `ANDNOT`/`ANDMAYBE`/`REQUIRE`'s
     positive/required/scored operand, found by the acceptance-layer result
@@ -1280,6 +1344,22 @@ parse-then-emit pipeline).
     quoted-phrase entry; `tests/differential/strategies.py`'s
     `ZERO_TOKEN_WORDS` (the same verified-zero-token vocabulary used to
     generate both this case and entry 23's).
+
+    An unfielded spelling (`"to"`, no field prefix) was found unclaimed by
+    this entry's own regex, reported at first as possibly the same root
+    cause as entry 23's "match-all face" `normalize()`-before-`analyze()`
+    ordering bug, since both surface as "a zero-token thing survives in
+    whoosh but not whoosh-compat". Measured directly and confirmed
+    unrelated: that bug is specifically about `normalize()` discarding an
+    *unfielded `Every`* as the `And` identity before analysis can protect
+    a sibling
+    that later empties out; nothing here involves an `Every` at all. The
+    unfielded phrase multifield-expands to one `Phrase` per default field,
+    each TEXT-field one of which analyzes to zero tokens by this entry's
+    own already-described mechanism, one field at a time, with no
+    ordering interaction. This entry's allowlist regex simply hadn't been
+    broadened past the fielded case it was originally written from; it now
+    covers both.
 
 25. **A bare (non-bracketed) "now"-relative date offset is a
     whoosh-compat-only feature (design, found by the grammar-aware

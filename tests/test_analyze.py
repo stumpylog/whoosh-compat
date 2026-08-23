@@ -457,6 +457,78 @@ def test_or_drops_a_newly_zero_token_child() -> None:
     assert result == Term(field=CONTENT, text="invoice")
 
 
+# -- DIVERGENCES.md entry 23's match-all face: an unfielded Every survives -
+# -- a sibling that only empties out during analysis, the same way a ------
+# -- fielded Every already does -------------------------------------------
+
+
+def test_and_unfielded_every_survives_a_newly_zero_token_sibling() -> None:
+    """DIVERGENCES.md entry 23's match-all face. Real whoosh analyzes at
+    parse time, so a stopword-shaped term is already ``Nothing``-equivalent
+    before its own ``And.normalize()`` ever runs, and that rule drops a
+    null child from an enclosing compound rather than annihilating the
+    parent (matching ``test_and_drops_a_newly_zero_token_child_without_poisoning``
+    above, the same "newly empty, don't poison" rule) -- leaving
+    ``Every()`` standing alone. whoosh-compat must agree: the unfielded
+    ``Every`` is not a genuinely pre-existing ``Nothing``, so it must not
+    poison, and it must not simply vanish either, the way
+    ``_normalize_one``'s AND-identity rule does when it runs on a
+    not-yet-analyzed sibling.
+    """
+    node = And(children=(Every(), Term(field=CONTENT, text="")))
+    result = analyze(node, REG)
+    assert result == Every()
+
+
+def test_and_fielded_every_already_survived_a_newly_zero_token_sibling() -> None:
+    """Control: the fielded case already worked before this fix (a fielded
+    ``Every`` is never subject to the unfielded-only AND-identity drop), so
+    it must keep working identically afterward.
+    """
+    node = And(children=(Every(field=TAG), Term(field=CONTENT, text="")))
+    result = analyze(node, REG)
+    assert result == Every(field=TAG)
+
+
+def test_and_unfielded_every_still_absorbed_when_a_real_term_survives() -> None:
+    """The unfielded-Every-as-AND-identity simplification is still correct,
+    and must still fire, when nothing empties out: ``Every() AND invoice``
+    is just ``invoice`` (matches real whoosh, which drops the redundant
+    match-all through ordinary And flattening for a sibling that was never
+    in question). Only a sibling that empties out *during this analysis
+    pass* must protect the Every; an ordinary surviving term must not.
+    """
+    node = And(children=(Every(), Term(field=CONTENT, text="invoice")))
+    result = analyze(node, REG)
+    assert result == Term(field=CONTENT, text="invoice")
+
+
+def test_and_unfielded_every_still_poisoned_by_pre_existing_nothing() -> None:
+    """A genuinely pre-existing ``Nothing`` (not one that only appeared
+    during this analysis pass) must still poison the And even with an
+    unfielded Every present, matching ordinary And algebra and
+    ``test_and_still_poisons_on_a_genuinely_pre_existing_nothing`` above.
+    """
+    node = And(children=(Every(), Nothing()))
+    result = analyze(node, REG)
+    assert result == Nothing()
+
+
+def test_direct_normalize_of_unfielded_every_and_raw_term_is_unaffected() -> None:
+    """This fix must never change plain, direct ``normalize()`` calls: a
+    direct, standalone ``normalize()`` call (not ``analyze()``, not
+    ``whoosh_compat.parse()``, not ``TantivyEmitter.emit()`` -- every one
+    of which now uses the protecting ``_normalize_before_analysis``
+    instead) on the exact same shape must keep today's documented, tested
+    behavior -- the unfielded Every is the AND identity and is dropped,
+    since ``normalize()`` alone has no way to know whether the surviving
+    sibling will later empty out.
+    """
+    node = And(children=(Every(), Term(field=CONTENT, text="")))
+    result = normalize(node)
+    assert result == Term(field=CONTENT, text="")
+
+
 # -- spans --------------------------------------------------------------
 
 

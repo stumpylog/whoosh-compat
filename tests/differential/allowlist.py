@@ -841,55 +841,13 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # and there is nothing left to allowlist: the remaining difference is
     # against *stock* whoosh, which cannot parse them in any spelling and so
     # is not reachable through this harness (DIVERGENCES.md entry 19).
-    # design (DIVERGENCES.md entry 23, the match-all face): an unfielded
-    # match-all "*:*" ANDed with a term whose analyzer drops every token
-    # collapses to Nothing() here but stays Every() in real whoosh. Same
-    # analysis-ordering family as the NOT face directly above, reached
-    # without any of NOT/ANDNOT/ANDMAYBE/REQUIRE: whoosh-compat's
-    # analyze() calls normalize() first, which drops the unfielded Every
-    # as the And identity, leaving a bare term that analysis then drops to
-    # nothing; whoosh analyzes at parse time, so the null child is gone
-    # before And.normalize() runs and it is left with And([Every()]).
-    # Measured: "*:* title:the" and "*:* AND title:the" -> Nothing() here,
-    # Every() there; "*:*" alone and "title:the" alone both compare EQUAL,
-    # so it is only the combination.
-    #
-    # The Every has to be the UNFIELDED one. A fielded Every is not the
-    # And identity, survives normalization, and agrees:
-    # "has_tag:* title:the" and "id:* title:the" both compare EQUAL.
-    # ("title:* title:the" diverges, but for entry 20's Every-vs-Wildcard
-    # reason, and is claimed by entry 20's entry below.)
-    #
-    # This entry's result-level twin (tests/emitter/result_allowlist.py's
-    # entry-23 row) has always named the bare-"*" face in its reason
-    # string; the AST layer simply never had the alternative, and entry
-    # 20's own "*:*" over-claim hid the shape from the fuzzer entirely
-    # until the pre-release staleness sweep narrowed it.
-    #
-    # Residual over-claim, stated rather than hidden: this is a
-    # co-occurrence test, and the divergence is really structural (the
-    # Every and the zero-token term must end up siblings of the same And
-    # with nothing else surviving), which a regex cannot express. So
-    # "*:* OR title:the", "*:* NOT title:the" and
-    # "*:* title:the title:foo" (a surviving sibling) are claimed too and
-    # actually compare EQUAL. That costs a handful of comparisons on
-    # queries that contain "*:*" at all, a much smaller surface than the
-    # entry-20 claim it replaces.
-    (
-        re.compile(
-            r"(?=.*(?:^|[\s(])\*:\*(?:\^[\d.]+)?(?:$|[\s)]))"
-            rf"(?=.*\b(?:{TEXT_FIELDS_PATTERN}):[\'\"]?"
-            rf"{ZERO_TOKEN_WORD}(?:[-,/]{ZERO_TOKEN_WORD})*[-,/]?(?![\w.,/-]))"
-        ),
-        (
-            "DIVERGENCES.md entry 23 (the match-all face): an unfielded"
-            " match-all ANDed with a zero-token term collapses to Nothing()"
-            " in whoosh-compat (normalize() drops the Every as the And"
-            " identity before analysis drops the term) but stays Every() in"
-            " whoosh, which analyzes at parse time"
-        ),
-        DivergenceKind.MISMATCH,
-    ),
+    # DIVERGENCES.md entry 23's "match-all face" (an unfielded "*:*" ANDed
+    # with a zero-token term) used to have its own allowlist entry here.
+    # Fixed by a change to whoosh_compat.ast's analyze()/normalize()
+    # ordering (see entry 23's own text for the mechanism and the fix), so
+    # every shape that entry claimed now compares EQUAL and the entry is
+    # removed rather than left stale. See
+    # tests/differential/corpus_docs.txt's "CONFIRMED PARITY" line.
     # design (DIVERGENCES.md entry 20, the "*:*"-carve-out's blind spot):
     # a standalone token of the shape <star-run> ":" "**", i.e. "*:**" and
     # "**:**". Real whoosh's FieldsPlugin consumes the "*:" + the first "*"
@@ -1160,10 +1118,27 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # (non-zero-token) word that merely *starts with* a stopword or a
     # digit, e.g. "thermal" or "20th", is not mistaken for one, the same
     # false-positive risk fixed for entry 23 above.
+    #
+    # An unfielded spelling reaches the identical mechanism: the phrase
+    # multifield-expands to one Phrase per default field, and every
+    # TEXT-field one of those analyzes to zero tokens the same way the
+    # fielded case does, so whoosh's raw (unnormalized) tree keeps them as
+    # literal empty-words Or siblings while whoosh-compat drops each to
+    # Nothing() and the Or filters them out. This was previously unclaimed,
+    # not because it is a different mechanism (entry 23's match-all
+    # ordering bug is not involved here at all: verified directly, see
+    # DIVERGENCES.md entry 24's own note), but because this regex was
+    # written from the fielded case and never broadened to the unfielded
+    # one. Anchored to string-start/whitespace/open-paren on the
+    # left (matching this module's other unfielded-token conventions, e.g.
+    # the entry-20 patterns above) since there is no field-name colon to
+    # anchor on instead.
     (
         re.compile(
             rf"\b(?:{TEXT_FIELDS_PATTERN}):"
             rf'"{ZERO_TOKEN_WORD}(?=[\s"])'
+            rf'(?:\s+{ZERO_TOKEN_WORD}(?=[\s"]))*"'
+            rf'|(?:^|(?<=[\s(]))"{ZERO_TOKEN_WORD}(?=[\s"])'
             rf'(?:\s+{ZERO_TOKEN_WORD}(?=[\s"]))*"'
         ),
         (

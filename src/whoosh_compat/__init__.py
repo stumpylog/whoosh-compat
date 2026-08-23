@@ -172,7 +172,14 @@ def parse(
 
     try:
         node = parser.parse(query)
-        node = ast.normalize(node)
+        # _normalize_before_analysis, not plain normalize(): DIVERGENCES.md
+        # entry 23's match-all face. ParseResult.ast is
+        # documented as normalized-but-not-yet-analyzed, and analysis (at
+        # emit time) can still discover an And-sibling term is zero-token;
+        # plain normalize() would drop an unfielded Every as the AND
+        # identity right here, before analysis ever gets a chance to see
+        # whether that sibling survives, discarding the Every for good.
+        node = ast._normalize_before_analysis(node)
     except QueryParserError:
         raise
     except Exception as exc:

@@ -648,7 +648,9 @@ def _child_nodes(node: Node) -> tuple[Node, ...]:
     return ()
 
 
-def _normalize_one(node: Node, children: tuple[Node, ...]) -> Node:
+def _normalize_one(
+    node: Node, children: tuple[Node, ...], *, _protect_unfielded_every: bool = False
+) -> Node:
     """Applies ``node``'s own normalization rule given its *already
     normalized* children (``children``, in the same order ``_child_nodes``
     returned them). Pure combination step, no traversal: this is the part
@@ -668,6 +670,15 @@ def _normalize_one(node: Node, children: tuple[Node, ...]) -> Node:
     same-type node (or dropped via dedupe/Nothing/Every filtering), the
     rebuilt node's span is instead the union (see ``_span_union``) of
     whatever ended up as its final children, not ``node``'s own span.
+
+    ``_protect_unfielded_every`` is a private escape hatch for callers
+    upstream of analysis (DIVERGENCES.md entry 23's match-all face): when
+    set, an unfielded ``Every`` is kept as an ordinary And sibling instead
+    of being unconditionally dropped as the AND identity. ``normalize()``'s
+    own public entry point never sets it, so every documented, tested
+    behavior for a direct ``normalize()`` call is unchanged; see
+    ``_normalize_before_analysis``'s
+    docstring for why ``analyze()`` needs the opposite default.
     """
 
     if isinstance(node, And):
@@ -683,7 +694,8 @@ def _normalize_one(node: Node, children: tuple[Node, ...]) -> Node:
             else:
                 flat.append(child)
         had_every = any(isinstance(c, Every) and c.field is None for c in flat)
-        flat = [c for c in flat if not (isinstance(c, Every) and c.field is None)]
+        if had_every and not _protect_unfielded_every:
+            flat = [c for c in flat if not (isinstance(c, Every) and c.field is None)]
         flat = list(_dedupe(tuple(flat)))
         if not flat:
             return (
@@ -766,28 +778,17 @@ def _normalize_one(node: Node, children: tuple[Node, ...]) -> Node:
     return node
 
 
-def normalize(node: Node) -> Node:
-    """Normalize an AST node into canonical form (pure, bottom-up).
-
-    Applies flattening of nested same-type groups, Nothing/Every
-    propagation, duplicate-sibling dedupe, empty-group collapse, single-child
-    unwrap, and boost merging/stripping.
-
-    Traverses iteratively (an explicit work stack, keyed by node identity)
-    rather than recursively, so a pathologically deep or wide tree costs
-    heap, not Python call-stack frames: a naive recursive postorder walk
-    here used to roughly halve the query nesting depth ``parse()`` could
-    tolerate before ``RecursionError``, since every parenthesized level
-    already cost frames in the parser itself before ever reaching this
-    function. The actual per-node rules live in
-    :func:`_normalize_one`; this function only handles the postorder
-    scheduling.
-
-    Args:
-        node: The AST node to normalize.
-
-    Returns:
-        The normalized node.
+def _normalize_impl(node: Node, *, _protect_unfielded_every: bool) -> Node:
+    """Shared traversal behind :func:`normalize` and
+    :func:`_normalize_before_analysis`: an explicit work stack, keyed by
+    node identity, so a pathologically deep or wide tree costs heap, not
+    Python call-stack frames (a naive recursive postorder walk here used to
+    roughly halve the query nesting depth ``parse()`` could tolerate before
+    ``RecursionError``, since every parenthesized level already cost frames
+    in the parser itself before ever reaching this function). The actual
+    per-node rules live in :func:`_normalize_one`; this function only
+    handles the postorder scheduling and threads
+    ``_protect_unfielded_every`` through unchanged.
     """
 
     # memo maps id(original node) -> its normalized replacement, once known.
@@ -806,12 +807,70 @@ def normalize(node: Node) -> Node:
         kids = _child_nodes(current)
         if children_ready or not kids:
             normalized_kids = tuple(memo[id(k)] for k in kids)
-            memo[id(current)] = _normalize_one(current, normalized_kids)
+            memo[id(current)] = _normalize_one(
+                current, normalized_kids, _protect_unfielded_every=_protect_unfielded_every
+            )
         else:
             stack.append((current, True))
             for k in kids:
                 stack.append((k, False))
     return memo[id(node)]
+
+
+def normalize(node: Node) -> Node:
+    """Normalize an AST node into canonical form (pure, bottom-up).
+
+    Applies flattening of nested same-type groups, Nothing/Every
+    propagation, duplicate-sibling dedupe, empty-group collapse, single-child
+    unwrap, and boost merging/stripping.
+
+    Args:
+        node: The AST node to normalize.
+
+    Returns:
+        The normalized node.
+    """
+
+    return _normalize_impl(node, _protect_unfielded_every=False)
+
+
+def _normalize_before_analysis(node: Node) -> Node:
+    """The normalize pass every call site *upstream of analysis* must use
+    instead of plain :func:`normalize` (DIVERGENCES.md entry 23's
+    match-all face): :func:`analyze`'s own leading pass,
+    ``whoosh_compat.parse()``'s normalize of the freshly parsed tree (its
+    result is documented as normalized-but-not-yet-analyzed, and analysis
+    happens later, at emit time), and ``TantivyEmitter.emit()``'s own
+    pre-``analyze()`` normalize.
+
+    Identical to :func:`normalize` except an unfielded ``Every`` is kept as
+    an ordinary ``And`` sibling instead of being unconditionally dropped as
+    the AND identity. Plain :func:`normalize`'s drop is correct once
+    analysis has already run (nothing left to discover), but premature at
+    any of the call sites above, all of which hand a not-yet-analyzed tree
+    to something that runs analysis later, possibly much later and through
+    a different call entirely: an unfielded ``Every`` And-sibling of a term
+    that has not been analyzed yet might still empty out during analysis
+    (an all-stopword value), and :func:`_analyze_combine`'s own ``And``
+    handling already has the correct "newly-emptied sibling doesn't
+    poison" rule for exactly that case, the same one
+    :func:`_analyze_binary_drop` applies to ``AndNot``/``AndMaybe``/
+    ``Require`` -- but only if the ``Every`` is still there for it to
+    protect. Dropping it before analysis ever runs discards that
+    protection for no compensating benefit: whatever :func:`analyze`'s own
+    final :func:`normalize` call would have dropped anyway, it still
+    drops, once the surviving/emptied shape is actually known. Calling
+    this at more than one of the sites above in the same pipeline run
+    (e.g. once in ``parse()``, again inside ``analyze()``'s own leading
+    pass) is safe and idempotent: nothing left to protect differently the
+    second time.
+
+    Plain :func:`normalize`'s own behavior for a direct caller (not part of
+    this pipeline) is deliberately untouched: it still drops the unfielded
+    ``Every`` unconditionally, exactly as documented and tested.
+    """
+
+    return _normalize_impl(node, _protect_unfielded_every=True)
 
 
 def _leaf_tokens(
@@ -1086,7 +1145,9 @@ def analyze(
 
     Args:
         node: The AST node to analyze. Normally already normalized (the
-            pipeline calls this as ``analyze(normalize(node), ...)``); a
+            pipeline normalizes via ``_normalize_before_analysis``, not
+            plain ``normalize``, ahead of calling this; see that function's
+            own docstring for why); a
             not-yet-normalized tree still analyzes correctly, since this
             function begins by normalizing its input (making that promise
             true by construction: a pre-existing ``Nothing`` wrapped in a
@@ -1108,7 +1169,11 @@ def analyze(
 
     # Normalize first: see the Args docstring above for why this is
     # load-bearing (the entry-23/entry-27 distinction), not just tidiness.
-    node = normalize(node)
+    # _normalize_before_analysis, not plain normalize(): see its own
+    # docstring (DIVERGENCES.md entry 23's match-all face) for why this
+    # pre-pass must not drop an unfielded Every as the AND identity the
+    # way a direct normalize() call correctly does.
+    node = _normalize_before_analysis(node)
 
     # Single bottom-up pass, mirroring normalize()'s own memoized
     # work-stack traversal, except the per-node combine step is

@@ -356,6 +356,17 @@ SCENARIOS_EQUAL = [
     pytest.param("correspondent:Acme", [1, 2], id="term-correspondent"),
     pytest.param("content:cooperative", [], id="hyphen-split-tokenizes-two-words-not-one"),
     pytest.param("content:co", [4], id="hyphen-split-first-half-matches"),
+    # DIVERGENCES.md entry 23's match-all face, through the real public
+    # pipeline (wc.parse() -> emit() -> a live tantivy search), not just
+    # an AST comparison: "the" is a StandardAnalyzer stopword, so this
+    # must match every document on both sides. Added after discovering
+    # the AST-level fix alone did not reach this path: wc.parse() and
+    # TantivyEmitter.emit() each call ast.normalize() directly (not
+    # through analyze()'s own protected pre-pass), so the unfielded Every
+    # was still being dropped before analysis ever ran, for any caller
+    # going through the real API instead of the differential harness's
+    # raw-parse bypass.
+    pytest.param("*:* title:the", [1, 2, 3, 4], id="entry23-match-all-face"),
 ]
 
 

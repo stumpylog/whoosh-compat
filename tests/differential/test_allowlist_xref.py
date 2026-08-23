@@ -349,19 +349,20 @@ def test_result_entry23_regex_covers_every_whoosh_stopword(word: str) -> None:
         pytest.param("tag_id:'ab,cd' OR tag_id:x", 15, id="e15-quoted-keyword-comma-in-or"),
         pytest.param("title:ab-ab OR title:x", None, id="e15-identical-in-or-unclaimed"),
         # entry 20 / entry 23's match-all face. The standalone "*:*" token
-        # agrees on both sides and is carved out of entry 20; conjoined
-        # with a zero-token TEXT term it is entry 23's match-all
-        # divergence. A fielded match-all is not the And identity and
-        # stays with entry 20.
+        # agrees on both sides and is carved out of entry 20. Conjoined
+        # with a zero-token TEXT term, this used to be entry 23's
+        # match-all divergence; now fixed (see entry 23's own text), so
+        # these now compare EQUAL and are unclaimed too. A fielded
+        # match-all was never the And identity and stays with entry 20.
         pytest.param("*:*", None, id="e20-match-all-token-unclaimed"),
         pytest.param("*:*^2", None, id="e20-boosted-match-all-unclaimed"),
         pytest.param("*:* title:foo", None, id="e20-match-all-live-sibling-unclaimed"),
         pytest.param("**:*", 20, id="e20-star-named-field-still-claimed"),
         pytest.param("title:*", 20, id="e20-fielded-star-still-claimed"),
         pytest.param("*", 20, id="e20-bare-star-still-claimed"),
-        pytest.param("*:* title:the", 23, id="e23-match-all-face"),
-        pytest.param("title:the *:*", 23, id="e23-match-all-face-reversed"),
-        pytest.param("*:* AND title:the", 23, id="e23-match-all-face-explicit-and"),
+        pytest.param("*:* title:the", None, id="e23-match-all-face-fixed"),
+        pytest.param("title:the *:*", None, id="e23-match-all-face-reversed-fixed"),
+        pytest.param("*:* AND title:the", None, id="e23-match-all-face-explicit-and-fixed"),
         pytest.param("has_tag:* title:the", 20, id="e23-fielded-match-all-not-this-face"),
     ],
 )
