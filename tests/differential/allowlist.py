@@ -798,6 +798,51 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         ),
         DivergenceKind.MISMATCH,
     ),
+    # design (DIVERGENCES.md entry 20, group 1): a star-run
+    # followed by a colon-run and NOTHING else, e.g. "**:", "**::", "**:::".
+    # Measured directly against the oracle: both sides parse to
+    # And[Or(<per-default-field>), Term(tag, <same residual text>)], and the
+    # ONLY difference is the Or's leaf type, exactly entry 20's Every-vs-
+    # Wildcard mechanism, just reached through a token with zero trailing
+    # stars after the colon (the pattern directly above requires exactly two
+    # trailing stars and so cannot see this shape). The trailing negative
+    # lookahead excludes "**:*" (a single trailing star): that shape is a
+    # bare-"*"-after-field-colon token claimed by the entry-20 regex further
+    # below instead, a different residual (Term(tag, ':') vs no residual
+    # term at all), not remeasured here.
+    (
+        re.compile(r"(?:^|(?<=[\s(]))\*\*:+(?!\*)(?:\^[\d.]+)?(?=$|[\s)])"),
+        (
+            "DIVERGENCES.md entry 20: a '**:'/'**::'/'**:::' token (star-run"
+            " then colon-run, no trailing star) leaves the same"
+            " Every(field)-vs-Wildcard('*') leaf-type divergence as the"
+            " '*:**'/'**:**' shape above, reached through a token with no"
+            " trailing star instead"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
+    # design (DIVERGENCES.md entry 20, group 2): a leading bare
+    # ":" followed by "*:**"/"*:*:" ("":*:**"" / ""**:*:""). Measured
+    # directly: whoosh's own grammar binds a leading bare ":" to a single
+    # specific schema field (a literal Term, e.g. "tag::") rather than
+    # multifield-expanding it, while whoosh-compat's grammar treats the same
+    # bare ":" as an unfielded term and multifield-expands it into an Or of
+    # one Term per default field. That is a different node *shape* (one
+    # Term vs. a 7-way Or), not merely a leaf-type swap, so it is kept as
+    # its own narrow, exact-token claim rather than folded into either
+    # star-run entry above: whether whoosh's single-field binding generalizes
+    # to other leading-bare-":" shapes was not measured, so the pattern is
+    # deliberately literal rather than generalized.
+    (
+        re.compile(r"(?:^|(?<=[\s(]))(?::\*:\*\*|\*\*:\*:)(?:\^[\d.]+)?(?=$|[\s)])"),
+        (
+            "DIVERGENCES.md entry 20: a ':*:**'/'**:*:' token's leading bare"
+            " ':' binds to a single schema field in whoosh (a literal Term)"
+            " but multifield-expands to an Or of Term per default field in"
+            " whoosh-compat"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
     # design: a bare "*" wildcard on a field (`title:*`) whoosh-compat
     # simplifies to Every(field) (see QueryParser.wildcard_query's
     # docstring: "the text is exactly '*' -> Every"); real whoosh's

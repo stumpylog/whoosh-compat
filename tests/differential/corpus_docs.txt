@@ -195,3 +195,24 @@ has_correspondent:'  false'
 # trailing stars: "*:***" compares EQUAL and is deliberately not claimed.
 *:**
 **:**
+
+# --- KNOWN DIVERGENCE (design, allowlist.py): entry 20's remaining
+# star-soup neighbourhood, closed narrowly rather than swept into the two
+# entries above. Two mechanisms, each measured directly against the oracle
+# rather than assumed from the shape:
+#
+# "**:" / "**::" / "**:::" (star-run then colon-run, no trailing star):
+# same Every(field)-vs-Wildcard('*') leaf-type divergence as "*:**"/"**:**"
+# above, just with zero trailing stars instead of two.
+**:
+**::
+**:::
+
+# ":*:**" / "**:*:" (a leading bare ":"): whoosh's own grammar binds the
+# leading ":" to a single schema field (a literal Term), while
+# whoosh-compat multifield-expands the same bare ":" into an Or of one Term
+# per default field. A different node shape, not a leaf-type swap; kept
+# separate from the family above rather than generalized past what was
+# measured.
+:*:**
+**:*:

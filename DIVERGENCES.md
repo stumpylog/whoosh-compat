@@ -752,9 +752,9 @@ parse-then-emit pipeline).
     is scoped by exhaustive measurement over every `*`/`:` string up to
     length 5 in five syntactic contexts: exactly two trailing stars diverge,
     while `*:***` compares EQUAL and is deliberately excluded, and the
-    left-anchored boundary leaves `:*:**`, `**:`, `**::`, `**:*:` and
-    `**:::` (all measurably divergent, all reached through different
-    mechanisms) unclaimed and reported rather than swept in.
+    left-anchored boundary left `:*:**`, `**:`, `**::`, `**:*:` and `**:::`
+    (all measurably divergent, all reached through different mechanisms)
+    unclaimed and reported rather than swept in; that gap is closed below.
     Corpus lines: `tests/differential/corpus_docs.txt`'s `*:**` and `**:**`
     lines.
 
@@ -774,6 +774,26 @@ parse-then-emit pipeline).
     and intentional, consistent with how `Every(field)` already behaved
     before BOOLEAN_EXISTS started sharing the strategy, not a new or
     separate divergence.
+
+    The remaining five shapes named above as unclaimed are now claimed too,
+    split into two mechanisms per direct measurement rather than swept into
+    one broad pattern:
+
+    `**:`, `**::` and `**:::` (a star-run then a colon-run, with *no*
+    trailing star) reach the exact same Every(field)-vs-Wildcard('*')
+    leaf-type divergence as `*:**`/`**:**` above, just through a token shape
+    the `\*+:\*\*(?!\*)` regex cannot see (it requires exactly two trailing
+    stars). `:*:**` and `**:*:` are a different mechanism entirely: whoosh's
+    own grammar binds a *leading* bare `:` to a single specific schema field
+    (a literal `Term`, e.g. `tag::`), while whoosh-compat's grammar treats
+    the same bare `:` as an unfielded term and multifield-expands it into an
+    `Or` of one `Term` per default field, a different node shape, not merely
+    a leaf-type swap. Whether that leading-bare-`:` binding generalizes past
+    these two exact strings was not measured, so its allowlist pattern is
+    deliberately literal rather than generalized.
+
+    Corpus lines: `tests/differential/corpus_docs.txt`'s `**:`, `**::`,
+    `**:::`, `:*:**` and `**:*:` lines.
 
     The strategy used for a given field (`FAST_FIELD` via `exists_query`, or
     `TERM_SCAN` via the `regex_query(".*")` fallback) is resolved once, at
