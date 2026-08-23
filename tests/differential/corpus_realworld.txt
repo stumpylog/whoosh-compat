@@ -136,6 +136,26 @@ added:[20240329 TO 20240627] tag:Inbox correspondent:[Aliexpress OR Agilent]
 created:[-1 week to now]
 created:[-2 days to now]
 
+# --- CONFIRMED PARITY: entry 12's regex used to over-claim
+# these three (both bounds pure PlusMinus relative offsets), suppressing a
+# comparison that actually agrees. Narrowed and asserted directly here
+# instead of left as a suppressed EQUAL comparison: a range with no
+# absolute/named-keyword bound has nothing for the missing tz-reversal
+# override (entry 12's own bug) to have changed, since a relative offset is
+# computed as an arithmetic delta off basedate identically on both sides.
+created:[-1yr to -0yr]
+created:[-2 yrs to -1 yrs]
+created:[-999 yrs to -7yrs]
+
+# --- KNOWN DIVERGENCE (whoosh-bug, DIVERGENCES.md entry 55, allowlist.py):
+# a single-bound range whose only bound is "now" or a relative offset
+# crashes real whoosh (range_to_dt calls .disambiguated() on a plain
+# datetime.datetime, which lacks it) before a query object is ever built.
+# Not reproduced: whoosh-compat parses it cleanly. This exact spelling is
+# the maintainer-endorsed one from paperless-ngx#13482 for an empty lower
+# bound, not an edge case invented for coverage.
+created:[ TO -7 years]
+
 # --- KNOWN DIVERGENCE (design, DIVERGENCES.md entry 15, allowlist.py): an
 # unknown-field-demoted value that survives its field's analyzer as 2+
 # tokens resolves Multitoken.DEFAULT against the multifield expansion's Or
@@ -231,21 +251,21 @@ type:A OR type:B OR notes:C
 #
 # (c) OVER-CLAIMED: an existing allowlist entry matches these, but they
 #     measurably compare EQUAL, so adding them would trip the strict-xfail
-#     staleness assertion. Reported, not silently narrowed around: entry
-#     12's regex claims every non-empty bracketed date range, but a range
-#     whose bounds are BOTH relative offsets agrees on both sides; entry
-#     15's unknown-field alternative claims an unknown field followed by a
-#     bracket range, which does not split into 2+ tokens:
-#       created:[-1yr to -0yr]
-#       created:[-2 yrs to -1 yrs]
-#       created:[-999 yrs to -7yrs]
+#     staleness assertion. Reported, not silently narrowed around. Entry
+#     12's own three both-relative-bound lines are now resolved (entry 12's
+#     regex now excludes that shape; see the live corpus lines above,
+#     "CONFIRMED PARITY"). The remaining two are entry 15's unknown-field
+#     alternative, which claims an unknown field followed by a bracket range
+#     that does not split into 2+ tokens; still open, a separate concern
+#     from this one:
 #       customDateField:[now to 2 weeks]
 #       customDateField:[now to next friday]
 #
-# (d) ORACLE CRASH under a MISMATCH claim: real whoosh raises
+# (d) ORACLE CRASH: resolved. real whoosh raises
 #     AttributeError("'datetime.datetime' object has no attribute
-#     'disambiguated'") while parsing this, but entry 12 (which matches it)
-#     is declared DivergenceKind.MISMATCH, so the corpus test would fail
-#     with a stale-entry message. A whitespace-only lower bound plus a
-#     relative upper bound is a whoosh defect nothing has triaged yet:
-#       created:[ TO -7 years]
+#     'disambiguated'") while parsing a single-bound range whose only bound
+#     is "now" or a relative offset; entry 12 used to match it too (a
+#     DivergenceKind.MISMATCH claim the oracle never got far enough to
+#     exercise), now correctly classified as its own DIVERGENCES.md entry
+#     55, DivergenceKind.ORACLE_ERROR, checked before entry 12's pattern.
+#     See the live corpus line above ("KNOWN DIVERGENCE ... entry 55").

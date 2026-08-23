@@ -43,16 +43,18 @@ each entry's :class:`DivergenceKind` selects between:
   every entry below.
 * :attr:`DivergenceKind.ORACLE_ERROR`: real whoosh itself raises while
   parsing this shape, so there is no oracle query object to compare at all.
-  The test asserts the oracle still raises. One corpus line exercises an
-  entry of this kind today: ``has_tag:"true"`` in
+  The test asserts the oracle still raises. Two corpus lines exercise
+  entries of this kind today: ``has_tag:"true"`` in
   ``tests/differential/corpus_docs.txt`` (the double-quoted-value-on-BOOLEAN
-  crash, DIVERGENCES.md entry 38), so ``test_matches_oracle``'s
-  ORACLE_ERROR branch is live code, not a provision for the future. Other
-  oracle-crashing shapes (e.g. the "NOT NOT alpha" consecutive-bare-NOTs
-  crash documented in DIVERGENCES.md entry 35 and the
-  double-quoted-``"*"``-on-BOOLEAN crash in entry 28) deliberately have no
-  differential corpus line: see those entries' own "no allowlist/corpus
-  triple" notes.
+  crash, DIVERGENCES.md entry 38) and ``created:[ TO -7 years]`` in
+  ``tests/differential/corpus_realworld.txt`` (the single-bound
+  now/relative-offset range crash, DIVERGENCES.md entry 55), so
+  ``test_matches_oracle``'s ORACLE_ERROR branch is live code, not a
+  provision for the future. Other oracle-crashing shapes (e.g. the
+  "NOT NOT alpha" consecutive-bare-NOTs crash documented in DIVERGENCES.md
+  entry 35 and the double-quoted-``"*"``-on-BOOLEAN crash in entry 28)
+  deliberately have no differential corpus line: see those entries' own
+  "no allowlist/corpus triple" notes.
 
 A third outcome, a whoosh-compat parse *diagnostic* (DIVERGENCES.md entry
 6: ``Term``/``Phrase`` values whoosh-compat can't parse, e.g. an invalid
@@ -254,6 +256,24 @@ KEYWORD_FIELDS_PATTERN = "|".join(
 # typed exclusivity to apply to (entry 44), and measurably compares EQUAL,
 # so claiming it discarded the comparison for no reason.
 _NON_EMPTY_RANGE = r"(?!\s*(?i:to)?\s*[\]}])"
+
+# A single PlusMinus-shaped relative date offset ("-1yr", "-2 yrs",
+# "-999 yrs", "+1 week"), built from whoosh's own unit vocabulary
+# (whoosh.qparser.dateparse.English.setup's PlusMinus(...) call: each
+# alternation below is one of that call's literal unit-word strings, longest
+# alternative first as whoosh itself orders them) rather than approximated,
+# since both entries below depend on distinguishing this shape precisely
+# from an absolute/named-keyword bound.
+_REL_UNIT = (
+    r"(?:years|year|yrs|yr|ys|y"
+    r"|months|month|mons|mon|mos|mo"
+    r"|weeks|week|wks|wk|ws|w"
+    r"|days|day|dys|dy|ds|d"
+    r"|hours|hour|hrs|hr|hs|h"
+    r"|minutes|minute|mins|min|ms|m"
+    r"|seconds|second|secs|sec|s)"
+)
+_REL_BOUND = rf"[+-]\s*(?:\d+\s*{_REL_UNIT}\s*)+"
 
 
 class DivergenceKind(enum.Enum):
@@ -502,6 +522,39 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         ),
         DivergenceKind.MISMATCH,
     ),
+    # whoosh-bug (DIVERGENCES.md entry 55, ORACLE_ERROR): a bracketed range
+    # with exactly one bound present, where that bound is the literal
+    # keyword "now" or a PlusMinus relative offset ("-7 years", "+1 week"),
+    # crashes real whoosh before a query object is ever built:
+    # DateParserPlugin.range_to_dt (whoosh/qparser/dateparse.py) calls
+    # end.disambiguated(self.basedate) unconditionally whenever only one
+    # bound is present; that method exists on the adatetime/timespan objects
+    # every OTHER bound spelling produces (an absolute date, a bare
+    # month/year, "today", "yesterday"; none of those crash alone, measured
+    # directly), but PlusMinus.props_to_date and the "now" keyword both
+    # return a plain datetime.datetime, which has no .disambiguated(). Must
+    # be checked before entry 12's own broader bracketed-range pattern
+    # below, which would otherwise also match this shape and wrongly assert
+    # a MISMATCH comparison the oracle never gets far enough to produce.
+    # whoosh-compat parses every one of these cleanly (an open-ended
+    # DateRange, no diagnostic): not reproduced. This is real, plausible
+    # syntax, not a corner case invented for coverage: it is the
+    # maintainer-endorsed spelling from paperless-ngx#13482 for an empty
+    # date bound.
+    (
+        re.compile(
+            rf"\b(?:created|modified|added):\["
+            rf"(?:\s*(?i:to)\s*(?:now|{_REL_BOUND})\s*\]"
+            rf"|(?:now|{_REL_BOUND})\s*(?i:to)\s*\])"
+        ),
+        (
+            "whoosh-bug (DIVERGENCES.md entry 55): a single-bound range whose"
+            " only bound is 'now' or a relative offset crashes real whoosh's"
+            " range_to_dt (calls .disambiguated() on a plain datetime.datetime,"
+            " which lacks it); whoosh-compat parses it cleanly"
+        ),
+        DivergenceKind.ORACLE_ERROR,
+    ),
     # whoosh-bug (DIVERGENCES.md entry 12): real whoosh's range-bound date parsing
     # (DateParserPlugin.range_to_dt) calls
     # `self.dateparser.get_parser().date_from(...)`, the *grammar object's*
@@ -530,8 +583,29 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # inside the brackets for the same reason; a digit is too strict here
     # (a month-name bound like "added:[dec to feb]" is tz-converted too,
     # and does diverge), so this uses _NON_EMPTY_RANGE instead.
+    #
+    # A second carve-out: a range whose BOTH bounds are pure
+    # PlusMinus relative offsets ("[-1yr to -0yr]", "[-2 yrs to -1 yrs]",
+    # any unit/granularity, measured directly) compares EQUAL, not
+    # divergent. The tz-reversal override this entry's bug is about only
+    # changes the result for a bound whoosh's LocalDateParser would
+    # otherwise shift from local wall-clock time to UTC; a relative offset
+    # is computed as an arithmetic delta off basedate on both sides
+    # (real whoosh's PlusMinus.props_to_date does `dt + delta` directly, no
+    # local/naive distinction to bypass), so the missing override changes
+    # nothing when every bound is one. The instant either bound is instead a
+    # named keyword ("now", "today", a month name) or an absolute date, the
+    # divergence reappears (measured: "[-1 week to now]", "[now to now]",
+    # "[today to now]" all diverge); only the both-relative-offset shape is
+    # excluded. Exclusive-bracket forms are unaffected by this carve-out:
+    # they never reach this pattern at all, entry 44's pattern above already
+    # claims them first.
     (
-        re.compile(rf"\b(?:created|modified|added):[\[{{]{_NON_EMPTY_RANGE}"),
+        re.compile(
+            rf"\b(?:created|modified|added):[\[{{]"
+            rf"(?!{_REL_BOUND}(?i:to)\s*{_REL_BOUND}\s*[\]}}])"
+            rf"{_NON_EMPTY_RANGE}"
+        ),
         (
             "whoosh-bug (DIVERGENCES.md entry 12): LocalDateParser's"
             " tz-reversal override doesn't reach range bounds (range_to_dt"

@@ -250,6 +250,21 @@ parse-then-emit pipeline).
     (see that test module's docstring for why an AST-level divergence
     doesn't always imply a different final result set).
 
+    Narrowed a second time: a range whose *both* bounds are
+    pure `PlusMinus` relative offsets (`created:[-1yr to -0yr]`, any
+    unit/granularity) compares EQUAL, not divergent, and is no longer
+    claimed. The tz-reversal override this entry's bug is about only
+    changes a bound whoosh's `LocalDateParser` would otherwise shift from
+    local wall-clock time to UTC; a relative offset is an arithmetic delta
+    off `basedate` on both sides regardless, so the missing override
+    changes nothing when every bound is one. Either bound being a named
+    keyword (`now`, `today`, a month name) or an absolute date still
+    diverges (measured) and stays claimed. A single-bound range whose only
+    bound is `now` or a relative offset is a different case entirely: it
+    crashes the oracle outright before a comparison is possible, so it was
+    split out to its own entry, 55, with `DivergenceKind.ORACLE_ERROR`,
+    checked ahead of this entry's pattern.
+
     The same missing-`ToEnd` root cause has a second, distinct symptom
     beyond the tz bypass: `range_to_dt` accepts whatever prefix of a bound
     string the first successful `Choice` alternative happens to consume,
@@ -2804,3 +2819,59 @@ parse-then-emit pipeline).
     `test_bare_unquoted_t_value_is_rejected_not_truncated`,
     `test_timestamp_spellings_the_grammar_can_consume_whole_still_parse`
     and `test_a_whitespace_separated_term_after_a_date_is_still_a_term`.
+
+55. **A single-bound bracketed range whose only bound is `now` or a
+    relative offset crashes real whoosh outright (whoosh-bug, not
+    reproduced).** `created:[ TO -7 years]` is not a hypothetical shape: it
+    is the maintainer-endorsed spelling from paperless-ngx#13482 for an
+    empty date bound, and it raises before real whoosh ever builds a query
+    object:
+
+    ```
+    AttributeError: 'datetime.datetime' object has no attribute 'disambiguated'
+    ```
+
+    The mechanism, in `DateParserPlugin.range_to_dt`
+    (`whoosh/qparser/dateparse.py`): when exactly one bound is present, the
+    branch that resolves it unconditionally calls
+    `end.disambiguated(self.basedate)` (or the equivalent for a
+    present-only `start`). That call is safe for every bound spelling that
+    resolves to an `adatetime`/`timespan`: an absolute date, a bare
+    month/year, `today`, `yesterday`, all measured directly and none crash
+    alone. It is not safe for a bound resolving to a plain
+    `datetime.datetime`, which has no `.disambiguated()`, and two bound
+    spellings do exactly that: the literal keyword `now`, and any
+    `PlusMinus`-shaped relative offset (`-7 years`, `+1 week`, any
+    unit/granularity), since `PlusMinus.props_to_date` returns `dt + delta`
+    directly with no `adatetime` wrapping. `range_to_dt`'s two-bounds
+    branch avoids this entirely: when both bounds are present it wraps them
+    in `timespan(start, end)` first, which does not have this problem, so
+    the crash is specific to the single-bound path.
+
+    whoosh-compat's `DateParserPlugin.range_to_node` parses every one of
+    these cleanly, producing an ordinary open-ended `DateRange` with no
+    diagnostic: not reproduced, since a genuine parsing defect on plausible
+    input is not intended whoosh semantics to preserve.
+
+    This entry's own claim must be checked before entry 12's broader
+    bracketed-range pattern, which would otherwise also match this shape
+    and assert a `MISMATCH` comparison the oracle never gets far enough to
+    produce; `tests/differential/allowlist.py` orders it first for exactly
+    that reason.
+
+    A related but distinct shape, `created:[TO today]` (no leading space
+    before `TO`), also crashes, but through an entirely different mechanism
+    that both whoosh *and* whoosh-compat exhibit identically (a
+    mis-tokenization, not a one-sided defect): tracked separately, not
+    folded into this entry.
+
+    Test references: `tests/differential/corpus_realworld.txt`'s
+    `created:[ TO -7 years]` line and its matching
+    `tests/differential/allowlist.py` `DivergenceKind.ORACLE_ERROR` entry.
+    Entry 12's own text and allowlist pattern also changed alongside this
+    one: a range whose *both* bounds are relative offsets
+    (`created:[-1yr to -0yr]`) compares EQUAL and is no longer claimed by
+    entry 12, since a relative offset is computed identically on both sides
+    regardless of the tz-reversal bug entry 12 describes; see entry 12's
+    own text and `tests/differential/corpus_realworld.txt`'s "CONFIRMED
+    PARITY" lines.
