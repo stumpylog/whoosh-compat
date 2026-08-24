@@ -410,6 +410,33 @@ def _survivor_tail(survivor: str, filler: str) -> str:
     return rf"(?:{filler}++)?+{survivor}(?:{filler}++{survivor})*+(?:{filler}++)?+"
 
 
+def _tail_not_all_identical_to_prefix(filler: str, prefix_group_name: str) -> str:
+    """A zero-width assertion (used inside a negative lookahead placed
+    immediately after the unknown-field-colon alternative's already-consumed
+    `\\w{2,}` field-name-shaped prefix, captured under `prefix_group_name`)
+    matching iff the WHOLE tail ahead is nothing but repeats of that SAME
+    case-insensitively identical token (covers "ab:ab", "ab:ab-ab": per
+    `_survivor_tail`'s own docstring, the prefix already counts as the
+    first survivor, so a tail that only repeats the prefix rather than
+    adding a genuinely different token never reaches 2 DISTINCT survivors;
+    ANDing and ORing one distinct token repeated compare equal, so these
+    do not diverge).
+
+    Sibling of `_survivor_not_all_identical`, for the branches that follow
+    `_survivor_tail` rather than `_survivor_chain`: the first "survivor" here
+    was already captured by the prefix, not by this fragment, so this checks
+    a backreference instead of taking its own `survivor` pattern. `group_name`
+    naming rules are the same as `_survivor_not_all_identical`'s (unique per
+    use site; see its docstring).
+    """
+
+    return (
+        rf"(?i:(?:{filler}++)?+(?P={prefix_group_name})(?!\w)"
+        rf"(?:{filler}++(?P={prefix_group_name})(?!\w))*"
+        rf"(?:{filler}++)?+'?(?=[\s)]|$))"
+    )
+
+
 def _survivor_not_all_identical(survivor: str, filler: str, group_name: str) -> str:
     """A zero-width assertion (used inside a negative lookahead) matching
     iff the WHOLE bounded value ahead is nothing but repeats of one
@@ -1774,14 +1801,16 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
             rf"{_survivor_chain(_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})"
             r"(?(e15bq)'|)(?=[\s)]|$)"
             rf"|(?:^|(?<=[\s(]))\b(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared)\b)"
-            rf"(?!{_TEXT_STOPWORD})\w{{2,}}:"
+            rf"(?!{_TEXT_STOPWORD})(?P<e15ufpfx>\w{{2,}}):"
             rf"{_RANGE_LOOKAHEAD}"
             r'(?!")'
             r"(?:"
-            rf"'(?:{_survivor_tail(_TEXT_SURVIVOR, _UF_QUOTED_FILLER)}"
+            rf"'(?:(?!{_tail_not_all_identical_to_prefix(_UF_QUOTED_FILLER, 'e15ufpfx')})"
+            rf"{_survivor_tail(_TEXT_SURVIVOR, _UF_QUOTED_FILLER)}"
             rf"|{_survivor_chain(_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})'(?=[\s)]|$)"
             r"|"
-            rf"(?:{_survivor_tail(_TEXT_SURVIVOR, _UF_FILLER)}"
+            rf"(?:(?!{_tail_not_all_identical_to_prefix(_UF_FILLER, 'e15ufpfx')})"
+            rf"{_survivor_tail(_TEXT_SURVIVOR, _UF_FILLER)}"
             rf"|{_survivor_chain(_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})"
             r"(?=[\s)]|$)"
             r")"

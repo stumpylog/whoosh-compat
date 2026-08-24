@@ -487,6 +487,13 @@ def test_the_lowercase_expanding_character_set_is_exactly_i_dot() -> None:
         pytest.param("asn:1 OR title:90:abcd", id="fielded-text-interior-colon-in-or-2"),
         pytest.param("asn:1 OR title:'hello:90'", id="fielded-text-quoted-interior-colon-in-or"),
         pytest.param("asn:1 OR title:'abc:İ'", id="fielded-text-quoted-interior-colon-i-in-or"),
+        # Controls: an unknown-field-colon value that genuinely differs from
+        # its fake field-name prefix must stay claimed, unaffected by the
+        # prefix-identity guard above.
+        pytest.param("ab:cd", id="unknown-field-colon-value-differs-from-prefix"),
+        pytest.param("abc:def", id="unknown-field-colon-value-differs-from-prefix-2"),
+        pytest.param("ab:'ab-cd'", id="unknown-field-colon-quoted-value-differs-from-prefix"),
+        pytest.param("ab:ab-cd", id="unknown-field-colon-value-prefix-plus-different-tail"),
     ],
 )
 def test_entry_15_claims_genuine_divergences(q: str) -> None:
@@ -553,6 +560,28 @@ def test_entry_15_claims_genuine_divergences(q: str) -> None:
         # Multitoken.DEFAULT question, whatever its comma-split pieces.
         pytest.param('"ab,cd"', id="bare-double-quoted-comma"),
         pytest.param('"9,90"', id="bare-double-quoted-comma-2"),
+        # An unknown-field-colon value that is (case-insensitively)
+        # IDENTICAL to its own fake field-name prefix: the prefix already
+        # counts as the first survivor for `_survivor_tail`'s bookkeeping,
+        # so a value that only repeats it, rather than adding a genuinely
+        # different token, never reaches 2 DISTINCT survivors. ANDing and
+        # ORing one distinct token repeated compare equal, so these do not
+        # diverge (measured against the oracle).
+        pytest.param("ab:ab", id="unknown-field-colon-value-equals-prefix"),
+        pytest.param("abc:abc", id="unknown-field-colon-value-equals-prefix-2"),
+        pytest.param("90:90", id="unknown-field-colon-value-equals-prefix-numeric"),
+        pytest.param("901:901", id="unknown-field-colon-value-equals-prefix-numeric-2"),
+        pytest.param("sandbox:sandbox", id="unknown-field-colon-value-equals-prefix-word"),
+        pytest.param("02091:02091", id="unknown-field-colon-value-equals-prefix-numeric-3"),
+        pytest.param("(ab:ab)", id="unknown-field-colon-value-equals-prefix-paren"),
+        pytest.param("ab:ab AND x", id="unknown-field-colon-value-equals-prefix-and"),
+        pytest.param("90:90 OR x", id="unknown-field-colon-value-equals-prefix-or"),
+        pytest.param("AB:ab", id="unknown-field-colon-value-equals-prefix-case-insensitive"),
+        pytest.param("ab:AB", id="unknown-field-colon-value-equals-prefix-case-insensitive-2"),
+        pytest.param("ab:'ab'", id="unknown-field-colon-quoted-value-equals-prefix"),
+        pytest.param("ab:'AB'", id="unknown-field-colon-quoted-value-equals-prefix-case"),
+        pytest.param("ab:ab-ab", id="unknown-field-colon-value-repeats-prefix-in-chain"),
+        pytest.param("ab:'ab-ab'", id="unknown-field-colon-quoted-value-repeats-prefix-in-chain"),
     ],
 )
 def test_entry_15_does_not_claim_agreeing_shapes(q: str) -> None:
