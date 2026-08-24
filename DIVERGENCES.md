@@ -2185,9 +2185,9 @@ parse-then-emit pipeline).
     whoosh's transitive per-operator quirks around it.
 
     `NOT ((NOT ()))` reaches the identical mechanism from one more layer of
-    indirection, confirmed directly against `Wrapper.query` and
-    `CompoundQuery.__len__` (`whoosh/query/compound.py`, both
-    `qparser/syntax.py` and `query/compound.py`): the inner `NOT ()`'s own
+    indirection, confirmed directly against `Wrapper.query`
+    (`whoosh/qparser/syntax.py`) and `CompoundQuery.__len__`
+    (`whoosh/query/compound.py`): the inner `NOT ()`'s own
     `Wrapper.query` sees its operand (`And([])`) test *falsy* (`CompoundQuery`
     defines `__len__` as `len(self.subqueries)`, so a zero-subquery compound
     is falsy even though it is a real, non-`None` object), and `Wrapper.query`'s
