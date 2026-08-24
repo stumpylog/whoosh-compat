@@ -637,15 +637,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         which is what makes reporting it as a defect in this library sound.
         """
         try:
-            # _normalize_before_analysis, not plain normalize(): DIVERGENCES.md
-            # entry 23's match-all face. analyze() re-runs
-            # its own protected leading pass regardless (safe/idempotent to
-            # do it twice), but a caller handing emit() an already-normalized
-            # tree (e.g. straight from ParseResult.ast) must not have lost an
-            # unfielded Every's AND-identity protection before getting here.
-            analyzed = ast.analyze(
-                ast._normalize_before_analysis(node), self.registry, default_mode=Multitoken.AND
-            )
+            analyzed = ast.analyze(ast.normalize(node), self.registry, default_mode=Multitoken.AND)
         except (
             ValueError,
             TypeError,

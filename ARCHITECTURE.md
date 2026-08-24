@@ -159,7 +159,16 @@ forked from in turn. Within the forked pipeline:
 module-level `normalize()` that flattens nested same-type groups, propagates
 `Nothing`/`Every` through boolean combinators, dedupes siblings, and merges
 boost multipliers, and a module-level `analyze()` (§1) that resolves
-per-field token analysis into the tree's own structure. This is the
+per-field token analysis into the tree's own structure. `normalize()` is
+safe to run at any pipeline stage, before or after `analyze()`: its one
+rule whose soundness depends on analysis having already happened, dropping
+an unfielded `Every` from an `And` as the identity element, is held back
+while any surviving sibling is a fielded, not-yet-analyzed `Term`/`Phrase`
+that could still empty out and leave that `Every` standing alone
+(DIVERGENCES.md entry 23's match-all face). `analyze()`'s own
+post-analysis pass applies the drop unconditionally, so the tree it
+returns is still canonical. That is what makes `analyze()` insensitive to
+whether its caller normalized first. This is the
 library's stability contract: emitters (present and future) depend only on
 `ast.py` and `fields.py`, never on `parser/`. `Term.analyzed` and
 `Phrase.words`/`Phrase.analyzed` are part of that contract too: they carry

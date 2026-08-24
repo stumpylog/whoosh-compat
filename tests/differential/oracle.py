@@ -487,11 +487,11 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
             # NUMERIC fields self-encode term text into sortable byte keys
             # too (whoosh.fields.NUMERIC.to_bytes); decode back to int.
             n = _SCHEMA[fieldname].from_bytes(q.text)
-            return ast.Term(field=ref, text=int(n))
+            return ast.Term(field=ref, text=int(n), analyzed=True)
         text: object = q.text
         if isinstance(text, bytes):
             text = text.decode("utf-8", "replace")
-        return ast.Term(field=ref, text=cast("str | int | bool", text))
+        return ast.Term(field=ref, text=cast("str | int | bool", text), analyzed=True)
 
     if isinstance(q, wq.And):
         and_subs = _map_group_children(q, reg)
@@ -558,6 +558,7 @@ def _to_ast_node(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
             text=" ".join(q.words),
             words=tuple(q.words),
             slop=q.slop,
+            analyzed=True,
         )
 
     if isinstance(q, wq.Prefix):
@@ -622,6 +623,17 @@ def to_ast(q: wq.Query, reg: FieldRegistry) -> ast.Node | None:
     corpus test skips these: see :func:`unmapped_reason` for *why*, used
     to give each such skip a distinct, auditable reason rather than a
     catch-all "unmappable").
+
+    Every mapped ``Term``/``Phrase`` leaf is marked ``analyzed``, because
+    whoosh runs its analyzers at *parse* time: the tree this returns is
+    already a post-analysis one, and the callers that canonicalize it with
+    ``ast.normalize()`` before comparing must get the post-analysis
+    algebra, notably the unconditional unfielded-``Every`` AND-identity
+    drop that ``normalize()`` holds back while a fielded leaf could still
+    empty out (DIVERGENCES.md entry 23's match-all face). The flag is
+    excluded from node equality, so it never affects the comparison
+    itself, and it is uniform across the mapped tree, so the
+    ``analyzed``-keyed duplicate-sibling dedupe behaves exactly as before.
     """
 
     return _to_ast(q, reg)

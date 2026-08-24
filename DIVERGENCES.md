@@ -1177,26 +1177,41 @@ parse-then-emit pipeline).
     `ANDNOT`/`ANDMAYBE`/`REQUIRE` extension below already implements
     correctly for its own operands), not a considered design choice, so it
     did not meet the bar the rest of this entry sets for "accept the
-    disagreement". The fix: `analyze()`'s leading normalize pass
-    (`whoosh_compat.ast._normalize_before_analysis`, distinct from the
-    public `normalize()`, which keeps its documented, tested behavior of
-    dropping the unfielded `Every` unconditionally for any caller invoking
-    it directly) keeps an unfielded `Every` as an ordinary `And` sibling
-    instead of dropping it immediately, so the main analysis pass's
-    existing survivor rule can protect it if the sibling empties out, or
-    correctly re-apply the AND-identity simplification if it doesn't.
+    disagreement". The fix: `normalize()` itself no longer drops an
+    unfielded `Every` from an `And` while any surviving sibling still
+    holds a fielded, not-yet-analyzed `Term`/`Phrase`
+    (`whoosh_compat.ast._can_still_empty_during_analysis`), so the main
+    analysis pass's existing survivor rule can protect it if that sibling
+    empties out, or correctly re-apply the AND-identity simplification if
+    it doesn't. The unconditional drop still happens, just later:
+    `analyze()`'s own post-analysis pass runs `normalize` in a private
+    `_post_analysis` mode where nothing is left to discover, producing the
+    same canonical shape whoosh's `And.normalize()` does.
 
-    Fixing `analyze()`'s own leading pass alone was not enough: both
-    `whoosh_compat.parse()` (whose result is documented as
+    The AND-identity drop's soundness is a property of *when* it runs, so
+    it belongs to `normalize()`'s rule rather than to a caller's choice of
+    entry point. An earlier form of this fix instead left `normalize()`
+    destructive and gave the pipeline's own call sites (`parse()`,
+    `emit()`, `analyze()`'s leading pass) a private protecting variant.
+    That moved the same bug one layer out rather than fixing it: any
+    caller who ran the public `normalize()` themselves before calling
+    `analyze()` still lost the `Every` before analysis could see the
+    sibling's fate, so `analyze(x)` and `analyze(normalize(x))` disagreed,
+    breaking `analyze()`'s documented normalization-insensitivity. With
+    the rule in `normalize()`, the two are the same function and the
+    property holds by construction. Only trees where the drop was already
+    premature change shape: an unfielded leaf is never analyzed at all
+    (`_leaf_tokens` returns it untouched), so it cannot empty out and the
+    drop still fires for it, and any already-analyzed sibling is settled
+    the same way.
+
+    Both `whoosh_compat.parse()` (whose result is documented as
     normalized-but-not-yet-analyzed, analysis happening later, at emit
-    time) and `TantivyEmitter.emit()` each independently called plain
-    `normalize()` on the tree before `analyze()` ever ran, so the
-    unfielded `Every` was still being destroyed one step upstream of the
-    fix, for any caller going through the real `parse()` -> `emit()` API
-    (proven with a real search, not just an AST comparison: see the test
-    reference below). All three call sites (`parse()`, `emit()`,
-    `analyze()`'s own leading pass) now use
-    `_normalize_before_analysis` instead.
+    time) and `TantivyEmitter.emit()` normalize before `analyze()` ever
+    runs, which is why the rule has to hold at that point for the real
+    `parse()` -> `emit()` API and not just inside `analyze()` (proven with
+    a real search, not just an AST comparison: see the test reference
+    below).
 
     `*:* title:the` and `*:* AND title:the` now compare EQUAL, along with
     the structural variants entry 23's old AST-level allowlist entry also
@@ -1252,8 +1267,10 @@ parse-then-emit pipeline).
     Test references: `tests/test_analyze.py`'s
     `test_and_unfielded_every_survives_a_newly_zero_token_sibling` and its
     neighboring control cases (a fielded `Every`, a real surviving sibling,
-    a genuinely pre-existing `Nothing`, and a direct `normalize()` call
-    proving the public function's own behavior is unchanged); and, proving
+    a genuinely pre-existing `Nothing`, direct `normalize()` calls pinning
+    both sides of the new rule, and
+    `test_analyze_is_insensitive_to_a_prior_direct_normalize`, which sweeps
+    the shape through every combinator that can wrap it); and, proving
     the fix reaches the real public API rather than just the AST-level
     `analyze()` call the harness exercises directly,
     `tests/emitter/test_acceptance_property.py`'s `SCENARIOS_EQUAL` entry

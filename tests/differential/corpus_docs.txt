@@ -176,14 +176,18 @@ has_correspondent:'  false'
 # --- CONFIRMED PARITY: entry 23's match-all face used to diverge here
 # (an unfielded match-all ANDed with a term whose analyzer
 # drops every token collapsed to Nothing() in whoosh-compat, stayed
-# Every() in real whoosh: analyze()'s own leading normalize pass dropped
+# Every() in real whoosh: the normalize pass ahead of analysis dropped
 # the unfielded Every as the And identity before analysis ever got a
 # chance to protect it from the sibling that was about to empty out).
-# Fixed: analyze()'s pre-pass now keeps the Every as an ordinary sibling
-# until the real analysis pass knows whether it needs protecting. Kept as
-# a live, ordinary comparison (not removed) to pin the fix: see
-# DIVERGENCES.md entry 23's "match-all face" subsection.
+# Fixed: normalize() itself now holds that drop back while any surviving
+# sibling is a fielded leaf analysis has not resolved yet, so the Every is
+# still there when the real analysis pass learns the sibling's fate. Kept
+# as live, ordinary comparisons (not removed) to pin the fix: see
+# DIVERGENCES.md entry 23's "match-all face" subsection. The parenthesized
+# spelling is the one that stayed broken for a caller who normalized the
+# tree itself before analyzing it.
 *:* title:the
+(*:*) AND (title:the)
 
 # --- KNOWN DIVERGENCE (design, allowlist.py): entry 20's other star-soup
 # face. "*:**" is read by whoosh's FieldsPlugin as the unfielded match-all

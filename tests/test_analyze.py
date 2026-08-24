@@ -12,11 +12,14 @@ from __future__ import annotations
 
 from itertools import pairwise
 
+import pytest
+
 import whoosh_compat as wc
 from whoosh_compat.ast import And
 from whoosh_compat.ast import AndMaybe
 from whoosh_compat.ast import AndNot
 from whoosh_compat.ast import Every
+from whoosh_compat.ast import Node
 from whoosh_compat.ast import Not
 from whoosh_compat.ast import Nothing
 from whoosh_compat.ast import Or
@@ -514,19 +517,126 @@ def test_and_unfielded_every_still_poisoned_by_pre_existing_nothing() -> None:
     assert result == Nothing()
 
 
-def test_direct_normalize_of_unfielded_every_and_raw_term_is_unaffected() -> None:
-    """This fix must never change plain, direct ``normalize()`` calls: a
-    direct, standalone ``normalize()`` call (not ``analyze()``, not
-    ``whoosh_compat.parse()``, not ``TantivyEmitter.emit()`` -- every one
-    of which now uses the protecting ``_normalize_before_analysis``
-    instead) on the exact same shape must keep today's documented, tested
-    behavior -- the unfielded Every is the AND identity and is dropped,
-    since ``normalize()`` alone has no way to know whether the surviving
-    sibling will later empty out.
+def test_direct_normalize_keeps_the_every_while_a_sibling_can_still_empty() -> None:
+    """Plain, direct ``normalize()`` must keep the unfielded Every when any
+    surviving sibling is a fielded leaf analysis has not resolved yet, since
+    that leaf may still empty out and leave the Every standing alone. The
+    AND-identity drop is only sound once nothing below can still vanish;
+    applying it earlier is what made ``analyze()`` disagree with
+    ``analyze(normalize(...))``.
     """
     node = And(children=(Every(), Term(field=CONTENT, text="")))
     result = normalize(node)
-    assert result == Term(field=CONTENT, text="")
+    assert result == And(children=(Every(), Term(field=CONTENT, text="")))
+
+
+def test_direct_normalize_drops_the_every_once_siblings_are_analyzed() -> None:
+    """The AND-identity drop still fires, unchanged, once no sibling can
+    empty out any more: an already-analyzed sibling is settled, so
+    ``Every() AND invoice`` canonicalizes to ``invoice`` exactly as before.
+    """
+    node = And(children=(Every(), Term(field=CONTENT, text="invoice", analyzed=True)))
+    result = normalize(node)
+    assert result == Term(field=CONTENT, text="invoice", analyzed=True)
+
+
+def test_direct_normalize_drops_the_every_for_an_unanalyzable_sibling() -> None:
+    """An unfielded leaf is never subject to analysis at all (analysis only
+    resolves leaves whose field the registry can resolve), so it can never
+    empty out and the AND-identity drop stays sound for it, keeping
+    ``normalize()``'s behavior for a hand-built unfielded tree unchanged.
+    """
+    node = And(children=(Every(), Term(field=None, text="invoice")))
+    result = normalize(node)
+    assert result == Term(field=None, text="invoice")
+
+
+# -- analyze() is insensitive to a prior direct normalize() ---------------
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        pytest.param(
+            And(children=(Every(), Term(field=CONTENT, text=""))),
+            id="and-every-with-zero-token-sibling",
+        ),
+        pytest.param(
+            And(
+                children=(
+                    Every(),
+                    Term(field=CONTENT, text=""),
+                    Term(field=CONTENT, text="invoice"),
+                )
+            ),
+            id="and-every-with-zero-token-and-surviving-siblings",
+        ),
+        pytest.param(
+            And(children=(And(children=(Every(), Term(field=CONTENT, text=""))),)),
+            id="nested-and-every-with-zero-token-sibling",
+        ),
+        pytest.param(
+            Not(child=And(children=(Every(), Term(field=CONTENT, text="")))),
+            id="not-of-and-every-with-zero-token-sibling",
+        ),
+        pytest.param(
+            Or(
+                children=(
+                    And(children=(Every(), Term(field=CONTENT, text=""))),
+                    Term(field=CONTENT, text="invoice"),
+                )
+            ),
+            id="or-of-and-every-with-zero-token-sibling",
+        ),
+        pytest.param(
+            AndNot(
+                positive=And(children=(Every(), Term(field=CONTENT, text=""))),
+                negative=Term(field=CONTENT, text="invoice"),
+            ),
+            id="andnot-positive-and-every-with-zero-token-sibling",
+        ),
+        pytest.param(
+            AndMaybe(
+                required=And(children=(Every(), Term(field=CONTENT, text=""))),
+                optional=Term(field=CONTENT, text="invoice"),
+            ),
+            id="andmaybe-required-and-every-with-zero-token-sibling",
+        ),
+        pytest.param(
+            Require(
+                scored=And(children=(Every(), Term(field=CONTENT, text=""))),
+                filter_only=Term(field=CONTENT, text="invoice"),
+            ),
+            id="require-scored-and-every-with-zero-token-sibling",
+        ),
+        pytest.param(
+            Or(children=(Every(), Term(field=CONTENT, text=""))),
+            id="or-every-with-zero-token-sibling",
+        ),
+        pytest.param(
+            And(children=(Every(), Phrase(field=CONTENT, text="", words=()))),
+            id="and-every-with-zero-token-phrase-sibling",
+        ),
+        pytest.param(
+            And(children=(Every(field=TAG), Term(field=CONTENT, text=""))),
+            id="and-fielded-every-with-zero-token-sibling",
+        ),
+        pytest.param(
+            And(children=(Every(), Nothing())),
+            id="and-every-with-pre-existing-nothing",
+        ),
+    ],
+)
+def test_analyze_is_insensitive_to_a_prior_direct_normalize(node: Node) -> None:
+    """``analyze()``'s contract: a not-yet-normalized tree analyzes to the
+    same result as its already-normalized form. A caller that runs plain
+    ``normalize()`` itself before calling ``analyze()`` must not get a
+    different answer from one that hands ``analyze()`` the raw tree, which
+    requires ``normalize()`` to never discard something analysis still
+    needs (here, an unfielded ``Every`` whose sibling turns out to be
+    zero-token).
+    """
+    assert analyze(node, REG) == analyze(normalize(node), REG)
 
 
 # -- spans --------------------------------------------------------------

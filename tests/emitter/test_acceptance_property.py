@@ -359,13 +359,11 @@ SCENARIOS_EQUAL = [
     # DIVERGENCES.md entry 23's match-all face, through the real public
     # pipeline (wc.parse() -> emit() -> a live tantivy search), not just
     # an AST comparison: "the" is a StandardAnalyzer stopword, so this
-    # must match every document on both sides. Added after discovering
-    # the AST-level fix alone did not reach this path: wc.parse() and
-    # TantivyEmitter.emit() each call ast.normalize() directly (not
-    # through analyze()'s own protected pre-pass), so the unfielded Every
-    # was still being dropped before analysis ever ran, for any caller
-    # going through the real API instead of the differential harness's
-    # raw-parse bypass.
+    # must match every document on both sides. Both spellings run here
+    # because wc.parse() and TantivyEmitter.emit() each call
+    # ast.normalize() on the tree before analysis ever runs, so the rule
+    # that keeps the unfielded Every alive has to hold in normalize()
+    # itself for the real API, not only inside analyze().
     pytest.param("*:* title:the", [1, 2, 3, 4], id="entry23-match-all-face"),
 ]
 
@@ -376,6 +374,26 @@ def test_scenario_equal(
 ) -> None:
     assert whoosh_search_ids_prop(windex_prop, q) == expected
     assert tantivy_search_ids_prop(tindex_prop, q) == expected
+
+
+def test_parenthesized_match_all_face_matches_everything(tindex_prop: TIndex) -> None:
+    """DIVERGENCES.md entry 23's match-all face in its parenthesized
+    spelling, which is the one a caller who normalized the tree themselves
+    before analyzing it used to get wrong (the unfielded ``Every`` dropped
+    as the AND identity before analysis could learn the sibling was a
+    stopword, leaving "matches nothing").
+
+    Only the whoosh-compat side is asserted here, unlike
+    ``entry23-match-all-face`` above: real whoosh parses this spelling into
+    a tree containing a literal ``And([])`` (the parenthesized zero-token
+    term), and *searching* it raises ``ValueError`` out of
+    ``CompoundQuery.estimate_size``'s ``min()`` over no subqueries. That is
+    a defect in the oracle, not a behavior to reproduce, so there is no
+    oracle result set to compare against. The AST-level comparison for this
+    exact query does run, and agrees, from
+    ``tests/differential/corpus_docs.txt``.
+    """
+    assert tantivy_search_ids_prop(tindex_prop, "(*:*) AND (title:the)") == [1, 2, 3, 4]
 
 
 def test_created_range_near_local_midnight_is_a_result_level_divergence(
