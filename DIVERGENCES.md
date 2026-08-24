@@ -3024,3 +3024,69 @@ parse-then-emit pipeline).
     and `tests/differential/corpus_docs.txt`'s `title:[total 5]` /
     `title:[into TO 5]` lines, with their matching
     `tests/differential/allowlist.py` entries.
+
+57. **A second (or later) rejected field-name candidate in a row silently
+    discards the earlier one's text instead of merging it in, and any
+    merge at all leaves the surviving node's span shorter than its text
+    (whoosh bug, fixed in whoosh-compat).** `FieldsPlugin.do_fieldnames`
+    (`src/whoosh_compat/parser/plugins.py`, forked verbatim from whoosh's
+    identical loop) cleans up `FieldnameNode`s the low-level tagger created
+    for a `word:` -shaped run that turned out not to name a registered
+    field, folding each rejected candidate's `.original` text back onto
+    whatever comes after it. The loop tracked only a single
+    `prev_field_node` reference: when a second rejected candidate followed
+    a first one with nothing recognized in between, assigning the new node
+    to `prev_field_node` simply overwrote the old reference, and the first
+    candidate's `.original` was never read again by anything. This is not
+    hypothetical: an unquoted value containing two colons where neither
+    interior segment is a real field name reaches exactly this path.
+
+    Measured directly (`aa:bb:cc`, no field named `aa` or `bb` in the
+    schema): the tagger emits `FieldnameNode("aa", "aa:")`,
+    `FieldnameNode("bb", "bb:")`, `WordNode("cc")`. Real whoosh's
+    `do_fieldnames` reduces this to the single word `"bb:cc"` per default
+    field (confirmed against the pinned oracle: `content:bb AND
+    content:cc`, and the same pair on every other default text field) with
+    `"aa:"` gone with no trace anywhere in the resulting query, not even
+    folded into a longer literal term. There is no reading under which the
+    user's `"aa:"` was ever consulted. whoosh-compat now instead accumulates
+    every rejected candidate's `.original` text, in order, before folding
+    it onto the next node, so `aa:bb:cc` keeps meaning the literal text the
+    user typed (`"aa:bb:cc"` per default field, further tokenized by each
+    field's own analyzer downstream exactly as `"bb:cc"` was before).
+
+    The companion span bug is present even with only a *single* rejected
+    candidate, and shares the same root cause (this fold-in never touched
+    `startchar`): `FieldsPlugin.do_fieldnames`'s merge step reassigns the
+    surviving node's `.text` to the concatenation but leaves `.startchar`
+    pointing at the surviving node's own original position, so
+    `endchar - startchar` no longer matches `len(text)`. This is the same
+    merge code behind the leftover fragment DIVERGENCES.md entry 54's own
+    "What `raw_value` carries" paragraph discusses beside a `BAD_DATE`
+    diagnostic: measured directly here, for `added:2005-01-01T00:00:00Z`
+    that leftover was `Term(startchar=23, endchar=26, text='00:00Z')`, a
+    3-character span holding 6 characters of text. That specific example is
+    fixed by this same change, not a separate date-only fix. Now both bugs
+    are fixed together: the merge widens
+    `startchar` back to the earliest rejected candidate's own start, so a
+    node's span always covers exactly its own text.
+
+    This is a general-purpose parser fix, not scoped to dates or to any
+    particular field kind: it changes what `FieldsPlugin.do_fieldnames`
+    reconstructs for *any* unquoted value containing consecutive
+    unrecognized `word:` runs, on any field (or none). Verified against the
+    full test suite and differential corpus that no currently-passing
+    comparison flips: every corpus query that reaches a `BAD_DATE`
+    diagnostic already takes the entry-6 diagnostic skip regardless of the
+    leftover term's exact text (`ast.Node.text` differences there are moot,
+    since the whole comparison is skipped), and the only diagnostic-free
+    corpus line touching a single rejected candidate (`**:::`, entry 20's
+    neighborhood) only has its span change, which `ast.Node` excludes from
+    equality by design (`compare=False`).
+
+    Test references: `tests/test_plugins_unit.py`'s
+    `test_do_fieldnames_demoted_span_widens_to_cover_merged_text`,
+    `test_do_fieldnames_consecutive_demoted_candidates_keep_all_text`, and
+    `test_do_fieldnames_consecutive_demoted_candidates_at_end_of_group`;
+    `tests/differential/corpus_docs.txt`'s `aa:bb:cc` line, with its
+    matching `tests/differential/allowlist.py` entry.

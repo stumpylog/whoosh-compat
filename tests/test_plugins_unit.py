@@ -341,6 +341,86 @@ def test_do_fieldnames_no_registry_accepts_everything() -> None:
     assert result[0].fieldname == "nope"
 
 
+# --- do_fieldnames span/text consistency for demoted fieldname text --------
+#
+# The low-level tagger (QueryParser.tag) treats any "word:"-looking run
+# anywhere in the query as a candidate field boundary, so an unquoted value
+# containing a colon (an RFC3339 timestamp, "http://...") gets split into a
+# FieldnameNode candidate plus surrounding text at the tagging stage, before
+# any filter runs. do_fieldnames demotes a candidate that isn't a real field
+# by prepending its .original back onto the following node's .text -- these
+# tests pin two invariants that demotion must hold, both reachable from a
+# single unquoted value and both silently broken before this fix (inherited
+# verbatim from upstream whoosh's identical do_fieldnames, confirmed against
+# the vendored oracle): the merged node's span must widen to cover the
+# prepended text, and if the value contains a SECOND colon in a row, the
+# first candidate's text must not be discarded entirely.
+
+
+def test_do_fieldnames_demoted_span_widens_to_cover_merged_text(
+    registry: FieldRegistry,
+) -> None:
+    """A single demoted FieldnameNode merging into the next node must widen
+    that node's startchar back to the FieldnameNode's own start, not leave
+    it pointing only at the following node's original position.
+    """
+    parser = StubParser(registry)
+    plugin = plugins.FieldsPlugin()
+    fn = syntax.FieldnameNode("nope", "nope:")
+    fn.startchar, fn.endchar = 0, 5
+    word = syntax.WordNode("x")
+    word.startchar, word.endchar = 5, 6
+    group = syntax.AndGroup([fn, word])
+    result = plugin.do_fieldnames(parser, group)
+    assert len(result) == 1
+    assert result[0].text == "nope:x"
+    assert (result[0].startchar, result[0].endchar) == (0, 6)
+
+
+def test_do_fieldnames_consecutive_demoted_candidates_keep_all_text(
+    registry: FieldRegistry,
+) -> None:
+    """Two rejected FieldnameNode candidates in a row (e.g. from
+    "2026-08-04T10:30:00Z", where "01T00:" and "00:" both look like field
+    boundaries) must both survive into the final merged text, in order and
+    with nothing dropped -- not just the immediately preceding one.
+    """
+    parser = StubParser(registry)
+    plugin = plugins.FieldsPlugin()
+    fn1 = syntax.FieldnameNode("01T00", "01T00:")
+    fn1.startchar, fn1.endchar = 0, 6
+    fn2 = syntax.FieldnameNode("00", "00:")
+    fn2.startchar, fn2.endchar = 6, 9
+    word = syntax.WordNode("00Z")
+    word.startchar, word.endchar = 9, 12
+    group = syntax.AndGroup([fn1, fn2, word])
+    result = plugin.do_fieldnames(parser, group)
+    assert len(result) == 1
+    assert result[0].text == "01T00:00:00Z"
+    assert (result[0].startchar, result[0].endchar) == (0, 12)
+
+
+def test_do_fieldnames_consecutive_demoted_candidates_at_end_of_group(
+    registry: FieldRegistry,
+) -> None:
+    """The same accumulation must also happen when the run of rejected
+    candidates is the last thing in the group (the final flush path, not
+    the merge-into-next-node path).
+    """
+    parser = StubParser(registry)
+    plugin = plugins.FieldsPlugin()
+    fn1 = syntax.FieldnameNode("a", "a:")
+    fn1.startchar, fn1.endchar = 0, 2
+    fn2 = syntax.FieldnameNode("b", "b:")
+    fn2.startchar, fn2.endchar = 2, 4
+    group = syntax.AndGroup([fn1, fn2])
+    result = plugin.do_fieldnames(parser, group)
+    assert len(result) == 1
+    assert result[0].fieldname is None
+    assert result[0].text == "a:b:"
+    assert (result[0].startchar, result[0].endchar) == (0, 4)
+
+
 # --- CommaValuesPlugin -------------------------------------------------------
 
 

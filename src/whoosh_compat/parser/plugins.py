@@ -577,14 +577,24 @@ class FieldsPlugin(Plugin):
                 if isinstance(node, fnclass) and not self._fieldname_is_recognized(
                     registry, node, group, i
                 ):
+                    if prev_field_node is not None:
+                        # A second (or later) rejected candidate in a row,
+                        # e.g. "01T00:" then "00:" out of an unquoted
+                        # "...T00:00:00Z" timestamp: chain onto the
+                        # already-pending original text and widen back to
+                        # its start, rather than overwriting prev_field_node
+                        # and losing the earlier candidate's text outright.
+                        node.original = prev_field_node.original + node.original  # type: ignore[attr-defined]
+                        node.startchar = prev_field_node.startchar
                     prev_field_node = node
                     continue
                 elif prev_field_node:
                     # If prev_field_node is not None, it contains a field node
-                    # that appeared before this node but isn't in the
-                    # registry, so we'll convert it to text here
+                    # (or chain of them) that appeared before this node but
+                    # isn't in the registry, so we'll convert it to text here
                     if node.has_text:
                         node.text = prev_field_node.original + node.text  # type: ignore[attr-defined]
+                        node.startchar = prev_field_node.startchar
                     else:
                         newgroup.append(syntax.to_word(prev_field_node))
                     prev_field_node = None

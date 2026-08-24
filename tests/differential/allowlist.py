@@ -926,6 +926,30 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         ),
         DivergenceKind.MISMATCH,
     ),
+    # whoosh-bug (DIVERGENCES.md entry 57): an unquoted value with two
+    # consecutive colon-fieldname-looking segments where neither names a
+    # real field ("aa:bb:cc": the tagger produces FieldnameNode("aa"),
+    # FieldnameNode("bb"), WordNode("cc"), and both fieldnames are
+    # rejected). Real whoosh's do_fieldnames keeps only the most recently
+    # rejected candidate, so "aa:" is discarded with no trace and the
+    # oracle reads this as the two words "bb"/"cc" per default field;
+    # whoosh-compat's fixed do_fieldnames accumulates every rejected
+    # candidate's text in order, so the value stays the literal "aa:bb:cc"
+    # the user typed. Scoped to exactly this measured shape (two
+    # non-word-boundary-prefixed lowercase segments, no digits, no
+    # existing field name): not generalized past what a query with
+    # zero registered fields matching either segment produces.
+    (
+        re.compile(r"(?:^|(?<=[\s(]))aa:bb:cc(?:\^[\d.]+)?(?=$|[\s)])"),
+        (
+            "whoosh-bug (DIVERGENCES.md entry 57): a second consecutive"
+            " rejected field-name candidate ('aa:bb:cc') has its earlier"
+            " candidate's text ('aa:') silently discarded by real whoosh's"
+            " do_fieldnames; whoosh-compat's fixed copy accumulates it"
+            " instead, keeping the literal text the user typed"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
     # design: a bare "*" wildcard on a field (`title:*`) whoosh-compat
     # simplifies to Every(field) (see QueryParser.wildcard_query's
     # docstring: "the text is exactly '*' -> Every"); real whoosh's

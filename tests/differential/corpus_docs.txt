@@ -217,6 +217,16 @@ has_correspondent:'  false'
 :*:**
 **:*:
 
+# --- KNOWN DIVERGENCE (whoosh-bug, DIVERGENCES.md entry 57, allowlist.py):
+# an unquoted value with two consecutive colon-fieldname-looking segments
+# where neither is a real field. The tagger produces FieldnameNode("aa"),
+# FieldnameNode("bb"), WordNode("cc"); real whoosh's do_fieldnames keeps
+# only the most recently rejected candidate and silently drops "aa:", so
+# the oracle reads this as the two words "bb"/"cc" per default field.
+# whoosh-compat's fixed do_fieldnames accumulates every rejected
+# candidate's text instead, keeping the literal "aa:bb:cc" the user typed.
+aa:bb:cc
+
 # --- KNOWN DIVERGENCE (whoosh-bug, DIVERGENCES.md entry 56, allowlist.py):
 # a range value that itself begins with a to-prefixed word ("total",
 # "into") is silently misparsed by real whoosh's word-boundary-free
