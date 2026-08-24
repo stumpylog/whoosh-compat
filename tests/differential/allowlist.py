@@ -1345,6 +1345,17 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         # scans from every position in the string in turn, each one
         # itself linear: quadratic overall. Anchoring makes the match
         # attempt run exactly once.
+        #
+        # The equivalence depends on the query string having no embedded
+        # newline: `.` (no DOTALL) cannot cross one, so a required clause
+        # sitting after a `\n` with irrelevant text before it would be
+        # visible searching from a later start position but invisible
+        # from position 0, breaking "a hit anywhere is a hit at the
+        # start". Every query source this module ever sees is newline-free
+        # by construction (corpus files are read via `.splitlines()`, and
+        # every hypothesis text strategy in `strategies.py` draws only
+        # letter/digit characters), so this holds today; it would need
+        # re-checking if either source ever admitted a literal `\n`.
         re.compile(
             r"\A(?=.*\bNOT\b)(?=.*\(\))"
             rf"(?=.*\b(?:{TEXT_FIELDS_PATTERN}):['\"]?"
