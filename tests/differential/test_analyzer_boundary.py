@@ -92,8 +92,8 @@ def test_lower_fold_token_count_matches_whoosh(value: str) -> None:
     with paperless-ngx's plain (unstemmed) host chain for this value?
 
     An un-``xfail``-marked failure here is a new, untriaged divergence
-    class from this module's own investigation; a marked one is attributed
-    to entry 15's Multitoken.DEFAULT boundary regex (see
+    class from this module's own investigation; a marked one is a known,
+    permanent analyzer-fidelity difference, DIVERGENCES.md entry 59 (see
     ``REPRESENTATIVE_VALUES``' ``_XFAIL_MULTITOKEN_BOUNDARY``).
     """
     whoosh_tokens = whoosh_analyze(value)
