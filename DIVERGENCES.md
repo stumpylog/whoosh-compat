@@ -326,8 +326,9 @@ parse-then-emit pipeline).
     (the *leading*-star form from the actual issue report, where this bug
     does not trigger at all, see entry 14 below).
 
-14. **JSON dotted-path fields (`notes.user`, `custom_fields.value`, ...)
-    are a whoosh-compat-only concept with no whoosh analogue whatsoever
+14. **The dot-inclusive fieldname tagger that lets JSON dotted-path fields
+    (`notes.user`, `custom_fields.value`, ...) resolve also tags any other
+    unregistered dotted run the same way, diverging on every such value
     (design).** Real whoosh has no JSON field type; the paperless-ngx
     schema this library's oracle clones had `notes`/`custom_fields` as
     plain `TEXT()` fields instead. There is no query a whoosh user could

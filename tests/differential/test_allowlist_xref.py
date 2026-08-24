@@ -694,9 +694,8 @@ def test_entry_14_claims_dotted_name_colon_shapes(q: str) -> None:
     ],
 )
 def test_entry_14_does_not_claim_dotless_or_quoted_shapes(q: str) -> None:
-    """Each shape here compares EQUAL to the oracle (measured), or (the
-    `9.90` line) diverges for an unrelated reason; entry 14's dotted-name
-    pattern must not claim any of them.
+    """Each shape here compares EQUAL to the oracle (measured); entry 14's
+    dotted-name pattern must not claim any of them.
     """
 
     reason = allowed_reason(q)
