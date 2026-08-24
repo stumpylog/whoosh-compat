@@ -163,8 +163,9 @@ per-field token analysis into the tree's own structure. `normalize()` is
 safe to run at any pipeline stage, before or after `analyze()`: its one
 rule whose soundness depends on analysis having already happened, dropping
 an unfielded `Every` from an `And` as the identity element, is held back
-while any surviving sibling is a fielded, not-yet-analyzed `Term`/`Phrase`
-that could still empty out and leave that `Every` standing alone
+while any surviving sibling still holds a fielded, not-yet-analyzed
+`Term`/`Phrase` that could still empty out and leave that `Every` standing
+alone
 (DIVERGENCES.md entry 23's match-all face). `analyze()`'s own
 post-analysis pass applies the drop unconditionally, so the tree it
 returns is still canonical. That is what makes `analyze()` insensitive to

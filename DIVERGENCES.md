@@ -1277,6 +1277,13 @@ parse-then-emit pipeline).
     `entry23-match-all-face`, which runs `whoosh_compat.parse()`
     -> `emit()` against a live tantivy index built with a real
     stopword-dropping analyzer and asserts the matched-document-id set.
+    The parenthesized spelling gets its own scenario,
+    `test_parenthesized_match_all_face_matches_everything`, since real
+    whoosh's own search of that exact tree raises rather than returning a
+    result to compare against, so that test asserts only the
+    whoosh-compat side; the AST-level comparison for the same spelling
+    runs and agrees, from a `tests/differential/corpus_docs.txt` corpus
+    line.
 
     The same accepted tradeoff extends to `ANDNOT`/`ANDMAYBE`/`REQUIRE`'s
     positive/required/scored operand, found by the acceptance-layer result
