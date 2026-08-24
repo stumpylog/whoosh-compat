@@ -84,6 +84,12 @@ custom_fields.name:"Contract Number" custom_fields.value:1312
 notes.user:alice
 notes.note:reminder
 notes.user:alice notes.note:insurance
+# The same tagger-cut difference applies to any dotted run followed by a
+# colon, registered or not: whoosh-compat reads "ab.cd:9" as one rejected
+# candidate folded onto its value, real whoosh only ever matches "cd:" and
+# leaves "ab." attached to whatever precedes it.
+title:ab.cd:9 OR x
+ab.cd:ef
 
 # --- compared: comma_values quote-escape (design, DIVERGENCES.md entry 17)
 # is a whoosh-compat-only feature at the raw parse-tree level (real whoosh's
@@ -229,7 +235,11 @@ has_correspondent:'  false'
 # the oracle reads this as the two words "bb"/"cc" per default field.
 # whoosh-compat's fixed do_fieldnames accumulates every rejected
 # candidate's text instead, keeping the literal "aa:bb:cc" the user typed.
+# The same bug is reached by any two rejected candidates in a row, whatever
+# the segments say: in "zzz:and:9" the discarded "zzz:" leaves the oracle
+# reading the value as "and:9", with no trace of what the user typed.
 aa:bb:cc
+zzz:and:9
 
 # --- KNOWN DIVERGENCE (whoosh-bug, DIVERGENCES.md entry 56, allowlist.py):
 # a range value that itself begins with a to-prefixed word ("total",
@@ -249,3 +259,12 @@ title:[into TO 5]
 # similarity ("a zero-token thing survives in whoosh but not
 # whoosh-compat"): no Every node is involved here at all.
 "to"
+
+# --- KNOWN DIVERGENCE (design, DIVERGENCES.md entry 15, allowlist.py): a
+# SINGLE-QUOTED unknown-field value whose comma_values pieces contain
+# characters that would be value boundaries outside the quotes (an interior
+# colon, whitespace). Both sides hand the tag KEYWORD field exactly the
+# same two pieces; only the combinator differs, which is entry 15's own
+# Multitoken.DEFAULT question.
+zzz:'a:b,c'
+zzz:'a b,c'

@@ -300,6 +300,19 @@ _TEXT_SURVIVOR = rf"(?:\w+(?:\.\w+)+|(?!{_TEXT_STOPWORD})\w{{2,}}|İ)"
 # the value already carries an explicit field prefix.
 _KEYWORD_SURVIVOR = r"""[^,\s():'"*?\[\]{}]+"""
 _FIELDED_KEYWORD_SURVIVOR = r"""[^,\s()'"*?\[\]{}]+"""
+# A comma_values piece inside a SINGLE-QUOTED value that already carries an
+# unknown-field prefix ("zzz:'a:b,c'"). Everything the two definitions above
+# exclude for query-grammar boundary reasons -- colon, whitespace, parens --
+# is ordinary literal text here: the quote plugin claims the whole run
+# before FieldsPlugin's tagger or the whitespace/paren grammar can cut it,
+# and the closing quote (still excluded, so it terminates the match) is the
+# only boundary the piece has. Measured: "zzz:'a:b,c'", "zzz:'a b,c'" and
+# "zzz:'a(b,c'" all reach the tag KEYWORD field with the SAME text on both
+# sides and differ only in this entry's And-vs-Or combinator, while the
+# comma-less "zzz:'a:b'" has one piece and compares EQUAL. `*`/`?` and the
+# brackets stay excluded for the same plugin-claims-it-first reasons as
+# above.
+_UF_QUOTED_KEYWORD_SURVIVOR = r"""[^,'"*?\[\]{}]+"""
 _KEYWORD_FILLER = r","
 # One whole token StopFilter drops, usable as filler between two TEXT
 # survivors: a stopword, or a single isolated word character (shorter than
@@ -746,6 +759,48 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
             " whoosh's non-dot-aware tagger; 'attrs' is registered as a JSON"
             " field only on whoosh-compat's side (added purely to reach"
             " generator vocabulary), real whoosh has no such field at all"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
+    # design (DIVERGENCES.md entry 14, generalized): the three entries above
+    # name the specific dotted field names this project's corpus and
+    # generators use, but the mechanism is not about those names at all: it
+    # is about the two taggers' regexes. whoosh-compat's is `[\w.]+:` and
+    # whoosh's is `\w+:`, so ANY dotted run immediately followed by a colon
+    # is cut in a different place by each side, whether or not the dotted
+    # name resolves to anything. Measured for a name that is registered
+    # nowhere at all: "title:ab.cd:9 OR x" parses to the single fielded
+    # value title:'ab.cd:9' on whoosh-compat's side (its tagger takes
+    # "ab.cd:" as one rejected candidate and folds it back onto the "9"),
+    # but to `title:ab AND <multifield "cd:9">` on the oracle's (its
+    # tagger cannot reach past the dot, so it only ever matches "cd:",
+    # leaving "ab." attached to the title prefix). Same cut for a bare
+    # "ab.cd:ef", a parenthesized "(ab.cd:ef)", a multi-dot
+    # "ab.cd.ef:gh", and a dotted run following an unknown field's own
+    # colon ("zzz:ab.cd:ef").
+    #
+    # Scoped by anchoring the whole value, not just the dotted run: the
+    # match starts at a real value boundary (start of string, whitespace,
+    # an opening paren) and may step over one leading field prefix
+    # (`[\w.]+:`, known or not) before requiring the dotted run. Anchoring
+    # only on "a colon precedes the dotted run" instead would reach inside
+    # a quoted value that happens to contain a colon-fielded fragment
+    # (measured: the fuzz soup '... created"type:a.b:asn"a' compares EQUAL,
+    # because a quote plugin claims that whole run before FieldsPlugin's
+    # tagger ever sees inside it, so neither tagger cuts there at all).
+    # The same anchoring is what keeps "title:'a.b:c'", "'a.b:c'" and
+    # their double-quoted spellings unclaimed, all measured EQUAL. A dotted
+    # run with no colon after it is not a field candidate on either side
+    # ("title:ab.cd", "9.90", both EQUAL, see entry 46's "a dot never
+    # splits a token" finding).
+    (
+        re.compile(r"(?:^|(?<=[\s(]))(?:[\w.]+:)?\w+(?:\.\w+)+:"),
+        (
+            "DIVERGENCES.md entry 14 (design, generalized): the dot-inclusive"
+            " FieldsPlugin tagger ([\\w.]+: vs whoosh's \\w+:) cuts any dotted"
+            " name followed by a colon in a different place than whoosh's"
+            " tagger does, so the two trees diverge whether or not the dotted"
+            " name names a registered JSON field"
         ),
         DivergenceKind.MISMATCH,
     ),
@@ -1200,18 +1255,39 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # oracle reads this as the two words "bb"/"cc" per default field;
     # whoosh-compat's fixed do_fieldnames accumulates every rejected
     # candidate's text in order, so the value stays the literal "aa:bb:cc"
-    # the user typed. Scoped to exactly this measured shape (two
-    # non-word-boundary-prefixed lowercase segments, no digits, no
-    # existing field name): not generalized past what a query with
-    # zero registered fields matching either segment produces.
+    # the user typed.
+    #
+    # Scoped to the mechanism rather than to that one measured spelling:
+    # two `\w+:` runs back to back where NEITHER names a registered field
+    # (the negative lookaheads), starting where a value can start (start of
+    # string, whitespace, an opening paren). The segments' own content is
+    # irrelevant to the bug, so nothing here models the analyzer: measured,
+    # "zzz:and:9" (a stopword segment), "zzz:a:the", "zzz:a:b", "zzz:9:9"
+    # and "ab:ab:ab" all reach the oracle with the first candidate's text
+    # gone, exactly as "aa:bb:cc" does, and all diverge.
+    #
+    # Three deliberate exclusions. A recognized field name in either
+    # position stops the candidate run on both sides ("title:ab:cd",
+    # "zzz:title:cd", both EQUAL), which the lookaheads reject. A dot
+    # anywhere in the run makes the two taggers cut in different places
+    # BEFORE this bug can apply, which is entry 14's mechanism and is
+    # claimed there instead (`\w` excludes the dot, and the start anchor
+    # stops the match from beginning part-way through a dotted run). And
+    # what follows the second colon must be a word character or the value's
+    # own end, so a quoted or bracketed continuation ("zzz:ab:'x'",
+    # "zzz:ab:[2020 TO 2021]"), where a quote or range plugin claims the
+    # rest before either tagger's cut matters, stays out of this entry.
     (
-        re.compile(r"(?:^|(?<=[\s(]))aa:bb:cc(?:\^[\d.]+)?(?=$|[\s)])"),
+        re.compile(
+            rf"(?:^|(?<=[\s(]))(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared):)\w+:"
+            rf"(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared):)\w+:(?=[\w\s)]|$)"
+        ),
         (
             "whoosh-bug (DIVERGENCES.md entry 57): a second consecutive"
-            " rejected field-name candidate ('aa:bb:cc') has its earlier"
-            " candidate's text ('aa:') silently discarded by real whoosh's"
-            " do_fieldnames; whoosh-compat's fixed copy accumulates it"
-            " instead, keeping the literal text the user typed"
+            " rejected field-name candidate (the 'bb:' of 'aa:bb:cc') has"
+            " the earlier candidate's text ('aa:') silently discarded by"
+            " real whoosh's do_fieldnames; whoosh-compat's fixed copy"
+            " accumulates it instead, keeping the literal text the user typed"
         ),
         DivergenceKind.MISMATCH,
     ),
@@ -1800,6 +1876,19 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # quote is excluded from the bare and unknown-field fillers for the
     # same reason (it is the value's delimiter, never literal text in
     # it).
+    # The unknown-field alternative additionally requires that the value
+    # does not itself START with a recognized field name plus a colon: a
+    # recognized name stops the rejected-candidate run on both sides, so
+    # "zzz:title:cd" and "zzz:content:foobar" fold the rejected "zzz:" to
+    # its own word and hand the rest to the recognized field rather than
+    # demoting one multi-token blob, and both measure EQUAL.
+    # Two neighbouring mechanisms are deliberately left to their own
+    # entries rather than claimed here, since a reason string has to name
+    # the cause the query actually exhibits: a dotted run followed by a
+    # colon ("zzz:ab.cd:ef") is entry 14's tagger-regex cut, and two
+    # consecutive rejected field-name candidates ("zzz:and:9") are entry
+    # 57's discarded-candidate whoosh bug. Both entries sit earlier in
+    # ALLOW, so they claim those shapes first.
     (
         re.compile(
             r"(?:^|(?<=[\s(]))(?P<e15bq>')?"
@@ -1810,12 +1899,13 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
             r"(?(e15bq)'|)(?=[\s)]|$)"
             rf"|(?:^|(?<=[\s(]))\b(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared)\b)"
             rf"(?!{_TEXT_STOPWORD})(?P<e15ufpfx>\w{{2,}}):"
+            rf"(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared):)"
             rf"{_RANGE_LOOKAHEAD}"
             r'(?!")'
             r"(?:"
             rf"'(?:(?!{_tail_not_all_identical_to_prefix(_UF_QUOTED_FILLER, 'e15ufpfx')})"
             rf"{_survivor_tail(_TEXT_SURVIVOR, _UF_QUOTED_FILLER)}"
-            rf"|{_survivor_chain(_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})'(?=[\s)]|$)"
+            rf"|{_survivor_chain(_UF_QUOTED_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})'(?=[\s)]|$)"
             r"|"
             rf"(?:(?!{_tail_not_all_identical_to_prefix(_UF_FILLER, 'e15ufpfx')})"
             rf"{_survivor_tail(_TEXT_SURVIVOR, _UF_FILLER)}"

@@ -343,6 +343,34 @@ parse-then-emit pipeline).
     unregistered, so the resulting (unmapped) trees genuinely differ in
     shape, not just in whether the field resolves.
 
+    The mechanism is the two tagger regexes, not the three dotted names
+    this project's corpus and generators happen to use, so the allowlist
+    claim is no longer scoped to those names. *Any* dotted run immediately
+    followed by a colon is cut in a different place by each side, whether
+    or not the dotted name resolves to anything anywhere. Measured for a
+    name registered nowhere at all: `title:ab.cd:9 OR x` parses to the
+    single fielded value `title:'ab.cd:9'` on whoosh-compat's side (its
+    tagger takes `ab.cd:` as one rejected candidate and folds it back onto
+    the `9`), but to `title:ab` AND a multifield-expanded `cd:9` on the
+    oracle's (its tagger cannot reach past the dot, so it only ever
+    matches `cd:`, leaving `ab.` attached to the `title:` prefix). The
+    same cut happens for a bare `ab.cd:ef`, a parenthesized `(ab.cd:ef)`,
+    a multi-dot `ab.cd.ef:gh`, and a dotted run following an unknown
+    field's own colon (`zzz:ab.cd:ef`, which entry 15's regex used to
+    claim under its own, wrong reason).
+
+    Two boundaries on that claim, both measured. A dotted run with no
+    colon after it is not a field candidate on either side (`title:ab.cd`,
+    `9.90`, both EQUAL, consistent with entry 46's "a dot never splits a
+    token"). And a dotted run inside a quoted value is claimed by a quote
+    plugin before either fieldname tagger sees inside it, so neither side
+    cuts there at all: `title:'a.b:c'`, `'a.b:c'`, their double-quoted
+    spellings, and a colon-fielded fragment inside a phrase
+    (`created"type:a.b:asn"a`) all compare EQUAL. The allowlist pattern is
+    therefore anchored on the whole value (a value boundary, then at most
+    one leading field prefix) rather than on "a colon precedes the dotted
+    run", which would reach inside such a phrase.
+
     Test references: `tests/differential/allowlist.py`'s two `custom_fields\.`
     / `notes\.` entries (AST-level: neither side's tree matches, by
     construction); `tests/emitter/test_acceptance_e2e.py::test_notes_user_json_subpath_has_no_v2_analogue`
@@ -350,7 +378,11 @@ parse-then-emit pipeline).
     doc 1 through the JSON-subpath emitter but nothing at all through a
     whoosh oracle index with a plain-TEXT `notes` field, even when that
     index's `notes` field is populated with the same underlying data
-    flattened to plain text).
+    flattened to plain text); `tests/differential/test_allowlist_xref.py`'s
+    `test_entry_14_claims_dotted_name_colon_shapes` and
+    `test_entry_14_does_not_claim_dotless_or_quoted_shapes`;
+    `tests/differential/corpus_docs.txt`'s `title:ab.cd:9 OR x` /
+    `ab.cd:ef` lines.
 
 15. **`Multitoken.DEFAULT` uses position-dependent enclosing-group context;
     real whoosh's `multitoken_query='default'` uses the parser's fixed
@@ -507,6 +539,33 @@ parse-then-emit pipeline).
     `OR` entry in particular discarded four out of five of the
     comparisons it claimed.
 
+    Three neighbouring shapes were re-attributed while sweeping the
+    unknown-field-colon cell, and the boundary between them is worth
+    stating because two of them used to be claimed here under this
+    entry's reason string while diverging for a different cause entirely.
+    A dotted run followed by a colon (`zzz:ab.cd:ef`) is entry 14's
+    tagger-regex cut, and two consecutive rejected field-name candidates
+    (`zzz:and:9`, `zzz:a:b`, `ab:cd:ef`) are entry 57's discarded-candidate
+    whoosh bug: in both, the two sides disagree about the value's *text*
+    before any combinator question arises, so this entry's paperwork
+    described the wrong cause. Both entries sit earlier in `ALLOW` and
+    claim those shapes now. A third, `zzz:title:cd`, compares EQUAL and is
+    no longer claimed at all: a recognized field name stops the
+    rejected-candidate run on both sides, so nothing demotes as one
+    multi-token blob.
+
+    What *is* this entry's own mechanism, and was under-claimed rather
+    than mis-claimed, is a single-quoted unknown-field value whose
+    comma_values pieces contain characters that would be value boundaries
+    outside the quotes: an interior colon, whitespace, a paren
+    (`zzz:'a:b,c'`, `zzz:'a b,c'`, `zzz:'a(b,c'`). Inside the quotes those
+    are literal text the KEYWORD field's comma split sees, both sides
+    reach the `tag` field with exactly the same two pieces, and the whole
+    tree is identical apart from that branch's `And` versus `Or`. The
+    comma-less spelling `zzz:'a:b'` has one piece and compares EQUAL,
+    confirming the comma split, not the colon, is what makes the
+    difference.
+
     Corpus lines: the two `tests/differential/corpus_paperless.txt` lines
     named above, plus the two entry-15 KNOWN DIVERGENCE blocks in
     `tests/differential/corpus_realworld.txt`: the unknown-field-demoted
@@ -516,7 +575,9 @@ parse-then-emit pipeline).
     user values the field-kind-aware rebuild newly claims (`02091-C-71`,
     `02091-C-712`, `02091-C-71a`, `02091-C-76hallo`, `9,90`,
     `test 12,34 some use`, `वर्तमान`, `वर्तमान क्षण की धन्यता`,
-    `ASN>1593902`).
+    `ASN>1593902`), plus `tests/differential/corpus_docs.txt`'s
+    `zzz:'a:b,c'` / `zzz:'a b,c'` lines for the quoted comma_values
+    pathway.
 
     Test references: `tests/emitter/result_allowlist.py`'s unfielded/
     `OR`-nested dashed-word and bare-JSON-value entries;
@@ -3143,6 +3204,24 @@ parse-then-emit pipeline).
     user typed (`"aa:bb:cc"` per default field, further tokenized by each
     field's own analyzer downstream exactly as `"bb:cc"` was before).
 
+    Nothing about the bug depends on what the segments say, so the
+    allowlist claim is scoped to the mechanism rather than to that one
+    measured spelling: two `\w+:` runs back to back where neither names a
+    registered field. Measured, all of `zzz:and:9` (a stopword segment),
+    `zzz:the:the`, `zzz:a:the`, `zzz:a:b`, `zzz:9:9`, `ab:ab:ab`,
+    `zzz:ab:cd` and `ab:cd:ef` reach the oracle with the first candidate's
+    text gone, exactly as `aa:bb:cc` does. Several of them were previously
+    claimed under entry 15's reason string, which describes a combinator
+    difference these queries do not exhibit: the two sides disagree about
+    the value's text first, before any combinator question arises. Three
+    exclusions, also measured: a recognized field name in either position
+    stops the candidate run on both sides (`title:ab:cd`, `zzz:title:cd`,
+    both EQUAL); a dot anywhere in the run makes the two taggers cut in
+    different places before this bug can apply, which is entry 14's
+    mechanism (`zzz:ab.cd:ef`); and a quoted or bracketed continuation
+    after the second colon is claimed by a quote or range plugin before
+    either tagger's cut matters.
+
     The companion span bug is present even with only a *single* rejected
     candidate, and shares the same root cause (this fold-in never touched
     `startchar`): `FieldsPlugin.do_fieldnames`'s merge step reassigns the
@@ -3176,8 +3255,11 @@ parse-then-emit pipeline).
     `test_do_fieldnames_demoted_span_widens_to_cover_merged_text`,
     `test_do_fieldnames_consecutive_demoted_candidates_keep_all_text`, and
     `test_do_fieldnames_consecutive_demoted_candidates_at_end_of_group`;
-    `tests/differential/corpus_docs.txt`'s `aa:bb:cc` line, with its
-    matching `tests/differential/allowlist.py` entry.
+    `tests/differential/corpus_docs.txt`'s `aa:bb:cc` / `zzz:and:9` lines,
+    with their matching `tests/differential/allowlist.py` entry;
+    `tests/differential/test_allowlist_xref.py`'s
+    `test_entry_57_claims_consecutive_rejected_field_candidates` and
+    `test_entry_57_does_not_claim_single_or_recognized_candidates`.
 
 58. **A `BAD_DATE` diagnostic's `raw_value` now reports the full
     contiguous value the user typed, not just the fragment the tokenizer

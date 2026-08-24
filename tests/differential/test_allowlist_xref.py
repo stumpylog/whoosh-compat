@@ -505,6 +505,22 @@ def test_the_lowercase_expanding_character_set_is_exactly_i_dot() -> None:
         pytest.param("902:902.902", id="unknown-field-colon-dot-glued-repeat-of-prefix-numeric"),
         pytest.param("ab:'ab.ab'", id="unknown-field-colon-quoted-dot-glued-repeat-of-prefix"),
         pytest.param("abc:'abc.abc'", id="unknown-field-colon-quoted-dot-glued-repeat-of-prefix-2"),
+        # A SINGLE-QUOTED unknown-field value whose comma pieces contain
+        # characters the bare comma_values survivor excludes because they
+        # are value boundaries only OUTSIDE a quote: an interior colon,
+        # whitespace, a paren. Inside the quotes they are literal text the
+        # KEYWORD field's comma split sees, and both sides agree on the
+        # resulting text, differing only in the AND-vs-OR combinator, which
+        # is exactly this entry's mechanism (measured: the whole tree is
+        # identical apart from the tag branch's And vs Or).
+        pytest.param("zzz:'a:b,c'", id="unknown-field-quoted-keyword-interior-colon"),
+        pytest.param("zzz:'9:9,9'", id="unknown-field-quoted-keyword-interior-colon-numeric"),
+        pytest.param("zzz:'a:b,c,d'", id="unknown-field-quoted-keyword-interior-colon-3-pieces"),
+        pytest.param("zzz:'a b,c'", id="unknown-field-quoted-keyword-interior-space"),
+        pytest.param("zzz:'a(b,c'", id="unknown-field-quoted-keyword-interior-open-paren"),
+        pytest.param("zzz:'a)b,c'", id="unknown-field-quoted-keyword-interior-close-paren"),
+        pytest.param("zzz:'a:b,c' OR x", id="unknown-field-quoted-keyword-interior-colon-in-or"),
+        pytest.param("(zzz:'a:b,c')", id="unknown-field-quoted-keyword-interior-colon-in-paren"),
     ],
 )
 def test_entry_15_claims_genuine_divergences(q: str) -> None:
@@ -593,6 +609,21 @@ def test_entry_15_claims_genuine_divergences(q: str) -> None:
         pytest.param("ab:'AB'", id="unknown-field-colon-quoted-value-equals-prefix-case"),
         pytest.param("ab:ab-ab", id="unknown-field-colon-value-repeats-prefix-in-chain"),
         pytest.param("ab:'ab-ab'", id="unknown-field-colon-quoted-value-repeats-prefix-in-chain"),
+        # A quoted unknown-field value with an interior colon but NO comma
+        # has a single comma_values piece and no 2-character TEXT survivor,
+        # so nothing splits and the two sides agree (measured EQUAL).
+        pytest.param("zzz:'a:b'", id="unknown-field-quoted-interior-colon-no-comma"),
+        # The same comma-piece shape behind a KNOWN field, with no
+        # user-written OR anywhere: neither entry-15 pathway applies and
+        # the two sides agree (measured EQUAL).
+        pytest.param("title:'a:b,c'", id="known-field-quoted-keyword-interior-colon-no-or"),
+        # An unknown-field prefix whose value STARTS with a recognized
+        # field name plus a colon does not demote as one literal blob at
+        # all: both sides fold the rejected prefix to its own word and let
+        # the recognized field claim the rest, so there is no multi-token
+        # value to resolve a combinator for (measured EQUAL).
+        pytest.param("zzz:title:cd", id="unknown-field-prefix-then-known-field"),
+        pytest.param("zzz:content:foobar", id="unknown-field-prefix-then-known-field-2"),
     ],
 )
 def test_entry_15_does_not_claim_agreeing_shapes(q: str) -> None:
@@ -605,6 +636,128 @@ def test_entry_15_does_not_claim_agreeing_shapes(q: str) -> None:
     entry = allowed_entry(q)
     if entry is not None:
         assert "entry 15" not in entry[0], f"{q!r} wrongly claimed by entry 15: {entry[0]!r}"
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
+        pytest.param("ab.cd:9", id="bare-dotted-name-colon"),
+        pytest.param("ab.cd:ef", id="bare-dotted-name-colon-word-value"),
+        pytest.param("a.b:c", id="bare-dotted-name-colon-1char-runs"),
+        pytest.param("ab.cd.ef:gh", id="bare-two-dot-name-colon"),
+        pytest.param("ab.cd:", id="bare-dotted-name-colon-no-value"),
+        pytest.param("x ab.cd:ef", id="dotted-name-colon-after-a-word"),
+        pytest.param("(ab.cd:ef)", id="dotted-name-colon-in-parens"),
+        pytest.param("title:ab.cd:9 OR x", id="dotted-name-colon-inside-known-field-value"),
+        pytest.param("title:ab.cd:ef", id="dotted-name-colon-inside-known-field-value-2"),
+        pytest.param("title:foo.bar:9 OR x", id="dotted-name-colon-inside-known-field-value-3"),
+        pytest.param("title:ab.cd: OR x", id="dotted-name-colon-inside-known-field-no-value"),
+        pytest.param("zzz:ab.cd:ef", id="dotted-name-colon-inside-unknown-field-value"),
+    ],
+)
+def test_entry_14_claims_dotted_name_colon_shapes(q: str) -> None:
+    """whoosh-compat's `FieldsPlugin` fieldname tagger is dot-inclusive
+    (`[\\w.]+:`) so a JSON subpath can resolve; real whoosh's is `\\w+:`.
+    Wherever a dotted run is immediately followed by a colon the two
+    taggers therefore cut the text in different places (measured: for
+    `title:ab.cd:9 OR x`, whoosh-compat keeps `title:'ab.cd:9'` while real
+    whoosh reads `title:ab` AND a multifield-expanded `cd:9`), and the
+    resulting trees diverge whatever the dotted name is, not only for the
+    three registered JSON names the original entries named.
+    """
+
+    reason = allowed_reason(q)
+    assert reason is not None, f"expected {q!r} to be claimed by an allowlist entry"
+    assert "entry 14" in reason, f"expected {q!r} claimed by entry 14, got: {reason!r}"
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
+        # A dotted name with NO colon after it is one glued analyzer token
+        # on both sides; neither tagger ever sees a field candidate.
+        pytest.param("title:ab.cd", id="dotted-name-without-colon"),
+        pytest.param("title:ab.cd OR x", id="dotted-name-without-colon-in-or"),
+        pytest.param("9.90", id="bare-dotted-number"),
+        # Inside a quote the fieldname tagger never runs at all, so the
+        # dot-inclusive/dot-blind difference cannot bite (measured EQUAL).
+        pytest.param("'a.b:c'", id="quoted-dotted-name-colon-bare"),
+        pytest.param("title:'a.b:c'", id="quoted-dotted-name-colon-known-field"),
+        pytest.param('title:"a.b:c"', id="double-quoted-dotted-name-colon-known-field"),
+        pytest.param('"a.b:c"', id="double-quoted-dotted-name-colon-bare"),
+        # A colon-fielded fragment INSIDE a double-quoted phrase: the
+        # phrase plugin claims the whole run before either fieldname
+        # tagger sees inside it, so anchoring on "a colon precedes the
+        # dotted run" alone would wrongly reach in here (measured EQUAL).
+        pytest.param('created"type:a.b:asn"a', id="dotted-name-colon-inside-a-phrase"),
+        pytest.param('x "title:a.b:9" y', id="dotted-name-colon-inside-a-phrase-2"),
+    ],
+)
+def test_entry_14_does_not_claim_dotless_or_quoted_shapes(q: str) -> None:
+    """Each shape here compares EQUAL to the oracle (measured), or (the
+    `9.90` line) diverges for an unrelated reason; entry 14's dotted-name
+    pattern must not claim any of them.
+    """
+
+    reason = allowed_reason(q)
+    assert reason is None or "entry 14" not in reason, f"{q!r} wrongly claimed: {reason!r}"
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
+        pytest.param("aa:bb:cc", id="two-rejected-candidates-original"),
+        pytest.param("zzz:and:9", id="second-segment-is-a-stopword"),
+        pytest.param("zzz:the:the", id="both-tail-segments-are-stopwords"),
+        pytest.param("zzz:a:the", id="1char-segment-then-stopword"),
+        pytest.param("zzz:a:b", id="1char-tail-segments"),
+        pytest.param("zzz:9:9", id="numeric-tail-segments"),
+        pytest.param("ab:ab:ab", id="all-three-segments-identical"),
+        pytest.param("zzz:ab:cd", id="two-rejected-candidates-word-value"),
+        pytest.param("ab:cd:ef", id="two-rejected-candidates-word-value-2"),
+        pytest.param("zzz:foo:bar", id="two-rejected-candidates-word-value-3"),
+        pytest.param("a:b:c:d", id="three-rejected-candidates"),
+        pytest.param("x aa:bb:cc", id="two-rejected-candidates-after-a-word"),
+        pytest.param("(aa:bb:cc)", id="two-rejected-candidates-in-parens"),
+    ],
+)
+def test_entry_57_claims_consecutive_rejected_field_candidates(q: str) -> None:
+    """Real whoosh's `do_fieldnames` keeps only the most recently rejected
+    field-name candidate, so the earlier one's text vanishes without trace
+    (measured: `zzz:and:9` reaches the oracle as the single value
+    `and:9`, with `zzz:` gone); whoosh-compat's fixed copy accumulates
+    every rejected candidate's text. Any run of two consecutive rejected
+    candidates reaches this, not only the `aa:bb:cc` spelling the entry
+    was first measured on.
+    """
+
+    reason = allowed_reason(q)
+    assert reason is not None, f"expected {q!r} to be claimed by an allowlist entry"
+    assert "entry 57" in reason, f"expected {q!r} claimed by entry 57, got: {reason!r}"
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
+        # One rejected candidate only: nothing to discard, so this is
+        # entry 15's combinator question instead.
+        pytest.param("zzz:foobar", id="single-rejected-candidate"),
+        pytest.param("aa:bb", id="single-rejected-candidate-2"),
+        # A recognized field name in either position stops the run: the
+        # candidate before it is folded to its own word on both sides.
+        pytest.param("title:ab:cd", id="known-field-then-rejected-candidate"),
+        pytest.param("zzz:title:cd", id="rejected-candidate-then-known-field"),
+        # Inside a quote the tagger never produces a second candidate.
+        pytest.param("zzz:'a:b,c'", id="quoted-value-with-interior-colon"),
+        pytest.param("title:'aa:bb:cc'", id="quoted-value-with-two-interior-colons"),
+        # A dot in the run makes the two taggers cut differently first,
+        # which is entry 14's mechanism, not this one.
+        pytest.param("zzz:ab.cd:ef", id="dotted-run-is-entry-14"),
+    ],
+)
+def test_entry_57_does_not_claim_single_or_recognized_candidates(q: str) -> None:
+    reason = allowed_reason(q)
+    assert reason is None or "entry 57" not in reason, f"{q!r} wrongly claimed: {reason!r}"
 
 
 def _entry_15_patterns() -> list[re.Pattern[str]]:
