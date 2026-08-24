@@ -209,8 +209,8 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
     ),
     # DIVERGENCES.md entry 40 (whoosh-bug, not reproduced): NOT of a group
     # that recursively collapses to empty (nesting depth two or more, e.g.
-    # "NOT (())", "NOT ((())^0.5)") parses to a bare Nothing() in
-    # whoosh-compat (matches no documents), the same deliberate
+    # "NOT (())", "NOT ((())^0.5)", "NOT ((NOT ()))") parses to a bare
+    # Nothing() in whoosh-compat (matches no documents), the same deliberate
     # empty-group-drops-out rule entry 27 documents applied uniformly
     # regardless of depth, but real whoosh's own AST for the equivalent
     # shape isn't uniform by depth: at nesting depth one it also collapses
@@ -219,10 +219,17 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
     # a real Not(And([And([])])) tree whose *execution* (not its AST shape)
     # matches every document. Scoped to a NOT immediately wrapping
     # parenthesized content that is nothing but whitespace, nested parens,
-    # digits, dots and carets (an empty group, possibly repeated/boosted,
-    # never a real field:value clause) with at least two levels of nesting.
+    # digits, dots, carets and further nested "NOT" tokens (an empty group,
+    # possibly repeated/boosted/negated, never a real field:value clause)
+    # with at least two levels of nesting. The "NOT" alternative was added
+    # after "NOT ((NOT ()))" turned up as a hypothesis-fuzzer example
+    # (indistinguishable from "NOT (())" once the nested NOT itself
+    # collapses to nothing, see this entry's DIVERGENCES.md prose): the
+    # original character class only allowed whitespace/parens/digits/dot/
+    # caret, so a literal "NOT" inside the parens broke the match even
+    # though the underlying divergence is identical.
     (
-        re.compile(r"\bNOT\s*\((?=[^)]*\()[\s()0-9.^]*\)"),
+        re.compile(r"\bNOT\s*\((?=[^)]*\()(?:[\s()0-9.^]|NOT\b)*\)"),
         (
             "DIVERGENCES.md entry 40 (whoosh-bug, not reproduced): NOT of a"
             " recursively-empty group matches nothing in whoosh-compat"

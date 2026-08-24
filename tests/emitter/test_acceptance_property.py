@@ -463,7 +463,14 @@ def test_not_of_nested_empty_group_is_a_result_level_divergence(
     "matches nothing" (both sides agree, so that shape is deliberately
     excluded from the allowlist regex), but two or more levels of nesting
     keep a real ``Not(And([And([])]))`` tree whose *execution* matches
-    every document.
+    every document. The nesting can be a bare paren ("NOT (())") or a
+    second, inner "NOT" that itself collapses to empty ("NOT ((NOT ()))"):
+    both reach the identical ``Wrapper.query``/``CompoundQuery.__len__``
+    mechanism (a falsy-but-non-``None`` empty ``And([])`` misread as "no
+    operand at all" by real whoosh's ``if q:`` truthiness check), so both
+    diverge the same way. Paren-only wrapping with no outer "NOT" at all
+    ("((NOT ()))", "(NOT ())") does not reach this mechanism and agrees
+    with whoosh-compat instead.
 
     This shape was previously invisible to ``tests/differential``: real
     whoosh's tree for the depth>=2 case has no oracle-side null subquery
@@ -478,10 +485,20 @@ def test_not_of_nested_empty_group_is_a_result_level_divergence(
     assert whoosh_search_ids_prop(windex_prop, q_agrees) == []
     assert tantivy_search_ids_prop(tindex_prop, q_agrees) == []
 
+    q_agrees_paren_only = "((NOT ()))"
+    assert allowed_result_reason(q_agrees_paren_only) is None
+    assert whoosh_search_ids_prop(windex_prop, q_agrees_paren_only) == []
+    assert tantivy_search_ids_prop(tindex_prop, q_agrees_paren_only) == []
+
     q_diverges = "NOT ((())^0.5)"
     assert allowed_result_reason(q_diverges) is not None
     assert whoosh_search_ids_prop(windex_prop, q_diverges) == [1, 2, 3, 4]
     assert tantivy_search_ids_prop(tindex_prop, q_diverges) == []
+
+    q_diverges_nested_not = "NOT ((NOT ()))"
+    assert allowed_result_reason(q_diverges_nested_not) is not None
+    assert whoosh_search_ids_prop(windex_prop, q_diverges_nested_not) == [1, 2, 3, 4]
+    assert tantivy_search_ids_prop(tindex_prop, q_diverges_nested_not) == []
 
 
 def test_quoted_rfc3339_value_is_a_result_level_divergence(
@@ -758,6 +775,10 @@ _SEED_QUERIES = (
     "has_correspondent:'  false'",
     "NOT ((())^0.5)",
     "NOT ()",
+    # A nested NOT rather than a bare paren collapsing to empty
+    # (DIVERGENCES.md entry 40's extension): found by a hypothesis fuzzer
+    # soak, sitting only in the local example database until seeded here.
+    "NOT ((NOT ()))",
     "(title:the) ANDNOT (content:invoice)",
     "asn:[5 TO 5]",
     "asn:{100 TO 127]",

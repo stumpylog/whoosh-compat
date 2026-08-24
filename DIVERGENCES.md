@@ -2144,10 +2144,11 @@ parse-then-emit pipeline).
     lines.
 
 40. **`NOT` of a group that recursively collapses to empty (nested empty
-    groups, or a boost/paren wrapper around one) matches no documents here,
-    but matches every document in real whoosh at nesting depth two or
-    deeper (whoosh-bug, not reproduced; found by the acceptance-layer
-    result property, `tests/emitter/test_acceptance_property.py`).**
+    groups, a boost/paren wrapper around one, or a nested `NOT` that itself
+    collapses to empty) matches no documents here, but matches every
+    document in real whoosh at nesting depth two or deeper (whoosh-bug, not
+    reproduced; found by the acceptance-layer result property,
+    `tests/emitter/test_acceptance_property.py`).**
     `GroupNode.query()`'s empty-group rule (`parser/syntax.py`) returns
     `None`, not `ast.Nothing()`, for a group whose children all resolve to
     `None` in turn: this is the same deliberate, pre-existing rule entry 27
@@ -2159,7 +2160,12 @@ parse-then-emit pipeline).
     `compat_raw_parse`): the `NOT` operator has nothing left to bind to by
     the time its operand has recursively collapsed away, so it is dropped
     along with the operand rather than ever reaching `normalize()`'s
-    `Not(Nothing) -> Every` rule (entry 23).
+    `Not(Nothing) -> Every` rule (entry 23). The same collapse applies when
+    the nesting is itself another `NOT` rather than a bare paren: `NOT ((NOT
+    ()))` also parses to a bare `ast.Nothing()`, since the inner `NOT ()`
+    already collapses to nothing before the outer `NOT` ever sees an
+    operand, confirmed directly against a live tantivy index (0 documents
+    matched).
 
     Real whoosh's own behavior for the equivalent shape is not uniform by
     depth, confirmed directly against the pinned oracle: `NOT ()` (a single
@@ -2178,6 +2184,27 @@ parse-then-emit pipeline).
     the deliberate empty-group-drops-out rule rather than reproducing
     whoosh's transitive per-operator quirks around it.
 
+    `NOT ((NOT ()))` reaches the identical mechanism from one more layer of
+    indirection, confirmed directly against `Wrapper.query` and
+    `CompoundQuery.__len__` (`whoosh/query/compound.py`, both
+    `qparser/syntax.py` and `query/compound.py`): the inner `NOT ()`'s own
+    `Wrapper.query` sees its operand (`And([])`) test *falsy* (`CompoundQuery`
+    defines `__len__` as `len(self.subqueries)`, so a zero-subquery compound
+    is falsy even though it is a real, non-`None` object), and `Wrapper.query`'s
+    `if q:` guard conflates that falsy-but-real object with "no operand at
+    all", silently returning `None` instead of `Not(And([]))`. That `None`
+    is dropped by the enclosing group's `is not None` check the same way an
+    actually-empty child would be, leaving the same `And([And([])])`
+    survivor that a single level of redundant parens around an empty group
+    produces on its own; the outer `NOT` then wraps that survivor exactly
+    like the `NOT (())` case above, producing the identical
+    `And([Not(And([And([]) ...]))])` tree and the identical "matches every
+    document" execution. `((NOT ()))` and `(NOT ())` (paren-wrapping with
+    *no* outer `NOT`) do not reach this at all and agree with whoosh-compat
+    (0 documents on both sides, confirmed directly): the divergence needs a
+    `NOT` sitting immediately outside the collapsing structure, not merely
+    parentheses around one.
+
     This shape was previously invisible to `tests/differential`: real
     whoosh's own `And([])`-nested `Not` tree has no oracle-side null
     subquery for `oracle.to_ast`'s `Not`/`And` branches to collapse
@@ -2192,10 +2219,14 @@ parse-then-emit pipeline).
     impossible rather than merely coincidentally agreeing.
 
     Test references: `tests/emitter/result_allowlist.py`'s
-    `NOT\s*\((?=[^)]*\()[\s()0-9.^]*\)` entry;
-    `tests/emitter/test_acceptance_property.py`'s
+    `NOT\s*\((?=[^)]*\()(?:[\s()0-9.^]|NOT\b)*\)` entry (the `NOT\b`
+    alternative was added alongside the `NOT ((NOT ()))` shape, so the
+    original whitespace/parens/digits/dot/caret-only character class still
+    matches once a nested `NOT` token, not just nested parens, is what
+    collapses to empty); `tests/emitter/test_acceptance_property.py`'s
     `test_not_of_nested_empty_group_is_a_result_level_divergence` and the
-    generated-query property (seeded with `NOT ((())^0.5)`).
+    generated-query property (seeded with `NOT ((())^0.5)` and
+    `NOT ((NOT ()))`).
 
 41. **A `NumericRange` with a small-magnitude bound matches every document
     in real whoosh regardless of any document's actual field value
