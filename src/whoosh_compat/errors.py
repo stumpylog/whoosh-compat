@@ -56,6 +56,7 @@ class DiagnosticKind(Enum):
     PATTERN_ON_NUMERIC = auto()
     PATTERN_ON_BOOLEAN_EXISTS = auto()
     PATTERN_ON_SUBPATH = auto()
+    SINGLE_CHAR_BRACKET_RANGE = auto()
 
     # Emit-time, reachable from query text.
     EXISTS_REQUIRES_FAST = auto()
@@ -83,6 +84,7 @@ PARSE_KINDS = frozenset(
         DiagnosticKind.PATTERN_ON_NUMERIC,
         DiagnosticKind.PATTERN_ON_BOOLEAN_EXISTS,
         DiagnosticKind.PATTERN_ON_SUBPATH,
+        DiagnosticKind.SINGLE_CHAR_BRACKET_RANGE,
     }
 )
 
@@ -96,6 +98,7 @@ _CAUSE: dict[DiagnosticKind, Cause] = {
     DiagnosticKind.PATTERN_ON_NUMERIC: Cause.UNSUPPORTED,
     DiagnosticKind.PATTERN_ON_BOOLEAN_EXISTS: Cause.UNSUPPORTED,
     DiagnosticKind.PATTERN_ON_SUBPATH: Cause.UNSUPPORTED,
+    DiagnosticKind.SINGLE_CHAR_BRACKET_RANGE: Cause.UNSUPPORTED,
     DiagnosticKind.EXISTS_REQUIRES_FAST: Cause.MISCONFIGURED,
     DiagnosticKind.TEXT_RANGE: Cause.UNSUPPORTED,
     DiagnosticKind.PATTERN_TOO_COMPLEX: Cause.UNSUPPORTED,

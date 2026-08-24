@@ -3344,3 +3344,82 @@ parse-then-emit pipeline).
     `interior-1char-dash-piece-2`, `interior-1char-dash-piece-3`,
     `interior-1char-dash-piece-4`, `bracket-class-no-wildcard`,
     `comma-decimal`, `devanagari-single-word` and `devanagari-phrase`.
+
+60. **An unquoted term containing an unambiguous single-character bracket
+    range and no `*`/`?` is diagnosed at parse time instead of silently
+    searched as a literal that essentially never matches (design, not a
+    whoosh bug being declined; the unsupported-pattern diagnostic, extended
+    to a shape entries 29/30 don't cover).**
+    Real whoosh's `WildcardPlugin` (`qparser/plugins.py`) only tags text as
+    a wildcard when it contains `*` or one of a handful of `?`-like
+    characters (`WildcardPlugin.expr = "(?P<text>[*%s])" % qmarks`); `[` is
+    never one of the trigger characters, so `title:200[1-9]` lexes as an
+    ordinary term on both whoosh and whoosh-compat, and `query.Wildcard`
+    never even gets constructed. `Wildcard.normalize()` (`query/terms.py`)
+    shows the same asymmetry from the other side: it folds a wildcard node
+    back down to a plain `Term` whenever neither `*` nor `?` appears in the
+    text, even though its own `SPECIAL_CHARS = frozenset("*?[")` lists `[`
+    as a pattern character elsewhere in the same class. Both are
+    consistent-with-itself parity behavior on whoosh's side, not a defect:
+    whoosh simply never treats a bracket class as meaningful unless it
+    rides along with a genuine wildcard character.
+
+    The consequence for a user is what makes this worth diverging over.
+    `title:200[1-9]` is searched as the literal nine-character string
+    `"200[1-9]"`, which essentially no real document contains, so the query
+    silently matches nothing instead of raising any kind of error. That is
+    a strictly more dangerous failure mode than the wrong-field-kind
+    mangling entries 29 and 30 already refuse: those still search
+    *something* recognizable, where this searches for a string a user
+    never meant to type. whoosh-compat reports a
+    `DiagnosticKind.SINGLE_CHAR_BRACKET_RANGE` diagnostic and an
+    `ErrorLeaf` instead, from a new, narrowly-scoped check
+    (`QueryParser._single_char_bracket_range_diagnostic` in
+    `parser/default.py`) wired into `term_query`'s final fallthrough (the
+    branch reached for an ordinary, unquoted `Term` on a TEXT/KEYWORD/
+    unknown field), not into `wildcard_query`'s `_wildcard_kind_diagnostic`:
+    the two checks fire on different triggering conditions (field *kind*
+    for a genuine wildcard pattern, vs. text *shape* for something that
+    isn't a wildcard at all) and stay independent. Machine-identifiable via
+    `Diagnostic.divergence == 60`.
+
+    The rule is deliberately narrow: only an unquoted term whose text
+    contains a bracket class `[X-Y]` where `X` and `Y` are each exactly one
+    character, and that contains neither `*` nor `?` anywhere, is
+    diagnosed. A multi-character range (`title:invoice[2020-2021]`) is not
+    ambiguous with any wildcard syntax and keeps its current literal-term
+    behavior untouched. Any bracket text already combined with a wildcard
+    character (`title:200[1-9]*`, `title:*200[1-9]`) reaches
+    `wildcard_query` instead, is tagged a genuine `Wildcard`, and is
+    unaffected; the diagnostic's own message points a user at exactly this
+    spelling as the fix. A double-quoted value (`title:"200[1-9]"`) never
+    reaches `term_query` at all, since double-quoting produces a `Phrase`
+    node on both whoosh and whoosh-compat; single-quoting does not change
+    node type the same way, so a single-quoted value
+    (`title:'200[1-9]'`) stays a `Term` and is still diagnosed, with the
+    message still pointing at double-quoting (not single) as the literal
+    escape hatch.
+
+    Entry 59 separately documents an *analysis-time* token-count divergence
+    that also happens to use `200[1-9]` as an example value: after this
+    entry, that concern is moot for the exact query text `title:200[1-9]`,
+    since the query never reaches analysis at all now, but the underlying
+    analyzer-fidelity difference entry 59 describes is real independent of
+    this entry and stays documented for the raw-value comparison
+    `tests/differential/test_analyzer_boundary.py` runs directly against
+    the analyzer callables (bypassing the parser entirely, so it is
+    unaffected by this entry's parse-time check).
+
+    Test references: `tests/test_parser_fields.py`'s
+    `test_single_char_bracket_range_term_is_diagnosed` (a bare bracket
+    range, a term with more than one such range, and the single-quoted
+    spelling) and `test_single_char_bracket_range_diagnostic_is_narrowly_scoped`
+    (literal brackets with no range, a bracketed single word, a
+    double-quoted phrase, a multi-character range, and both wildcard-combined
+    spellings, none of which diagnose); `tests/test_parser_basics.py`'s
+    `test_single_char_bracket_range_in_term_position_is_diagnosed`;
+    `tests/differential/corpus_realworld.txt`'s `title:200[1-9]` (the exact
+    query from the source report), which now skips via the existing entry 6
+    diagnostics-present check instead of comparing structurally equal, and
+    is pinned by `tests/differential/test_differential.py`'s
+    `test_diagnostic_skip_count_matches_corpus`.

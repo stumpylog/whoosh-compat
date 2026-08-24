@@ -55,6 +55,7 @@ def test_parse_and_emit_kind_sets_are_disjoint_and_total() -> None:
         DiagnosticKind.PATTERN_ON_NUMERIC,
         DiagnosticKind.PATTERN_ON_BOOLEAN_EXISTS,
         DiagnosticKind.PATTERN_ON_SUBPATH,
+        DiagnosticKind.SINGLE_CHAR_BRACKET_RANGE,
     }
     emit_kinds = {
         DiagnosticKind.EXISTS_REQUIRES_FAST,

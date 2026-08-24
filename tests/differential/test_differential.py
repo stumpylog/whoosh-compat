@@ -158,7 +158,15 @@ def test_diagnostic_skip_count_matches_corpus() -> None:
     # English grammar never had; `created:[-2 years]`, a bracket range with
     # no TO; `added:<today-7`, a comparison operator borrowed from some
     # other search engine). No parser behaviour changed: the corpus grew.
-    assert count == 15, (
+    #
+    # Rose from 15 to 16 with DIVERGENCES.md entry 60: `corpus_realworld.txt`'s
+    # `title:200[1-9]` used to compare structurally equal (real whoosh's own
+    # analyzer happens to reduce both sides to the same "title:200" term
+    # once tokenized, which made the pre-analysis divergence invisible to
+    # this harness) and now diagnoses SINGLE_CHAR_BRACKET_RANGE before
+    # analysis ever runs, so it takes this skip instead. No corpus line was
+    # added; an existing one's classification changed.
+    assert count == 16, (
         f"{count} corpus queries now take the DIVERGENCES.md entry 6 diagnostic skip,"
         " expected 15; if this is an intentional parser change (diagnosing a new"
         " shape, or fixing one that used to diagnose), update this pinned count and"

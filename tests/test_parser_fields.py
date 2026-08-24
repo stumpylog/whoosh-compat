@@ -472,3 +472,76 @@ def test_pattern_divergences_are_machine_readable(
     """Entry 29 covers numeric AND boolean-exists; entry 30 covers subpaths."""
     (d,) = wc.parse(query, registry=reg, default_fields=["content"]).diagnostics
     assert d.divergence == entry
+
+
+# -- DIVERGENCES.md entry 60: an unquoted Term whose text contains an
+# -- unambiguous single-character bracket range ([X-Y], each side exactly one
+# -- character) and no "*"/"?" is diagnosed at parse time rather than silently
+# -- searched as a literal term that can never match. Real whoosh never tags
+# -- "[" as a wildcard trigger unless it is combined with "*"/"?"
+# -- (WildcardPlugin.expr in qparser/plugins.py, Wildcard.normalize() in
+# -- query/terms.py), which is consistent-with-itself parity behavior, not a
+# -- whoosh bug, but the silent no-match is dangerous enough that whoosh-compat
+# -- chooses not to reproduce it.
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("title:200[1-9]", id="single-bracket-range"),
+        pytest.param("title:20[0-1][0-9]", id="multiple-single-char-ranges"),
+        pytest.param("title:'200[1-9]'", id="single-quoted-stays-a-term"),
+    ],
+)
+def test_single_char_bracket_range_term_is_diagnosed(reg: FieldRegistry, query: str) -> None:
+    r = wc.parse(query, registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics
+    d = r.diagnostics[0]
+    assert d.kind is DiagnosticKind.SINGLE_CHAR_BRACKET_RANGE
+    assert d.cause is Cause.UNSUPPORTED
+    assert d.field == FieldRef("title")
+    assert d.divergence == 60
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        pytest.param(
+            "title:report[draft]",
+            ast.Term(field=FieldRef("title"), text="report[draft]"),
+            id="literal-brackets-no-range",
+        ),
+        pytest.param(
+            "title:[draft]",
+            ast.Term(field=FieldRef("title"), text="[draft]"),
+            id="bracketed-single-word-no-range",
+        ),
+        pytest.param(
+            'title:"200[1-9]"',
+            ast.Phrase(field=FieldRef("title"), text="200[1-9]", slop=1),
+            id="double-quoted-is-a-phrase-not-a-term",
+        ),
+        pytest.param(
+            "title:invoice[2020-2021]",
+            ast.Term(field=FieldRef("title"), text="invoice[2020-2021]"),
+            id="multi-char-range-untouched",
+        ),
+        pytest.param(
+            "title:200[1-9]*",
+            ast.Wildcard(field=FieldRef("title"), pattern="200[1-9]*"),
+            id="wildcard-combined-trailing-star",
+        ),
+        pytest.param(
+            "title:*200[1-9]",
+            ast.Wildcard(field=FieldRef("title"), pattern="*200[1-9]"),
+            id="wildcard-combined-leading-star",
+        ),
+    ],
+)
+def test_single_char_bracket_range_diagnostic_is_narrowly_scoped(
+    reg: FieldRegistry, query: str, expected: ast.Node
+) -> None:
+    result = wc.parse(query, registry=reg, default_fields=["content"])
+    assert not result.diagnostics
+    assert result.ast == expected

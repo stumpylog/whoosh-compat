@@ -30,14 +30,15 @@
 
 # --- compared: real user queries that compare structurally EQUAL ----------
 # Includes several shapes no generator in strategies.py produces: a bracket
-# character class with no wildcard at all (title:200[1-9]) and one behind a
-# leading star (title:*202[0-4]), the two shapes issue #13568 was filed
-# about; "-" prefix negation; a field-scoped group (tag:(MK 2022 Kassel));
+# character class behind a leading star (title:*202[0-4]), one of the two
+# shapes paperless-ngx#13568 was filed about (the other, a bare, unquoted bracket
+# range with no wildcard at all, title:200[1-9], now diagnoses at parse time
+# per DIVERGENCES.md entry 60 and moved to the diagnostic section below);
+# "-" prefix negation; a field-scoped group (tag:(MK 2022 Kassel));
 # a double-quoted field name containing a space ("Delete to":[...]); a
 # space after the field colon (tag: 2024); an unfielded quoted phrase; a
 # wrapped-star pattern (tag:*kassel*); and a bare 65-digit number.
 tag:steuer AND tag:valentin AND (title:*2025 OR (NOT title:*202[0-4] AND NOT title:*201[0-9] AND created:2025))
-title:200[1-9]
 title:*202[0-4]
 tag:steuer AND tag:valentin AND (title:2025 OR (-title:2024 AND -title:2023 AND -title:2022 AND -title:2021 AND -title:2019 AND -title:2018 AND created:2025))
 tag:inbox
@@ -249,6 +250,19 @@ created:'last year'
 created:[-2 years]
 added:<today-7
 type:A OR type:B OR notes:C
+
+# --- skipped (DIVERGENCES.md entry 60, allowlist.py not needed: the uniform
+# entry 6 diagnostics-present check already covers it): the bare,
+# unquoted single-character bracket range from paperless-ngx#13568, moved out of
+# the "compared" section above. Real whoosh's own analyzer happens to
+# reduce both sides to the same "title:200" term once tokenized (its
+# StandardAnalyzer drops "[1-9]" as non-word characters), which is why this
+# used to compare structurally equal; that agreement was accidental, not
+# because either side treated the bracket range as meaningful, and relying
+# on it left the pre-analysis literal-term shape ("200[1-9]" searched as a
+# nine-character literal) undiagnosed and effectively unmatchable. Diagnosed
+# at parse time now instead, before analysis ever runs.
+title:200[1-9]
 
 # --- OMITTED: harvested queries deliberately NOT added as corpus lines,
 # with the reason for each. Nothing here was rewritten to make it fit.

@@ -130,9 +130,27 @@ def test_bracket_class_wildcard_never_folds_to_term(reg: FieldRegistry, pattern:
 
 def test_bracket_only_text_is_a_term(reg: FieldRegistry) -> None:
     # WildcardPlugin only tags text containing "*"/"?", so a bare bracket
-    # class is an ordinary term: same as whoosh. (Not folded *down* from a
-    # Wildcard; never tagged as one to begin with.)
-    assert parse("title:202[0-3]", reg) == ast.Term(field=FieldRef("title"), text="202[0-3]")
+    # class is an ordinary term at tagging time, same as whoosh: not folded
+    # *down* from a Wildcard, never tagged as one to begin with. A
+    # multi-character range keeps that literal-term behavior all the way
+    # through, since it isn't ambiguous with the single-character bracket
+    # range shape DIVERGENCES.md entry 60 diagnoses (see
+    # test_single_char_bracket_range_in_term_position_is_diagnosed below).
+    assert parse("title:invoice[20-30]", reg) == ast.Term(
+        field=FieldRef("title"), text="invoice[20-30]"
+    )
+
+
+def test_single_char_bracket_range_in_term_position_is_diagnosed(reg: FieldRegistry) -> None:
+    # Unlike a multi-character range, "[0-3]" is an unambiguous
+    # single-character bracket range: whoosh itself would search this as
+    # the nine-character literal "202[0-3]", which essentially never
+    # matches a real document. whoosh-compat diagnoses this shape instead
+    # of reproducing the silent no-match (DIVERGENCES.md entry 60); see
+    # tests/test_parser_fields.py for the full shape matrix.
+    r = wc.parse("title:202[0-3]", registry=reg, default_fields=["content"])
+    assert isinstance(r.ast, ast.ErrorLeaf)
+    assert r.diagnostics[0].kind is DiagnosticKind.SINGLE_CHAR_BRACKET_RANGE
 
 
 def test_field_star_every(reg: FieldRegistry) -> None:

@@ -46,6 +46,7 @@ methods called by the ``syntax`` nodes: :meth:`QueryParser.term_query`,
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from collections.abc import Sequence
 
@@ -64,6 +65,14 @@ from whoosh_compat.parser.plugins import Plugin
 from whoosh_compat.parser.plugins import folds_to_prefix
 
 _U64_MAX = 2**64 - 1
+
+# Matches an unambiguous single-character bracket range such as "[1-9]" or
+# "[a-f]": exactly one character (letter or digit) on each side of the
+# hyphen. A multi-character range ("[20-21]") does not match this, on
+# purpose: only the single-character form is ambiguous with a whoosh
+# character class that the grammar never actually honors outside a
+# "*"/"?"-combined wildcard. See DIVERGENCES.md entry 60.
+_SINGLE_CHAR_BRACKET_RANGE = re.compile(r"\[[0-9A-Za-z]-[0-9A-Za-z]\]")
 
 
 class QueryParser:
@@ -424,8 +433,74 @@ class QueryParser:
             # A JSON-kind spec (a resolved subpath ref) also falls through
             # here: term text on a JSON field needs no further coercion.
 
+        err = self._single_char_bracket_range_diagnostic(
+            ref,
+            text,
+            kw.get("startchar"),  # type: ignore[arg-type]
+            kw.get("endchar"),  # type: ignore[arg-type]
+            resolved.spec.kind if resolved is not None else None,
+        )
+        if err is not None:
+            return err
+
         node = ast.Term(field=ref, text=text)
         return ast.Boosted(node, boost) if boost != 1.0 else node
+
+    def _single_char_bracket_range_diagnostic(
+        self,
+        ref: FieldRef | None,
+        text: str,
+        startchar: int | None,
+        endchar: int | None,
+        field_kind: FieldKind | None,
+    ) -> ast.ErrorLeaf | None:
+        """Diagnoses an unquoted term whose text contains an unambiguous
+        single-character bracket range (``[1-9]``, ``[a-f]``) with no
+        ``*``/``?`` anywhere, or ``None`` if the shape doesn't apply.
+
+        Real whoosh never tags ``[`` as a wildcard trigger unless it is
+        combined with ``*``/``?`` (``WildcardPlugin.expr`` in
+        ``qparser/plugins.py``, ``Wildcard.normalize()`` in
+        ``query/terms.py``): a bare ``title:200[1-9]`` lexes as an ordinary
+        term and is searched as the nine-character literal string
+        ``"200[1-9]"``, which essentially never matches a real document.
+        That is consistent-with-itself parity behavior on whoosh's side, not
+        a defect, but the silent no-match is dangerous enough that
+        whoosh-compat declines to reproduce it and diagnoses the shape
+        instead (DIVERGENCES.md entry 60).
+
+        Scoped narrowly to the single-character form: a multi-character
+        range like ``invoice[2020-2021]`` is not ambiguous with any wildcard
+        syntax and keeps its current literal-term behavior untouched, as
+        does any bracket text that already contains ``*``/``?`` (those reach
+        ``wildcard_query`` instead, never this method) or that whoosh's own
+        grammar keeps as a phrase (double-quoted text never reaches
+        ``term_query`` at all).
+        """
+
+        if "*" in text or "?" in text:
+            return None
+        if not _SINGLE_CHAR_BRACKET_RANGE.search(text):
+            return None
+
+        d = Diagnostic(
+            message=(
+                f"{text!r} looks like a bracket range but whoosh never treats "
+                "'[' as a wildcard trigger on its own; combine it with a "
+                "wildcard (e.g. a trailing '*') or double-quote the value to "
+                "search it as literal text"
+            ),
+            kind=DiagnosticKind.SINGLE_CHAR_BRACKET_RANGE,
+            cause=cause_for(DiagnosticKind.SINGLE_CHAR_BRACKET_RANGE),
+            startchar=startchar,
+            endchar=endchar,
+            field=ref,
+            field_kind=field_kind,
+            raw_value=text,
+            divergence=60,
+        )
+        self.report(d)
+        return ast.ErrorLeaf(diagnostic=d)
 
     def _parse_u64(
         self, text: str, ref: FieldRef, startchar: int | None, endchar: int | None
