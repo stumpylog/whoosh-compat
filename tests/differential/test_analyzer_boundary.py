@@ -18,13 +18,18 @@ go undetected. Token *content* differences that don't change the count (for
 example stemming: "university" vs "univers") are out of scope here; those
 are a separate, already-documented divergence surface.
 
-8 of the value classes below are marked ``xfail(strict=True)``, pending a fix
-to entry 15's Multitoken.DEFAULT boundary regex: they are known, attributed
-findings, not yet triaged case-by-case, expected to start passing once that
-regex is corrected (``strict=True`` turns an unexpected pass into a failure,
-so that moment doesn't go unnoticed). The stopword class is triaged
-separately below: it is DIVERGENCES.md entry 4, a deliberate policy choice,
-not a pending finding.
+8 of the value classes below are marked ``xfail(strict=True)``, documented as
+a permanent, accepted analyzer-fidelity difference: DIVERGENCES.md entry 59.
+Whoosh's oracle StandardAnalyzer chains a StopFilter(minsize=2) that drops
+tokens under 2 characters; paperless-ngx's real host analyzer chains
+(``lower_fold`` and ``stem_fold``) have no such filter, so these 8 values
+produce different token *counts* between the oracle and the host. This
+module compares token counts directly against the host analyzers, never
+through any allowlist mechanism, so fixing entry 15's Multitoken.DEFAULT
+boundary regex (a differential-layer test-classification tool, already fixed
+elsewhere) could never have changed what a real analyzer callable produces.
+The stopword class is triaged separately below: it is DIVERGENCES.md entry 4,
+a deliberate policy choice, not a pending finding.
 """
 
 from __future__ import annotations
@@ -41,16 +46,17 @@ from tests.emitter.conftest import stem_fold
 # across real-world corpus findings. Each is a *raw value* (the text a Term
 # node would carry pre-analysis), not a query string with a field prefix.
 #
-# The 8 marked xfail(strict=True) below are pending findings from this
-# module's own investigation, all attributed to entry 15's Multitoken.DEFAULT
-# boundary regex missing the real tokenizer boundary: interior dash pieces,
-# comma decimals, and word-internal analyzer splits. They are expected to
-# start passing once that regex is corrected; strict=True means an
-# unexpected pass fails the suite loudly instead of silently going stale,
-# which is the signal to remove the mark and add these ids to that fix's own
-# regression coverage.
+# The 8 marked xfail(strict=True) below are a permanent, accepted
+# analyzer-fidelity divergence from whoosh, documented as DIVERGENCES.md
+# entry 59: whoosh's oracle StandardAnalyzer chains StopFilter(minsize=2),
+# dropping tokens under 2 characters (interior dash pieces, comma decimals,
+# word-internal analyzer splits), while the real host analyzer chains keep
+# them. strict=True means an unexpected pass fails the suite loudly instead
+# of silently going stale, which would signal a change in host analyzer
+# behavior and require investigation.
 _XFAIL_MULTITOKEN_BOUNDARY = pytest.mark.xfail(
-    strict=True, reason="entry 15's Multitoken.DEFAULT boundary regex"
+    strict=True,
+    reason="DIVERGENCES.md entry 59: whoosh's StopFilter(minsize=2) vs the real host analyzer",
 )
 
 REPRESENTATIVE_VALUES = [
