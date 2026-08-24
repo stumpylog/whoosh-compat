@@ -3253,3 +3253,56 @@ parse-then-emit pipeline).
     (the scope-limiting precondition above), and the updated
     `test_bare_unquoted_t_value_is_rejected_not_truncated` (entry 54's own
     pinned example, now asserting the widened value).
+
+59. **The oracle's `StopFilter(minsize=2)` drops short tokens the real host
+    analyzer keeps, which can make the two sides disagree on token *count*
+    itself, not just on how a combinator resolves it (design).** Real
+    whoosh's `StandardAnalyzer`, which `tests/differential/oracle.py`'s
+    `_analyze` uses for every TEXT field the oracle compares against, chains
+    a `StopFilter` with its default `minsize=2`: any token shorter than two
+    characters is dropped outright, stopword or not. Paperless-ngx's actual
+    production chains, `lower_fold`/`stem_fold` in
+    `tests/emitter/conftest.py`, have no such filter and keep a token of any
+    length. For most values this never matters, since most tokens are two
+    characters or longer on both sides. It matters for a value whose
+    analysis produces an interior piece shorter than that: the `02091-C-71`
+    family (`02091-C-71`, `02091-C-712`, `02091-C-71a`, `02091-C-76hallo`,
+    each splitting on the dash into a one-character middle piece the oracle
+    drops and the host keeps), `200[1-9]`'s bracket-class body, `9,90` read
+    as a comma-decimal TEXT value, and two Devanagari segmentations
+    (`वर्तमान`, `वर्तमान क्षण की धन्यता`) all analyze to a different number of
+    surviving tokens on the two sides.
+
+    This is a different mechanism from entry 15's, not a restatement of it.
+    Entry 15 assumes both sides tokenize a value into the *same* count and
+    diverge only on whether the surrounding group combines those tokens with
+    AND or OR. Here the token count itself differs before any combinator is
+    even reached, so there is no shared tree shape for a combinator choice
+    to diverge over in the first place. The classification is design, not
+    whoosh-bug: whoosh-compat is not wrong to keep the short token, because
+    it is following the real host analyzer, the thing it exists to be
+    faithful to. It is the oracle's `StandardAnalyzer`, with its baked-in
+    `minsize=2`, that is the less representative stand-in for what
+    paperless-ngx's production index actually does with these values, the
+    same reasoning entry 4 already applies to whoosh's baked-in stopword
+    filter.
+
+    `9,90` deserves a note so the two facts about it are not read as one.
+    Entry 15 already documents a *different*, now-resolved concern for this
+    exact value: on a comma-values KEYWORD field, an unquoted `9,90` is
+    split at parse time by the `CommaValuesPlugin`/oracle's own comma
+    handling, which is a query-level, AST-combinator mechanism. The mismatch
+    this entry documents is unrelated: read as a TEXT value, `9,90`'s comma
+    separates a piece too short to survive the oracle's `minsize=2` but not
+    the host's, so the two sides disagree on token count. Both facts are
+    real and both are documented, in their own entries, for their own
+    mechanisms; neither is a restatement of the other.
+
+    Test references: `tests/differential/test_analyzer_boundary.py`'s
+    `test_lower_fold_token_count_matches_whoosh` and
+    `test_stem_fold_token_count_matches_whoosh`, run against the
+    `_XFAIL_MULTITOKEN_BOUNDARY`-marked entries in that module's
+    `REPRESENTATIVE_VALUES`: `interior-1char-dash-piece`,
+    `interior-1char-dash-piece-2`, `interior-1char-dash-piece-3`,
+    `interior-1char-dash-piece-4`, `bracket-class-no-wildcard`,
+    `comma-decimal`, `devanagari-single-word` and `devanagari-phrase`.
