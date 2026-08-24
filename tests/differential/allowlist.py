@@ -256,25 +256,64 @@ KEYWORD_FIELDS_PATTERN = "|".join(
 # A TEXT field's StandardAnalyzer token is whoosh's own
 # `\w+(\.?\w+)*` (a run of word characters, where a single interior dot
 # glues two runs into one token, matching DIVERGENCES.md entry 46's "a dot
-# never splits" finding), then LowercaseFilter, then StopFilter(minsize=2)
-# drops anything under 2 characters. The İ exception (U+0130, the one
-# character whose str.lower() expands to two codepoints) survives minsize
-# after lowercasing even though it is a single codepoint here; already
-# established by this entry's own history.
-_TEXT_SURVIVOR = r"(?:\w+(?:\.\w+)+|\w{2,}|İ)"
+# never splits" finding), then LowercaseFilter, then StopFilter(minsize=2,
+# stoplist=STOP_WORDS) drops anything under 2 characters AND anything that
+# is (after lowercasing) one of whoosh's own stopwords. The İ exception
+# (U+0130, the one character whose str.lower() expands to two codepoints)
+# survives minsize after lowercasing even though it is a single codepoint
+# here; already established by this entry's own history.
+#
+# The end of a StandardAnalyzer token, as a zero-width assertion: a word
+# run ends where the next character is neither a word character nor a dot
+# that itself glues another word run on (whoosh's `\w+(\.?\w+)*` makes
+# "the.x" ONE token, not the stopword "the" followed by "x", while a
+# trailing dot with no word run after it is not part of the token at all).
+_TEXT_TOKEN_END = r"(?!\w|\.\w)"
+# One of whoosh's own stopwords spelled out as a whole token. Derived from
+# the live STOP_WORDS set for the same no-drift reason as ZERO_TOKEN_WORD
+# above, and ordered longest-first so a named stopword matches itself
+# rather than a shorter prefix of itself.
+_TEXT_STOPWORD_WORD = (
+    "(?i:" + "|".join(re.escape(w) for w in sorted(STOP_WORDS, key=lambda w: (-len(w), w))) + ")"
+)
+_TEXT_STOPWORD = rf"{_TEXT_STOPWORD_WORD}{_TEXT_TOKEN_END}"
+_TEXT_SURVIVOR = rf"(?:\w+(?:\.\w+)+|(?!{_TEXT_STOPWORD})\w{{2,}}|İ)"
 # A comma_values KEYWORD field splits on a literal comma ONLY, at the
 # PARSER level (CommaValuesPlugin), not via the field's content analyzer
 # at all -- there is no minimum token length and no dot-gluing rule (a
 # comma_values field never even sees "9.90" as two pieces, since there is
 # no comma to split on; whoosh's own analyzer keeps it as one glued token
 # regardless of field kind).
-_KEYWORD_SURVIVOR = r"\w+"
+# A comma_values piece is therefore everything up to the next comma, not
+# just a run of word characters: "tag:'abc-ab,x'" splits into "abc-ab"
+# and "x", two distinct surviving values, and modelling the piece as
+# `\w+` would stop at "abc" and miss the split entirely. What the piece
+# may NOT contain are the characters that end a value at the
+# query-grammar level before the field's own splitting ever runs:
+# whitespace and parens (a bare value's boundaries), either quote (the
+# value's own delimiters; a DOUBLE-quoted value is a Phrase node, which
+# has no Multitoken.DEFAULT question at all, so admitting `"` would claim
+# the agreeing shape `"ab,cd"`), `*`/`?` (WildcardPlugin claims the value
+# first) and brackets (range syntax), all for the reasons spelled out for
+# `_BARE_FILLER` below. Colon is excluded for the same reason it is
+# excluded there, and re-admitted by `_FIELDED_KEYWORD_SURVIVOR` where
+# the value already carries an explicit field prefix.
+_KEYWORD_SURVIVOR = r"""[^,\s():'"*?\[\]{}]+"""
+_FIELDED_KEYWORD_SURVIVOR = r"""[^,\s()'"*?\[\]{}]+"""
 _KEYWORD_FILLER = r","
+# One whole token StopFilter drops, usable as filler between two TEXT
+# survivors: a stopword, or a single isolated word character (shorter than
+# minsize=2), excluding the İ exception (İ alone must always be a
+# survivor, never droppable filler). Both branches end on a real token
+# boundary, so a dot-glued token is never eaten one piece at a time: the
+# filler runs below are possessive, and without `_TEXT_TOKEN_END` the
+# single-character branch would irrevocably consume "a", "." and "a" out
+# of "a.a" before `_TEXT_SURVIVOR` ever got the chance to match the glued
+# token as one unit (measured: "zzz:a.a", "zzz:1.9").
+_TEXT_DROPPED_TOKEN = rf"(?:{_TEXT_STOPWORD}|(?!İ)\w{_TEXT_TOKEN_END})"
 # Filler between two TEXT survivors: any run of characters that is not a
 # word character, whitespace, paren, colon, `*`/`?`, or a bracket -- OR a
-# single isolated word character (a short piece StopFilter would drop),
-# excluding the İ exception (İ alone must always be a survivor, never
-# droppable filler). Colon is excluded because it is a real field-value
+# whole token StopFilter drops. Colon is excluded because it is a real field-value
 # boundary at the query-grammar level, not a literal character within one
 # bare value's text. `*`/`?` are excluded because they trigger
 # WildcardPlugin at the query-grammar level (the value becomes a
@@ -289,7 +328,15 @@ _KEYWORD_FILLER = r","
 # value fragment, when the actual (correct) divergence there is entry 12's
 # date-range tz mechanism; this file's own reason strings must describe
 # the actual cause of a divergence, not a coincidentally-true one.
-_BARE_FILLER = r"(?:[^\w\s():*?\[\]{}]+|(?!İ)\w(?!\w))"
+_BARE_FILLER = rf"(?:[^\w\s():'*?\[\]{{}}]+|{_TEXT_DROPPED_TOKEN})"
+# Filler between two TEXT survivors of an EXPLICITLY FIELDED value
+# ("title:abc:ab", "title:'hello:90'"). Identical to `_BARE_FILLER` except
+# that colon is allowed: the field prefix has already been consumed, so an
+# interior colon is literal text handed to the field's analyzer, never the
+# query-grammar field-value boundary it would be at the start of a BARE
+# value. Brackets stay excluded for the same range-syntax reason as
+# `_BARE_FILLER`.
+_FIELDED_FILLER = rf"(?:[^\w\s()'*?\[\]{{}}]+|{_TEXT_DROPPED_TOKEN})"
 # Filler for the unknown-field-colon alternative: colon IS allowed here
 # (do_fieldnames merges consecutive rejected field-name candidates into
 # one literal string, so an interior colon is just more literal text, not
@@ -300,12 +347,12 @@ _BARE_FILLER = r"(?:[^\w\s():*?\[\]{}]+|(?!İ)\w(?!\w))"
 # has no "to" inside its brackets and must stay claimed); the separate
 # range-lookahead exclusion below (`_RANGE_LOOKAHEAD`) is what excludes
 # the genuinely-a-range case instead.
-_UF_FILLER = r"(?:[^\w\s()*?]+|(?!İ)\w(?!\w))"
+_UF_FILLER = rf"(?:[^\w\s()'*?]+|{_TEXT_DROPPED_TOKEN})"
 # Same as _UF_FILLER but also excludes the single-quote character: used
 # for the interior of a single-quoted unknown-field value, where the
 # closing quote must terminate the match rather than being consumed as
 # filler.
-_UF_QUOTED_FILLER = r"(?:[^\w()'*?]+|(?!İ)\w(?!\w))"
+_UF_QUOTED_FILLER = rf"(?:[^\w()'*?]+|{_TEXT_DROPPED_TOKEN})"
 
 
 def _survivor_chain(survivor: str, filler: str) -> str:
@@ -335,7 +382,12 @@ def _survivor_tail(survivor: str, filler: str) -> str:
     Optional leading filler here is safe (unlike in `_survivor_chain`)
     because the prefix has already been matched by the time this runs, so
     there is no earlier survivor for a possessive leading filler to
-    accidentally eat into.
+    accidentally eat into. It cannot eat into the FOLLOWING survivor
+    either, but only because every filler branch that consumes word
+    characters ends on `_TEXT_TOKEN_END`: without that, the single
+    word-character branch would walk a dot-glued token one piece at a
+    time ("a", ".", "a" out of "a.a") and, being possessive, never give
+    those characters back.
 
     Only valid where the prefix's colon is itself a genuine analyzer split
     point, which is true for TEXT (StandardAnalyzer splits the merged
@@ -372,11 +424,19 @@ def _survivor_not_all_identical(survivor: str, filler: str, group_name: str) -> 
     from matching just a PREFIX of a longer, genuinely-different token
     (measured: without it, "9,90" was wrongly flagged as "all identical"
     because the backreference for "9" matched only the leading "9" of the
-    following "90").
+    following "90"). The FIRST, capturing occurrence needs the same
+    guard, for the mirror-image reason: without it the capture itself can
+    backtrack to a strict prefix of the real token, the leftover
+    character is then absorbed by the filler's single-word-character
+    branch, and a genuinely two-token chain reads as "all identical" and
+    is wrongly rejected (measured: "abc-ab", where the capture backtracked
+    to "ab" and let "c" through as filler; note the asymmetry, "ab-abc"
+    never had the problem, since there the capture's greedy first attempt
+    is already the whole token).
     """
 
     return (
-        rf"(?i:(?P<{group_name}>{survivor})"
+        rf"(?i:(?P<{group_name}>{survivor})(?!\w)"
         rf"(?:{filler}++(?P={group_name})(?!\w))*"
         rf"(?:{filler}++)?+'?(?=[\s)]|$))"
     )
@@ -391,6 +451,22 @@ def _survivor_not_all_identical(survivor: str, filler: str, group_name: str) -> 
 # typed exclusivity to apply to (entry 44), and measurably compares EQUAL,
 # so claiming it discarded the comparison for no reason.
 _NON_EMPTY_RANGE = r"(?!\s*(?i:to)?\s*[\]}])"
+
+# A zero-width assertion that what follows is NOT a genuine bracketed
+# range expression ("[2020-01-01 TO 2020-12-31]"), used by entry 15's
+# unknown-field-colon alternative so a real range is left to entry 12's
+# date-range mechanism instead of being claimed here. A bracket with no
+# "to" inside it ("document_type:[Receipt]", a live corpus line) is not a
+# range and stays claimable.
+#
+# Written with a tempered, possessive run rather than the obvious pair of
+# lazy `[^\]}]*?` quantifiers: the lazy spelling re-scans overlapping
+# stretches whenever the bracket is never closed, which is measurably
+# quadratic ("zzz:[" followed by 16000 repeats of "a to " took 10.3s).
+# The tempered branch stops exactly at the first "to" and the second run
+# scans once to the first closing bracket, so a match attempt is linear
+# in the input and cannot be made to backtrack at all.
+_RANGE_LOOKAHEAD = r"(?![\[{](?:(?!\b(?i:to)\b)[^\]}])*+\b(?i:to)\b[^\]}]*+[\]}])"
 
 # A single PlusMinus-shaped relative date offset ("-1yr", "-2 yrs",
 # "-999 yrs", "+1 week"), built from whoosh's own unit vocabulary
@@ -1581,29 +1657,31 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # the query: any such value that survives its own field's analyzer as
     # two or more tokens (for at least one default TEXT/KEYWORD field)
     # diverges. Two independent textual shapes reach this: a bare (unfielded)
-    # word containing an internal separator between two >=2-character runs
-    # (StandardAnalyzer splits on the separator; each half needs to be at
-    # least minsize=2 to plausibly survive, though this is a length
-    # approximation, not an exact stopword-aware simulation, see below), and
+    # word containing an internal separator between two surviving runs
+    # (StandardAnalyzer splits on the separator; each half has to clear
+    # both of StopFilter's rules, minsize=2 and the stopword list, to
+    # survive), and
     # an unregistered ("unknown") field name followed by a colon and a value,
     # which whoosh-compat's FieldsPlugin merges into one literal string
     # (fieldname included) the same way real whoosh's own unknown-field
     # demotion does, tokenizing on the colon boundary the same way a dash or
     # dot would. Both alternatives require each side of the internal
-    # separator to be at least two characters, confirmed directly
+    # separator to survive StopFilter, confirmed directly
     # ("zzz:x"/"a:foobar", where the one-character half is dropped by
-    # StandardAnalyzer's minsize=2 and only one token survives per field, do
-    # NOT diverge) as a practical proxy for "plausibly survives analysis".
-    # One measured exception to the two-character proxy: İ (U+0130, the
-    # only character in Unicode whose str.lower() expands to two
-    # codepoints, pinned by test_allowlist_xref's derivation test), whose
-    # single-character value survives minsize after lowercasing and
-    # genuinely diverges ("zzz:İ", found by a deep fuzz soak), so it is
-    # admitted alongside the two-character forms. The proxy remains one,
-    # not a byte-for-byte simulation of StandardAnalyzer's stopword list;
-    # the differential-triage skill's normal iterate-on-fuzzer-findings
-    # workflow applies if a future fuzz run finds a shape (e.g. an actual
-    # English stopword landing on one side) this approximation misses.
+    # StandardAnalyzer's minsize=2 and only one token survives per field,
+    # do NOT diverge; "ab/the", "901+and" and "zzz:the", where the other
+    # half is a stopword, do not either). One measured exception to
+    # minsize: İ (U+0130, the only character in Unicode whose str.lower()
+    # expands to two codepoints, pinned by test_allowlist_xref's
+    # derivation test), whose single-character value survives minsize
+    # after lowercasing and genuinely diverges ("zzz:İ", found by a deep
+    # fuzz soak), so it is admitted alongside the two-character forms.
+    # The stopword half of StopFilter is simulated from whoosh's live
+    # STOP_WORDS set (see `_TEXT_STOPWORD` above), not approximated: a
+    # dropped stopword is neither a survivor nor a valid unknown-field
+    # prefix, and is usable as filler between two real survivors the same
+    # way a sub-minsize piece is ("dat:'-1 year to now'" depends on the
+    # stopword "to" being droppable filler between "year" and "now").
     # Known field names/aliases are excluded from the unknown-field
     # alternative so an explicitly, correctly fielded value (which only
     # diverges when nested inside a genuine user-written OR, a narrower,
@@ -1625,23 +1703,39 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # was previously unclaimed altogether, a latent hole the narrowing
     # work surfaced (the current generators only ever emit a single dash,
     # so nothing had reached it).
+    # The bare alternative's optional surrounding quotes are BALANCED (a
+    # conditional on the leading quote's group, not two independent `'?`
+    # optionals). A whitespace-delimited fragment sitting INSIDE some
+    # other, explicitly fielded quoted value would otherwise satisfy the
+    # bare alternative's start anchor and swallow that value's closing
+    # quote as its own trailing one, claiming an agreeing shape:
+    # measured, "title:'foo bar-baz'" and "tag:'foo bar,baz'" compare
+    # EQUAL but were claimed through the fragment "bar-baz'". Requiring
+    # the quotes to balance leaves an interior fragment facing an
+    # unconsumable closing quote where its value boundary must be, which
+    # is exactly the signal that it is not a value of its own. The single
+    # quote is excluded from the bare and unknown-field fillers for the
+    # same reason (it is the value's delimiter, never literal text in
+    # it).
     (
         re.compile(
-            r"(?:^|(?<=[\s(]))'?"
+            r"(?:^|(?<=[\s(]))(?P<e15bq>')?"
             rf"(?:(?!{_survivor_not_all_identical(_TEXT_SURVIVOR, _BARE_FILLER, 'e15bts')})"
             rf"{_survivor_chain(_TEXT_SURVIVOR, _BARE_FILLER)}"
             rf"|(?!{_survivor_not_all_identical(_KEYWORD_SURVIVOR, _KEYWORD_FILLER, 'e15bks')})"
             rf"{_survivor_chain(_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})"
-            r"'?(?=[\s)]|$)"
-            rf"|(?:^|(?<=[\s(]))\b(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared)\b)\w{{2,}}:"
-            r"(?!(?:\[|\{)[^\]}]*?\b(?i:to)\b[^\]}]*?(?:\]|\}))(?!\")"
+            r"(?(e15bq)'|)(?=[\s)]|$)"
+            rf"|(?:^|(?<=[\s(]))\b(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared)\b)"
+            rf"(?!{_TEXT_STOPWORD})\w{{2,}}:"
+            rf"{_RANGE_LOOKAHEAD}"
+            r'(?!")'
             r"(?:"
             rf"'(?:{_survivor_tail(_TEXT_SURVIVOR, _UF_QUOTED_FILLER)}"
             rf"|{_survivor_chain(_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})'(?=[\s)]|$)"
             r"|"
             rf"(?:{_survivor_tail(_TEXT_SURVIVOR, _UF_FILLER)}"
             rf"|{_survivor_chain(_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})"
-            r"'?(?=[\s)]|$)"
+            r"(?=[\s)]|$)"
             r")"
         ),
         (
@@ -1691,15 +1785,23 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # distinct token coincide, so "title:ab-ab OR x" and "tag:'a,a' OR x"
     # compare EQUAL. The earlier pattern tested none of these and threw
     # away four out of five of the comparisons it claimed.
+    #
+    # This entry's values are always EXPLICITLY fielded, which is where it
+    # parts company with the previous entry's filler and survivor
+    # definitions. An interior colon here is literal text the field's own
+    # analyzer sees ("title:abc:ab", "title:'hello:90'" both diverge),
+    # never the field-value boundary it is at the start of a BARE value,
+    # so this entry uses the colon-admitting `_FIELDED_FILLER` and
+    # `_FIELDED_KEYWORD_SURVIVOR` instead.
     (
         re.compile(
             r"^(?=.*\bOR\b)(?=.*(?:"
             rf"\b(?:{TEXT_FIELDS_PATTERN}):'?"
-            rf"(?:(?!{_survivor_not_all_identical(_TEXT_SURVIVOR, _BARE_FILLER, 'e15sts')})"
-            rf"{_survivor_chain(_TEXT_SURVIVOR, _BARE_FILLER)})"
+            rf"(?:(?!{_survivor_not_all_identical(_TEXT_SURVIVOR, _FIELDED_FILLER, 'e15sts')})"
+            rf"{_survivor_chain(_TEXT_SURVIVOR, _FIELDED_FILLER)})"
             rf"|\b(?:{KEYWORD_FIELDS_PATTERN}):'"
-            rf"(?:(?!{_survivor_not_all_identical(_KEYWORD_SURVIVOR, _KEYWORD_FILLER, 'e15sks')})"
-            rf"{_survivor_chain(_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})"
+            rf"(?:(?!{_survivor_not_all_identical(_FIELDED_KEYWORD_SURVIVOR, _KEYWORD_FILLER, 'e15sks')})"
+            rf"{_survivor_chain(_FIELDED_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})"
             r"))"
         ),
         (
