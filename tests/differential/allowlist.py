@@ -428,11 +428,19 @@ def _tail_not_all_identical_to_prefix(filler: str, prefix_group_name: str) -> st
     a backreference instead of taking its own `survivor` pattern. `group_name`
     naming rules are the same as `_survivor_not_all_identical`'s (unique per
     use site; see its docstring).
+
+    Each repeat's boundary is `_TEXT_TOKEN_END`, not a plain `(?!\\w)`: a
+    dot-glued repeat ("ab.ab") is one distinct token by StandardAnalyzer's
+    own tokenizer, never equal to the lone prefix "ab", and must NOT be
+    swallowed as "the prefix again with a dot as filler" (measured: a
+    plain `(?!\\w)` wrongly treats "ab:ab.ab" as "ab" repeated, when real
+    whoosh sees "ab" and "ab.ab" as two distinct survivors that do
+    diverge).
     """
 
     return (
-        rf"(?i:(?:{filler}++)?+(?P={prefix_group_name})(?!\w)"
-        rf"(?:{filler}++(?P={prefix_group_name})(?!\w))*"
+        rf"(?i:(?:{filler}++)?+(?P={prefix_group_name}){_TEXT_TOKEN_END}"
+        rf"(?:{filler}++(?P={prefix_group_name}){_TEXT_TOKEN_END})*"
         rf"(?:{filler}++)?+'?(?=[\s)]|$))"
     )
 

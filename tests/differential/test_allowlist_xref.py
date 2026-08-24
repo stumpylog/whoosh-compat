@@ -494,6 +494,17 @@ def test_the_lowercase_expanding_character_set_is_exactly_i_dot() -> None:
         pytest.param("abc:def", id="unknown-field-colon-value-differs-from-prefix-2"),
         pytest.param("ab:'ab-cd'", id="unknown-field-colon-quoted-value-differs-from-prefix"),
         pytest.param("ab:ab-cd", id="unknown-field-colon-value-prefix-plus-different-tail"),
+        # A dot-glued repeat of the prefix is one distinct token
+        # (StandardAnalyzer never splits on a single interior dot), never
+        # equal to the lone prefix: the not-all-identical guard must not
+        # mistake the dot for ordinary filler between two repeats.
+        pytest.param("ab:ab.ab", id="unknown-field-colon-dot-glued-repeat-of-prefix"),
+        pytest.param("ab:ab-ab.ab", id="unknown-field-colon-dot-glued-repeat-of-prefix-2"),
+        pytest.param("ab:ab.ab.ab", id="unknown-field-colon-dot-glued-repeat-of-prefix-3"),
+        pytest.param("abc:abc.abc", id="unknown-field-colon-dot-glued-repeat-of-prefix-4"),
+        pytest.param("902:902.902", id="unknown-field-colon-dot-glued-repeat-of-prefix-numeric"),
+        pytest.param("ab:'ab.ab'", id="unknown-field-colon-quoted-dot-glued-repeat-of-prefix"),
+        pytest.param("abc:'abc.abc'", id="unknown-field-colon-quoted-dot-glued-repeat-of-prefix-2"),
     ],
 )
 def test_entry_15_claims_genuine_divergences(q: str) -> None:
