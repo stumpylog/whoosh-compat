@@ -1011,6 +1011,76 @@ class DateParserPlugin(Plugin):
             return m.group("body"), True
         return text, False
 
+    # The separator characters self.torange's Combo((self.bundle, "to",
+    # self.bundle)) accepts around its literal "to" element (Combo's own
+    # default sep is whitespace, or a comma optionally padded with
+    # whitespace; a single adjacent character from this set on each side is
+    # enough to tell a real separator from "to" glued onto a word). Mirrored
+    # here, not re-derived from the grammar object itself, since splitting
+    # the raw *text* has to happen before the grammar ever sees it (see
+    # _split_span_rfc3339_utc).
+    _TO_SEP_CHARS: ClassVar[str] = " \t\n\r\f\v,"
+
+    def _find_to_split(self, text: str) -> tuple[str, str] | None:
+        """Find the first standalone "to" in ``text`` bounded by a separator
+        character on both sides, and return the text on each side with that
+        separator stripped. ``None`` if no such "to" exists.
+
+        Deliberately not a single quantifier-based regex like
+        ``(?:\\s+|\\s*,\\s*)to(?:\\s+|\\s*,\\s*)``: matched with ``.split()``
+        against a huge separator-only string containing no "to" at all, that
+        pattern's leading run is re-attempted at every character offset, and
+        each attempt itself re-scans the remaining run before failing -- an
+        O(n²) blowup (measured: 11.6s for a 50,000-space
+        input), the same class of user-controlled-input DoS the module
+        docstring's ``_RFC3339_UTC_RE`` comment already documents fixing
+        once. Finding the fixed two-character literal "to" is a single O(n)
+        scan; checking one already-known character on each side of it is
+        O(1); together they can't reproduce that blowup.
+        """
+        lower = text.lower()
+        n = len(text)
+        start = 0
+        while True:
+            idx = lower.find("to", start)
+            if idx == -1:
+                return None
+            after = idx + 2
+            before_ok = idx > 0 and text[idx - 1] in self._TO_SEP_CHARS
+            after_ok = after < n and text[after] in self._TO_SEP_CHARS
+            if before_ok and after_ok:
+                return (
+                    text[:idx].rstrip(self._TO_SEP_CHARS),
+                    text[after:].lstrip(self._TO_SEP_CHARS),
+                )
+            start = idx + 1
+
+    def _split_span_rfc3339_utc(self, text: str) -> tuple[str, bool, bool]:
+        """Like :meth:`_split_rfc3339_utc`, but scoped per bound for a
+        two-sided "A to B" span, so a "Z" on one side does not leak UTC
+        onto the other (range_to_node already gets this right per-bound
+        via node.start/node.end, which are separate strings by
+        construction; text_to_node has to split a
+        single quoted string first).
+
+        Splits on the first "to" surrounded by ``self.torange``'s ``Combo``
+        separator characters. Anything that isn't cleanly two such pieces (a
+        single value, a keyword phrase, no separator-bounded "to" at all)
+        falls back to :meth:`_split_rfc3339_utc`'s single-flag behavior
+        applied to the whole text, unchanged: a real two-sided span with a
+        stray extra "to" inside one of its bound's own text is not a shape
+        any bundle element produces, so there is nothing genuinely
+        two-sided being mishandled by the fallback.
+        """
+        split = self._find_to_split(text)
+        if split is None:
+            body, force_utc = self._split_rfc3339_utc(text)
+            return body, force_utc, force_utc
+        left, right = split
+        left_body, left_utc = self._split_rfc3339_utc(left)
+        right_body, right_utc = self._split_rfc3339_utc(right)
+        return f"{left_body} to {right_body}", left_utc, right_utc
+
     def _error(self, node: syntax.SyntaxNode, text: str, spec: FieldSpec) -> DateErrorNode:
         diagnostic = Diagnostic(
             message=f"{text!r} is not a recognizable date",
@@ -1243,7 +1313,12 @@ class DateParserPlugin(Plugin):
         self, node: syntax.SyntaxNode, spec: FieldSpec, text: str
     ) -> syntax.SyntaxNode:
         local_now = self._local_now()
-        parse_text, force_utc = self._split_rfc3339_utc(text)
+        # Per-bound, not a single shared flag: a "Z" on one side of a
+        # two-sided span ("2020-01-01T00:00:00Z to now") must not force UTC
+        # onto the other, plain-local side (range_to_node already gets
+        # this right per-bound since node.start/node.end are separate
+        # strings by construction).
+        parse_text, start_force_utc, end_force_utc = self._split_span_rfc3339_utc(text)
         # Raw (not yet disambiguated) first, mirroring _range_to_node's own
         # start_exact/end_exact gate: self.dateparser.date_from would
         # disambiguate immediately, collapsing away whether the END
@@ -1254,7 +1329,8 @@ class DateParserPlugin(Plugin):
         raw = ToEnd(self.dateparser.get_parser()).date_from(parse_text, local_now)
         if raw is None:
             return self._error(node, text, spec)
-        value_tz = UTC if force_utc else self.tz
+        start_tz = UTC if start_force_utc else self.tz
+        end_tz = UTC if end_force_utc else self.tz
 
         # "Exact" mirrors range_to_node's start_exact/end_exact: a concrete
         # datetime, or a fully-specified (non-ambiguous) adatetime, names an
@@ -1307,6 +1383,7 @@ class DateParserPlugin(Plugin):
             # adjustment.
             if getattr(result, "bounds_swapped", False):
                 start_exact, end_exact = end_exact, start_exact
+                start_tz, end_tz = end_tz, start_tz
             # By construction (see module docstring), a timespan's start/end
             # are always concrete datetimes once disambiguated: never an
             # ambiguous adatetime itself: so these casts just narrow
@@ -1334,9 +1411,9 @@ class DateParserPlugin(Plugin):
             lo_naive = hi_naive = cast(datetime, result.start if isinstance(result, timespan) else result)
             incl_lo = incl_hi = True
 
-        lo = self._to_utc(lo_naive, spec.date_only, tz=value_tz)
+        lo = self._to_utc(lo_naive, spec.date_only, tz=start_tz)
         hi = (
-            self._to_utc(hi_naive, spec.date_only, ceil=not incl_hi, tz=value_tz)
+            self._to_utc(hi_naive, spec.date_only, ceil=not incl_hi, tz=end_tz)
             if hi_naive is not None
             else None
         )

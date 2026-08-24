@@ -1753,6 +1753,43 @@ def test_rfc3339_z_designator_still_recognized_on_a_long_value() -> None:
     assert elapsed < 2.0
 
 
+def test_to_span_split_is_linear_in_value_length() -> None:
+    """The two-sided "A to B" splitter used to look for its separator with a
+    quantifier-based regex (``(?:\\s+|\\s*,\\s*)to(?:\\s+|\\s*,\\s*)``) matched
+    with ``.split()``. Against a long run of separator characters containing
+    no "to" at all, that pattern's leading run got re-attempted at every
+    offset within the run, and each attempt re-scanned the remaining run
+    before failing: quadratic in the input length (measured: 11.6 s for
+    50,000 spaces), the same class of user-controlled-input DoS as the
+    "Z"-designator check above, just a different pattern shape.
+
+    Sized and budgeted the same way as the "Z" tests above: large enough
+    that the shape (quadratic before, linear after) cannot be flaky noise.
+    """
+    plugin = DateParserPlugin(BASE, BERLIN)
+    text = " " * 200_000
+    start = time.perf_counter()
+    body, start_utc, end_utc = plugin._split_span_rfc3339_utc(text)
+    elapsed = time.perf_counter() - start
+    # No "to" at all, so this falls back to the single-value path untouched.
+    assert (body, start_utc, end_utc) == (text, False, False)
+    assert elapsed < 2.0
+
+
+def test_to_span_split_still_recognized_on_long_values() -> None:
+    # The accepting half of the same shape: a real two-sided span still
+    # splits correctly (each side's own "Z" recognized independently), and
+    # still cheaply, even with absurdly long bounds on both sides.
+    plugin = DateParserPlugin(BASE, BERLIN)
+    left = "T" * 100_000
+    right = "T" * 100_000
+    start = time.perf_counter()
+    body, start_utc, end_utc = plugin._split_span_rfc3339_utc(f"{left}Z to {right}")
+    elapsed = time.perf_counter() - start
+    assert (body, start_utc, end_utc) == (f"{left} to {right}", True, False)
+    assert elapsed < 2.0
+
+
 # -- Quoted vs bracketed relative-span exactness agree (bug fix, no --------
 # -- DIVERGENCES.md entry: whoosh-compat now agrees with whoosh, see --------
 # -- tests/differential/corpus_realworld.txt's "CONFIRMED PARITY" line) ----
@@ -1797,6 +1834,43 @@ def test_quoted_relative_span_ambiguous_end_still_gets_ceiling_adjustment(
     assert quoted.hi == bracketed.hi
     assert quoted.incl_hi == bracketed.incl_hi
     assert quoted.incl_hi is False
+
+
+def test_quoted_relative_span_z_designator_does_not_leak_to_the_other_bound(
+    reg: FieldRegistry,
+) -> None:
+    """A quoted two-sided span mixing an RFC3339 "Z"-suffixed bound with a
+    plain local one must give each bound its own tz treatment, the same way
+    _range_to_node already does for a bracketed range (see
+    test_rfc3339_range_mixes_z_and_non_z_bound). Before the fix,
+    _text_to_node computed a single force_utc flag over the whole quoted
+    text, so "now" here was silently reinterpreted as an already-UTC wall
+    clock time instead of shifted from local Europe/Berlin.
+
+    "now to 2020-01-01T00:00:00Z" is a backwards-typed span (2020 sorts
+    before "now"), so joint disambiguation swaps it to lo=2020, hi=now:
+    this also exercises the tz swap following bounds_swapped, alongside
+    the exactness swap test_quoted_relative_span_exactness_follows_a_backwards_swap
+    already covers.
+    """
+    r = dparse("added:'now to 2020-01-01T00:00:00Z'", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2020, 1, 1, tzinfo=UTC)
+    assert r.hi == BASE.astimezone(UTC)
+    assert r.incl_lo is True
+    assert r.incl_hi is True
+
+
+def test_quoted_relative_span_z_designator_on_the_other_side(reg: FieldRegistry) -> None:
+    """Same shape, Z on the other (chronologically-first) bound: the plain
+    local "now" end must not be pulled into UTC either.
+    """
+    r = dparse("added:'2020-01-01T00:00:00Z to now'", reg).ast
+    assert isinstance(r, ast.DateRange)
+    assert r.lo == datetime(2020, 1, 1, tzinfo=UTC)
+    assert r.hi == BASE.astimezone(UTC)
+    assert r.incl_lo is True
+    assert r.incl_hi is True
 
 
 @pytest.mark.parametrize(
