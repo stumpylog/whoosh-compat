@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import time
 
 import pytest
 from whoosh.analysis import STOP_WORDS
@@ -464,6 +465,28 @@ def test_the_lowercase_expanding_character_set_is_exactly_i_dot() -> None:
         pytest.param("title:ab--cd OR x", id="fielded-text-double-dash-in-or"),
         pytest.param("tag:'0,00' OR x", id="fielded-keyword-single-quoted-in-or"),
         pytest.param("title:02091-C-71 OR x", id="fielded-text-interior-1char-piece-in-or"),
+        # A survivor token that is a strict PREFIX of the token before it:
+        # the all-identical lookahead's capture must not backtrack into a
+        # shorter prefix and let the leftover character pass as filler.
+        pytest.param("abc-ab", id="shorter-second-piece-prefix-of-first"),
+        pytest.param("abcd-abc", id="shorter-second-piece-prefix-of-first-2"),
+        pytest.param("901-90", id="shorter-second-piece-prefix-of-first-numeric"),
+        pytest.param("asn:1 OR title:abc-ab", id="fielded-text-prefix-piece-in-or"),
+        pytest.param("asn:1 OR tag:'abc-ab,x'", id="fielded-keyword-dashed-piece-in-or"),
+        # A dot-glued token right after the unknown-field prefix's colon:
+        # the possessive leading filler must not eat its first character.
+        pytest.param("zzz:a.a", id="unknown-field-dot-glue-1char-runs"),
+        pytest.param("zzz:x.a", id="unknown-field-dot-glue-1char-runs-2"),
+        pytest.param("zzz:9.a", id="unknown-field-dot-glue-1char-runs-3"),
+        pytest.param("zzz:a.9", id="unknown-field-dot-glue-1char-runs-4"),
+        pytest.param("zzz:1.9", id="unknown-field-dot-glue-1char-runs-5"),
+        pytest.param("zzz:1.1", id="unknown-field-dot-glue-1char-runs-6"),
+        # An interior colon inside an ALREADY-fielded value is literal
+        # text for the analyzer, not a query-grammar value boundary.
+        pytest.param("asn:1 OR title:abc:ab", id="fielded-text-interior-colon-in-or"),
+        pytest.param("asn:1 OR title:90:abcd", id="fielded-text-interior-colon-in-or-2"),
+        pytest.param("asn:1 OR title:'hello:90'", id="fielded-text-quoted-interior-colon-in-or"),
+        pytest.param("asn:1 OR title:'abc:İ'", id="fielded-text-quoted-interior-colon-i-in-or"),
     ],
 )
 def test_entry_15_claims_genuine_divergences(q: str) -> None:
@@ -505,6 +528,31 @@ def test_entry_15_claims_genuine_divergences(q: str) -> None:
         pytest.param('tag:"9,90" OR x', id="fielded-keyword-double-quoted-in-or-2"),
         pytest.param("title:'9,90' OR x", id="fielded-text-single-quoted-comma-in-or"),
         pytest.param("tag:ab,cd OR x", id="fielded-keyword-unquoted-comma-in-or"),
+        # A whitespace-delimited fragment INSIDE some other, explicitly
+        # fielded quoted value is not a bare value of its own: the bare
+        # alternative's optional quotes must balance so the fragment
+        # cannot swallow that value's closing quote as its own.
+        pytest.param("tag:'foo bar-baz'", id="fragment-inside-quoted-keyword-value"),
+        pytest.param("title:'foo bar-baz'", id="fragment-inside-quoted-text-value"),
+        pytest.param("tag:'foo bar,baz'", id="fragment-inside-quoted-keyword-comma"),
+        pytest.param("asn:1 OR tag:'abc ab!90'", id="fragment-inside-quoted-value-in-or"),
+        pytest.param("asn:1 OR tag:'a İ%ab'", id="fragment-inside-quoted-value-in-or-2"),
+        # StopFilter drops a stopword whatever its length, so a chain
+        # whose other piece is a stopword has only one surviving token.
+        pytest.param("ab/the", id="stopword-second-piece"),
+        pytest.param("abcd>and", id="stopword-second-piece-2"),
+        pytest.param("901+and", id="stopword-second-piece-3"),
+        pytest.param("zzz:and", id="unknown-field-stopword-value"),
+        pytest.param("zzz:the", id="unknown-field-stopword-value-2"),
+        pytest.param("asn:1 OR title:and-the", id="fielded-text-two-stopwords-in-or"),
+        pytest.param("us-and", id="two-stopwords-bare"),
+        pytest.param("have-the", id="two-stopwords-bare-2"),
+        pytest.param("the:ab", id="stopword-unknown-field-prefix"),
+        pytest.param("and:a.b", id="stopword-unknown-field-prefix-2"),
+        # A double-quoted value is a Phrase node, which never asks the
+        # Multitoken.DEFAULT question, whatever its comma-split pieces.
+        pytest.param('"ab,cd"', id="bare-double-quoted-comma"),
+        pytest.param('"9,90"', id="bare-double-quoted-comma-2"),
     ],
 )
 def test_entry_15_does_not_claim_agreeing_shapes(q: str) -> None:
@@ -517,3 +565,49 @@ def test_entry_15_does_not_claim_agreeing_shapes(q: str) -> None:
     entry = allowed_entry(q)
     if entry is not None:
         assert "entry 15" not in entry[0], f"{q!r} wrongly claimed by entry 15: {entry[0]!r}"
+
+
+def _entry_15_patterns() -> list[re.Pattern[str]]:
+    return [pattern for pattern, reason, _kind in ALLOW if "entry 15" in reason]
+
+
+def test_entry_15_range_lookahead_is_linear_on_an_unclosed_bracket() -> None:
+    r"""Entry 15's unknown-field-colon alternative excludes a genuine
+    bracketed range with a lookahead. Written with two lazy `[^\]}]*?`
+    quantifiers, that lookahead re-scanned overlapping stretches of an
+    unclosed bracket and cost O(n^2): measured on the author's machine,
+    80 KB of "a to " repeats after an unclosed "[" took 19.1 s across
+    entry 15's two patterns (1.1 s at a quarter of that length, 4.7 s at
+    half), and 0.07 s after the tempered, possessive rewrite. The budget
+    below is sized so the guard cannot be flaky rather than so it is
+    tight; the durable claim is the shape, quadratic before and linear
+    after.
+
+    Scoped to entry 15's own two patterns rather than to
+    ``allowed_reason``, which would also time several unrelated entries
+    that are themselves slow on this input: this test must fail for the
+    reason it names, not for a neighbour's cost.
+
+    Both halves are asserted, not just the timing: the adversarial input
+    is still not claimed, and a real, well-formed range is still excluded
+    from this alternative while a bracket that is not a range at all
+    ("document_type:[Receipt]", a live corpus line) is still claimed.
+    """
+
+    adversarial = "zzz:[" + "a to " * 20_000
+    patterns = _entry_15_patterns()
+    assert patterns, "entry 15's allowlist patterns went missing"
+
+    start = time.perf_counter()
+    matched = [p for p in patterns if p.search(adversarial)]
+    elapsed = time.perf_counter() - start
+    assert elapsed < 1.0, f"entry 15's range lookahead took {elapsed:.3f}s"
+    assert matched == []
+
+    for q in ("zzz:[2020-01-01 TO 2020-12-31]", "zzz:[2020 TO 2024]"):
+        reason = allowed_reason(q)
+        assert reason is None or "entry 15" not in reason, q
+
+    not_a_range = allowed_reason("document_type:[Receipt]")
+    assert not_a_range is not None
+    assert "entry 15" in not_a_range

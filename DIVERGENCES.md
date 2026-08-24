@@ -419,8 +419,9 @@ parse-then-emit pipeline).
     un-collapsed singleton `And` wrapper and resolve AND context,
     coincidentally agreeing with whoosh for this one spelling while
     production did not; the harness now sees what production sees.
-    Corpus lines: `content:foo OR title:multi-word` and
-    `(0) OR (title:00-000)` (`tests/differential/corpus_paperless.txt`).
+    Corpus lines for this correctly-fielded pathway:
+    `content:foo OR title:multi-word` and `(0) OR (title:00-000)`
+    (`tests/differential/corpus_paperless.txt`).
 
     The acceptance-layer result property (`tests/emitter/test_acceptance_property.py`)
     later found the predicted shape occurring for real, and confirmed it
@@ -463,15 +464,33 @@ parse-then-emit pipeline).
     spelling is claimed under entry 14, since whoosh's mid-token tagger
     demotes it in two pieces, but the result-set difference is this
     entry's mechanism, verified against the live dual index); and the
-    single-character value İ (U+0130) defeats the allowlists'
-    two-character survives-analysis proxy from below, because it is the
-    only character in Unicode whose `str.lower()` expands to two
-    codepoints (pinned by a derivation test), so `zzz:İ` and `attrs:İ`
-    genuinely split into two surviving tokens and diverge.
+    single-character value İ (U+0130) is the one value that survives
+    `minsize=2` while being a single codepoint, because it is the only
+    character in Unicode whose `str.lower()` expands to two codepoints
+    (pinned by a derivation test), so `zzz:İ` and `attrs:İ` genuinely
+    split into two surviving tokens and diverge.
 
-    İ is not the proxy's only inaccuracy, and calling it "otherwise
-    reliable" (as this entry used to) was wrong in the other direction
-    too. Two surviving *pieces* are not two surviving *tokens*: a value
+    How the allowlist decides "survives as 2+ tokens" is worth stating
+    precisely, because this entry used to describe it as a crude
+    two-character proxy that was explicitly not reliable, and that
+    description is now stale. It is field-kind-aware and modelled on the
+    real analyzers rather than on an enumerated separator character
+    class. For a TEXT field it is whoosh's own tokenizer regex
+    (`\w+(\.?\w+)*`, so a single interior dot glues two runs into one
+    token, see entry 46) followed by both of `StopFilter`'s rules:
+    `minsize=2` and whoosh's live `STOP_WORDS` set, the latter derived
+    from `whoosh.analysis.STOP_WORDS` at import time rather than
+    hand-copied, so `ab/the`, `901+and` and `zzz:the` are correctly not
+    claimed. For a comma_values KEYWORD field there is no two-character
+    rule at all and no dot-gluing: the split is a literal comma, applied
+    by `CommaValuesPlugin` at the parser level, and a piece of any length
+    counts (`tag:'0,00'`). The İ exception above is the one place the
+    model names a specific character. What remains an approximation is
+    the *query-grammar* boundary work around the value (which characters
+    can end a bare value, which are literal text inside an explicitly
+    fielded one), not the analyzer simulation itself.
+
+    Two surviving *pieces* are still not two surviving *tokens*: a value
     whose pieces are all the same word (`path:ïð9-ïð9`, `ab-ab`,
     `ab-ab-ab`, case-insensitively) analyzes to a single distinct token,
     so ANDing and ORing it come out the same and the two sides compare
@@ -488,10 +507,24 @@ parse-then-emit pipeline).
     `OR` entry in particular discarded four out of five of the
     comparisons it claimed.
 
+    Corpus lines: the two `tests/differential/corpus_paperless.txt` lines
+    named above, plus the two entry-15 KNOWN DIVERGENCE blocks in
+    `tests/differential/corpus_realworld.txt`: the unknown-field-demoted
+    group (`dat:'-1 year to now'`,
+    `type: A OR type: B OR custom_field_name >= 2025-01-01`,
+    `document_type:[Receipt]`, `tag: 11-33 Mirka`) and the nine real
+    user values the field-kind-aware rebuild newly claims (`02091-C-71`,
+    `02091-C-712`, `02091-C-71a`, `02091-C-76hallo`, `9,90`,
+    `test 12,34 some use`, `वर्तमान`, `वर्तमान क्षण की धन्यता`,
+    `ASN>1593902`).
+
     Test references: `tests/emitter/result_allowlist.py`'s unfielded/
     `OR`-nested dashed-word and bare-JSON-value entries;
     `tests/emitter/test_acceptance_property.py`'s
-    `test_multitoken_default_or_context_is_a_result_level_divergence`.
+    `test_multitoken_default_or_context_is_a_result_level_divergence`;
+    `tests/differential/test_allowlist_xref.py`'s
+    `test_entry_15_claims_genuine_divergences` and
+    `test_entry_15_does_not_claim_agreeing_shapes`.
 
 16. **Several AST-level divergences above do not change final search
     results for this project's fixtures (a finding, not a new divergence of
@@ -3288,10 +3321,15 @@ parse-then-emit pipeline).
     filter.
 
     `9,90` deserves a note so the two facts about it are not read as one.
-    Entry 15 already documents a *different*, now-resolved concern for this
-    exact value: on a comma-values KEYWORD field, an unquoted `9,90` is
-    split at parse time by the `CommaValuesPlugin`/oracle's own comma
-    handling, which is a query-level, AST-combinator mechanism. The mismatch
+    A *different*, now-resolved concern already covers this exact value at
+    the AST-comparison layer, as a corpus line
+    (`tests/differential/corpus_realworld.txt`) claimed by entry 15's
+    allowlist regex and pinned by
+    `tests/differential/test_allowlist_xref.py`'s `bare-comma-keyword-path`
+    case, though entry 15's own prose does not single the value out: on a
+    comma-values KEYWORD field, an unquoted `9,90` is split at parse time by
+    the `CommaValuesPlugin`/oracle's own comma handling, which is a
+    query-level, AST-combinator mechanism. The mismatch
     this entry documents is unrelated: read as a TEXT value, `9,90`'s comma
     separates a piece too short to survive the oracle's `minsize=2` but not
     the host's, so the two sides disagree on token count. Both facts are
