@@ -586,10 +586,28 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         # uppercase in the text on either side of the separator, so a
         # bound whose only uppercase is a TO-shaped run (bTO, aTO) is
         # claimed too.
+        #
+        # Both branches are written as a tempered, possessive scan to a
+        # SINGLE occurrence (the earliest uppercase letter / earliest
+        # qualifying "to") rather than the more obvious pair of greedy
+        # `[^\]}]*` runs either side of the required character: existence
+        # of a later, valid pairing implies existence at the earliest one
+        # too (an uppercase letter before some qualifying "to" is also
+        # before every "to" after it; a qualifying "to" before some
+        # uppercase letter is also before that same letter no matter which
+        # "to" is picked first), so stopping at the first candidate loses
+        # no matches. The naive greedy pair is measurably quadratic on an
+        # unclosed bracket ("zzz:[" followed by thousands of "a to "
+        # repeats): the outer `[^\]}]*` backtracks through every "to" in
+        # the input, and for each one the inner run re-scans to the end
+        # looking for an uppercase letter that is never there, same
+        # mechanism as entry 15's own lookahead (`_RANGE_LOOKAHEAD` above).
         re.compile(
             rf"\b(?!(?:{DATE_FIELDS_PATTERN}):)\w+:[\[{{]"
-            r"(?:[^\]}]*[A-Z][^\]}]*(?<=\s)(?i:TO)(?=[\s\]}])"
-            r"|[^\]}]*(?<=[\s\[{])(?i:TO)(?=[\s\]}])[^\]}]*[A-Z])"
+            r"(?:(?:(?![A-Z])[^\]}])*+[A-Z]"
+            r"(?:(?!(?<=\s)(?i:TO)(?=[\s\]}]))[^\]}])*+(?<=\s)(?i:TO)(?=[\s\]}])"
+            r"|(?:(?!(?<=[\s\[{])(?i:TO)(?=[\s\]}]))[^\]}])*+"
+            r"(?<=[\s\[{])(?i:TO)(?=[\s\]}])[^\]}]*[A-Z])"
             r"[^\]}]*[\]}]"
         ),
         (
@@ -1314,8 +1332,21 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # produce the divergence ("NOT ((()) 0)", "NOT (() 0)" both compare
     # EQUAL), so claiming it only discarded the comparison.
     (
+        # Anchored at the string start: every clause here is a `.*`
+        # existence lookahead ("does NOT/an empty group/a zero-token
+        # fielded value occur somewhere ahead"), whose truth at any given
+        # start position implies its truth at position 0 too (a hit later
+        # in the string is still a hit when searched for from the very
+        # beginning). `allowed_reason`/`allowed_entry`/`allowed` only ever
+        # ask whether this pattern matched at all, never where, so
+        # anchoring changes nothing observable. Left unanchored, a query
+        # with no "NOT" anywhere (the common case on an adversarial,
+        # never-closes bracket input) makes `.search()` retry these `.*`
+        # scans from every position in the string in turn, each one
+        # itself linear: quadratic overall. Anchoring makes the match
+        # attempt run exactly once.
         re.compile(
-            r"(?=.*\bNOT\b)(?=.*\(\))"
+            r"\A(?=.*\bNOT\b)(?=.*\(\))"
             rf"(?=.*\b(?:{TEXT_FIELDS_PATTERN}):['\"]?"
             rf"{ZERO_TOKEN_WORD}(?![\w.,/-]))"
         ),
@@ -1452,8 +1483,13 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # entry 23) and "title:foo ((0) ANDNOT title:bar)" (unfielded, so it
     # multifield-expands rather than resolving to nothing) compare EQUAL.
     (
+        # Anchored for the same reason as the entry-23/40 composed pattern
+        # above: both clauses here are `.*` existence lookaheads too, so
+        # matching only at the string start (rather than letting
+        # `.search()` retry from every position) changes nothing
+        # observable and turns an O(n^2) unclosed-bracket cost into O(n).
         re.compile(
-            r"(?=.*\b(?:ANDNOT|ANDMAYBE|REQUIRE)\b)"
+            r"\A(?=.*\b(?:ANDNOT|ANDMAYBE|REQUIRE)\b)"
             r"(?=.*(?:\((?:\s|\(|\))*\)"
             rf"|\(\s*(?:{TEXT_FIELDS_PATTERN}):"
             rf"{ZERO_TOKEN_WORD}(?:[-,/]{ZERO_TOKEN_WORD})*[-,/]?"

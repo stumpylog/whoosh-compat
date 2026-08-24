@@ -611,3 +611,118 @@ def test_entry_15_range_lookahead_is_linear_on_an_unclosed_bracket() -> None:
     not_a_range = allowed_reason("document_type:[Receipt]")
     assert not_a_range is not None
     assert "entry 15" in not_a_range
+
+
+def _entry_43_patterns() -> list[re.Pattern[str]]:
+    return [pattern for pattern, reason, _kind in ALLOW if "entry 43" in reason]
+
+
+def test_entry_43_range_case_fold_lookahead_is_linear_on_an_unclosed_bracket() -> None:
+    r"""Entry 43's TermRange-case-fold pattern hunts an uppercase letter
+    on either side of a "to" separator inside a bracketed range, written
+    as a pair of greedy `[^\]}]*` runs either side of the required
+    character. On an unclosed bracket with no uppercase letter anywhere
+    ("zzz:[" followed by thousands of "a to " repeats), the outer run
+    backtracks through every "to" in the input, and for each one the
+    inner run re-scans all the way to the end looking for an uppercase
+    letter that is never there: quadratic, same mechanism as entry 15's
+    own lookahead. Rewritten as a tempered, possessive scan to the
+    earliest qualifying character instead (existence of a later, valid
+    pairing implies existence at the earliest one too, so stopping there
+    loses no matches).
+    """
+
+    adversarial = "zzz:[" + "a to " * 20_000
+    patterns = _entry_43_patterns()
+    assert patterns, "entry 43's allowlist pattern went missing"
+
+    start = time.perf_counter()
+    matched = [p for p in patterns if p.search(adversarial)]
+    elapsed = time.perf_counter() - start
+    assert elapsed < 1.0, f"entry 43's range case-fold lookahead took {elapsed:.3f}s"
+    assert matched == []
+
+    for q in ("title:[A TO b]", "title:[a TO B]", "title:[aB to CD]"):
+        reason = allowed_reason(q)
+        assert reason is not None, q
+        assert "entry 43" in reason, q
+
+    for q in ("title:[abc]", "title:[a TO b]", "created:[A TO B]"):
+        reason = allowed_reason(q)
+        assert reason is None or "entry 43" not in reason, q
+
+
+def _entry_23_composed_patterns() -> list[re.Pattern[str]]:
+    return [
+        pattern
+        for pattern, reason, _kind in ALLOW
+        if "entry 23 (with entry 40's empty-group rule)" in reason
+    ]
+
+
+def test_entry_23_composed_pattern_is_linear_on_an_unclosed_bracket() -> None:
+    r"""Entry 23's composed NOT/empty-group/zero-token pattern is three
+    `.*`-existence lookaheads chained with no consuming match after them:
+    zero-width, so `.search()` retries the whole chain from every
+    position in the string when it fails at position 0. On an unclosed
+    bracket with no "NOT" anywhere, every one of those retries costs
+    O(remaining length): quadratic overall. Each lookahead's truth at any
+    start position implies its truth at position 0 too (something found
+    ahead of a later position is still ahead of the very start), so
+    anchoring the whole pattern to the string start changes nothing
+    observable and makes the match attempt run exactly once.
+    """
+
+    adversarial = "zzz:[" + "a to " * 20_000
+    patterns = _entry_23_composed_patterns()
+    assert patterns, "entry 23's composed allowlist pattern went missing"
+
+    start = time.perf_counter()
+    matched = [p for p in patterns if p.search(adversarial)]
+    elapsed = time.perf_counter() - start
+    assert elapsed < 1.0, f"entry 23's composed pattern took {elapsed:.3f}s"
+    assert matched == []
+
+    q = "((0) OR (NOT ((()) AND (title:the))))"
+    reason = allowed_reason(q)
+    assert reason is not None, q
+    assert "entry 23" in reason, q
+
+    for q in ("title:foo", "NOT title:bar", "(())"):
+        reason = allowed_reason(q)
+        assert reason is None or "entry 23 (with entry 40's" not in reason, q
+
+
+def _entry_27_patterns() -> list[re.Pattern[str]]:
+    return [pattern for pattern, reason, _kind in ALLOW if "entry 27" in reason]
+
+
+def test_entry_27_pattern_is_linear_on_an_unclosed_bracket() -> None:
+    r"""Entry 27's ANDNOT/ANDMAYBE/REQUIRE pattern is two `.*`-existence
+    lookaheads with nothing consuming after them, the same zero-width
+    shape as the entry-23 composed pattern above and quadratic for the
+    same reason on an unclosed bracket with none of ANDNOT/ANDMAYBE/
+    REQUIRE anywhere in it. Anchored to the string start for the same
+    reason: existence-ahead-of-a-later-position implies existence-ahead-
+    of-the-start, so anchoring is match-preserving and bounds the cost to
+    one attempt.
+    """
+
+    adversarial = "zzz:[" + "a to " * 20_000
+    patterns = _entry_27_patterns()
+    assert patterns, "entry 27's allowlist pattern went missing"
+
+    start = time.perf_counter()
+    matched = [p for p in patterns if p.search(adversarial)]
+    elapsed = time.perf_counter() - start
+    assert elapsed < 1.0, f"entry 27's pattern took {elapsed:.3f}s"
+    assert matched == []
+
+    q = "title:foo (() ANDNOT title:bar)"
+    reason = allowed_reason(q)
+    assert reason is not None, q
+    assert "entry 27" in reason, q
+
+    for q in ("title:foo ANDNOT title:bar", "title:foo (title:0 ANDNOT title:bar)"):
+        reason = allowed_reason(q)
+        assert reason is None or "entry 27" not in reason, q
