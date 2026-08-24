@@ -462,7 +462,8 @@ _NON_EMPTY_RANGE = r"(?!\s*(?i:to)?\s*[\]}])"
 # Written with a tempered, possessive run rather than the obvious pair of
 # lazy `[^\]}]*?` quantifiers: the lazy spelling re-scans overlapping
 # stretches whenever the bracket is never closed, which is measurably
-# quadratic ("zzz:[" followed by 16000 repeats of "a to " took 10.3s).
+# quadratic ("zzz:[" followed by 16000 repeats of "a to " took upward of
+# 15s, varying with hardware, versus well under a tenth of a second here).
 # The tempered branch stops exactly at the first "to" and the second run
 # scans once to the first closing bracket, so a match attempt is linear
 # in the input and cannot be made to backtrack at all.

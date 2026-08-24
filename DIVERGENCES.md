@@ -484,7 +484,7 @@ parse-then-emit pipeline).
     claimed. For a comma_values KEYWORD field there is no two-character
     rule at all and no dot-gluing: the split is a literal comma, applied
     by `CommaValuesPlugin` at the parser level, and a piece of any length
-    counts (`tag:'0,00'`). The İ exception above is the one place the
+    counts (`tag:'0,00' OR x`). The İ exception above is the one place the
     model names a specific character. What remains an approximation is
     the *query-grammar* boundary work around the value (which characters
     can end a bare value, which are literal text inside an explicitly
