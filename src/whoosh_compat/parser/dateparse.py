@@ -82,6 +82,7 @@ a successful parse:
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from datetime import UTC
 from datetime import date
 from datetime import datetime
@@ -1291,11 +1292,125 @@ class DateParserPlugin(Plugin):
             else:
                 continue
 
-            new_node.startchar = node.startchar
-            new_node.endchar = node.endchar
+            # Widening only applies when node's raw_value is EXACTLY the
+            # source text at node's own span: a bare, unquoted WordNode.
+            # Anything else has nothing coherent to glue a following
+            # sibling's text onto: range_to_node's raw_value is a single
+            # BOUND string (e.g. "qqq" out of "[qqq TO zzz]"), not a slice
+            # of the source at node.startchar/endchar, and a quoted
+            # PhraseNode's .text has its surrounding quotes stripped while
+            # its span still includes them (added:"qqq"foo would otherwise
+            # widen to raw_value="qqqfoo", a string that appears nowhere in
+            # the query). Stated as a positive precondition (what a widen
+            # target must be), not a blacklist of what it must not be, so a
+            # future node kind with the same span/text mismatch is excluded
+            # by default instead of needing its own carve-out.
+            if isinstance(new_node, DateErrorNode) and type(node) is syntax.WordNode:
+                self._widen_bad_date_error(new_node, node, group, i)
+            else:
+                new_node.startchar = node.startchar
+                new_node.endchar = node.endchar
             group[i] = new_node
 
         return group
+
+    @staticmethod
+    def _leftover_fragment_text(sib: syntax.SyntaxNode) -> str | None:
+        """The text ``sib`` contributes to a widened ``BAD_DATE`` report if
+        it is a leftover, originally-unfielded plain word, or ``None`` if
+        it is something else.
+
+        Two shapes, because of where this runs in the pipeline
+        (FILTER_MULTIFIELD and FILTER_DATES share a priority, and
+        MultifieldPlugin is always registered first for a
+        :class:`MultifieldParser`, so by the time ``do_dates`` sees a
+        sibling that started out unfielded, it has usually already been
+        rewritten):
+
+        * a bare ``WordNode`` with no field of its own (a plain
+          :class:`~whoosh_compat.parser.default.QueryParser` with no
+          ``MultifieldPlugin`` at all, or anything else reached before
+          multifield's rewrite); or
+        * the ``OrGroup`` ``MultifieldPlugin.do_multifield`` rewrites an
+          unfielded node into: one same-text, same-span ``copy.copy`` of
+          the original per default field, differing only in fieldname and
+          boost. Detected by that exact shape (every child a ``WordNode``
+          with identical text/span) rather than by field membership, so a
+          genuine multi-term ``OrGroup`` the user actually wrote is never
+          mistaken for one.
+        """
+
+        if type(sib) is syntax.WordNode and sib.fieldname is None:
+            return cast(str, sib.text)
+        if isinstance(sib, syntax.GroupNode) and len(sib) > 0:
+            first = sib[0]
+            if (
+                type(first) is syntax.WordNode
+                and first.fieldname is not None
+                and all(
+                    type(child) is syntax.WordNode
+                    and child.text == first.text
+                    and child.startchar == first.startchar
+                    and child.endchar == first.endchar
+                    for child in sib
+                )
+            ):
+                return cast(str, first.text)
+        return None
+
+    def _widen_bad_date_error(
+        self,
+        err: DateErrorNode,
+        node: syntax.WordNode,
+        group: syntax.GroupNode,
+        i: int,
+    ) -> None:
+        """Extend ``err``'s reported span/``raw_value`` to cover leftover
+        text immediately (no gap) after it, so a value the tagger's
+        colon-boundary detection cut mid-token (an unquoted RFC3339
+        timestamp, DIVERGENCES.md entry 54) reports what the user actually
+        typed instead of only the fragment the date grammar saw.
+
+        Deliberately does NOT cross whitespace: a date value ends at the
+        first space by this class's own design (no undelimited multi-word
+        joining, see the class docstring), so a whitespace-separated
+        leftover (``added:-1 week`` -> ``week``) was never part of the
+        attempted value, and there is no principled stopping point for how
+        many following words to absorb once whitespace is crossed. See
+        DIVERGENCES.md entry 58.
+
+        Mutates ``err`` in place (span and diagnostic) and always sets its
+        span, widened or not. The leftover node(s) themselves are left
+        untouched in ``group``: this only changes what the diagnostic
+        reports, never what the query searches for.
+        """
+
+        end = node.endchar
+        extra = ""
+        j = i + 1
+        while j < len(group):
+            sib = group[j]
+            if sib.startchar == end:
+                frag = self._leftover_fragment_text(sib)
+                if frag is not None:
+                    extra += frag
+                    end = sib.endchar
+                    j += 1
+                    continue
+            break
+
+        err.startchar = node.startchar
+        err.endchar = end
+        if not extra:
+            return
+
+        raw_value = cast(str, err.diagnostic.raw_value) + extra
+        err.diagnostic = replace(
+            err.diagnostic,
+            message=f"{raw_value!r} is not a recognizable date",
+            endchar=end,
+            raw_value=raw_value,
+        )
 
     def text_to_node(self, node: syntax.SyntaxNode, spec: FieldSpec) -> syntax.SyntaxNode:
         text: str = node.text  # type: ignore[attr-defined]

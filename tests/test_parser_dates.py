@@ -267,6 +267,173 @@ def test_single_quoted_range_bound_works_like_an_unquoted_one(reg: FieldRegistry
 
 
 @pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("added:2005-01-01T00:00:00Z", id="rfc3339-utc"),
+        pytest.param("added:2005-01-01T00:00:00", id="rfc3339-no-zone"),
+        pytest.param("added:2005-01-01T12:30", id="rfc3339-to-the-minute"),
+    ],
+)
+def test_bad_date_raw_value_widens_to_cover_a_contiguous_leftover_fragment(
+    reg: FieldRegistry, query: str
+) -> None:
+    """DIVERGENCES.md entry 58: the colon-fragmented shape entry 54 rejects
+    reports the FULL value the user typed, not just the fragment the date
+    grammar itself saw. The leftover text is contiguous (no whitespace gap)
+    with the rejected fragment, so it is folded into the diagnostic's
+    raw_value/span; the leftover node itself is untouched (still a plain
+    term in the tree, exactly as before this fix), only what the
+    diagnostic reports changes.
+
+    See test_whitespace_separated_leftover_is_not_folded_into_raw_value
+    below for the boundary this deliberately does NOT cross.
+    """
+    res = dparse(query, reg)
+    assert res.diagnostics
+    d = res.diagnostics[0]
+    assert d.kind is DiagnosticKind.BAD_DATE
+    expected = query[len("added:") :]
+    assert d.raw_value == expected
+    assert query[d.startchar : d.endchar] == expected
+    # The resulting ErrorLeaf's own span (not just the Diagnostic's) widens
+    # the same way: a host reading the tree instead of the diagnostic list
+    # must see the same, consistent span.
+    (leaf,) = [n for n in _nodes(res.ast) if isinstance(n, ast.ErrorLeaf)]
+    assert (leaf.startchar, leaf.endchar) == (d.startchar, d.endchar)
+    # No AST semantic change: the leftover text this widening folds into
+    # the diagnostic still stays exactly where it already was in the tree,
+    # an ordinary default-field Term, unaffected by what the diagnostic
+    # reports.
+    (term,) = [n for n in _nodes(res.ast) if isinstance(n, ast.Term)]
+    assert isinstance(term.text, str)
+    assert query.endswith(term.text)
+
+
+def test_bad_date_raw_value_widens_via_a_bare_wordnode_leftover(reg: FieldRegistry) -> None:
+    """The other of the two shapes _leftover_fragment_text recognizes (see
+    DIVERGENCES.md entry 58): a bare, still-unfielded WordNode, which
+    whoosh_compat.parse() never produces (it always builds a
+    MultifieldParser, so even a single default field goes through
+    MultifieldPlugin's rewrite -- see the test above, which exercises that
+    OrGroup shape instead). A plain QueryParser with NO default fieldname
+    (so an unfielded leftover is never itself attempted as a date, and
+    never reaches MultifieldPlugin, which is MultifieldParser-only) is the
+    only way to reach this branch.
+    """
+    parser = QueryParser(None, reg)
+    parser.add_plugin(DateParserPlugin(BASE, BERLIN))
+    node = ast.normalize(parser.parse("added:2005-01-01T00:00:00Z"))
+    assert isinstance(node, ast.And)
+    (leaf,) = [n for n in node.children if isinstance(n, ast.ErrorLeaf)]
+    assert leaf.diagnostic.raw_value == "2005-01-01T00:00:00Z"
+    (term,) = [n for n in node.children if isinstance(n, ast.Term)]
+    assert term.field is None
+    assert term.text == "01T00:00:00Z"
+
+
+def test_bad_date_raw_value_does_not_widen_past_a_wildcard_leftover(
+    reg: FieldRegistry,
+) -> None:
+    """Documented scope limit (DIVERGENCES.md entry 58): a leftover that
+    WildcardPlugin has already turned into a WildcardNode/PrefixNode
+    (priority 50, before do_dates) is not plain leftover text, so
+    _leftover_fragment_text does not recognize it and raw_value stays
+    exactly the tokenizer's original fragment, same as before entry 58.
+    """
+    res = dparse("added:2005-01-01T00:00:00Z*", reg)
+    assert res.diagnostics
+    assert res.diagnostics[0].raw_value == "2005-01-"
+
+
+def test_unfielded_value_still_resolves_as_a_date_with_a_date_default_field(
+    reg: FieldRegistry,
+) -> None:
+    """Guards the priority ordering _widen_bad_date_error's sibling lookup
+    relies on (DIVERGENCES.md entry 58): do_dates and MultifieldPlugin's
+    do_multifield share a filter priority, with do_multifield always
+    winning the tie (registered first in MultifieldParser.__init__), so an
+    unfielded value on a DATE default field is ALREADY multifield-expanded
+    into a per-field OrGroup by the time do_dates runs -- do_dates must
+    still recognize and date-parse its "added" copy, not silently skip an
+    unfielded node and let a literal Term reach a DATETIME field instead
+    (which whoosh-compat's own emitter refuses to emit at all).
+
+    Reordering do_dates to run BEFORE multifield expansion (to simplify
+    the sibling lookup above) breaks this case silently: do_dates only
+    ever looks at a node's OWN fieldname, and an unfielded node has none
+    until multifield assigns one.
+    """
+    res = wc.parse(
+        "yesterday", registry=reg, default_fields=["content", "added"], tz=BERLIN, basedate=BASE
+    )
+    assert not res.diagnostics
+    assert isinstance(res.ast, ast.Or)
+    kinds = {type(c) for c in res.ast.children}
+    assert kinds == {ast.Term, ast.DateRange}
+
+
+def test_bad_date_raw_value_only_widens_the_explicitly_fielded_spelling(
+    reg: FieldRegistry,
+) -> None:
+    """CHARACTERIZATION, not asserting this is the ideal outcome (see
+    DIVERGENCES.md entry 58's third scope-limit paragraph): with a
+    DATE/DATETIME field in default_fields, the explicitly-fielded and
+    unfielded spellings of the same colon-fragmented value widen
+    differently. do_dates recurses into the OrGroup MultifieldPlugin
+    already built for the unfielded spelling; the sibling lookup inside
+    that recursion never sees anything outside the OrGroup, so the
+    unfielded spelling keeps reporting only the tokenizer's original
+    fragment while the explicitly-fielded one reports the full value.
+
+    The explicitly-fielded spelling also reports a SECOND diagnostic on
+    "added": the leftover sibling is itself attempted as a date (it is
+    also a copy inside an OrGroup, since it is unfielded), producing its
+    own narrower diagnostic whose span nests entirely inside the widened
+    one's -- the overlap this same paragraph documents.
+    """
+    added_ref = FieldRef("added")
+    fielded = wc.parse(
+        "added:2005-01-01T00:00:00Z",
+        registry=reg,
+        default_fields=["content", "added"],
+        tz=BERLIN,
+        basedate=BASE,
+    )
+    unfielded = wc.parse(
+        "2005-01-01T00:00:00Z",
+        registry=reg,
+        default_fields=["content", "added"],
+        tz=BERLIN,
+        basedate=BASE,
+    )
+    fielded_values = {d.raw_value for d in fielded.diagnostics if d.field == added_ref}
+    unfielded_values = {d.raw_value for d in unfielded.diagnostics if d.field == added_ref}
+    assert fielded_values == {"2005-01-01T00:00:00Z", "01T00:00:00Z"}
+    assert "2005-01-01T00:00:00Z" not in unfielded_values
+
+
+def test_whitespace_separated_leftover_is_not_folded_into_raw_value(
+    reg: FieldRegistry,
+) -> None:
+    """The boundary the widening above must not cross: a date value ends
+    at the first whitespace by this grammar's own design (DateParserPlugin
+    free=False, no undelimited multi-word joining), so "week" in
+    "added:-1 week" was never part of the attempted value and folding it
+    in would have no principled stopping point (how many following words?
+    "added:-1 week invoice" would then need to decide whether "invoice" is
+    part of the value too). raw_value stays exactly the single token that
+    was actually handed to the date grammar.
+    """
+    res = dparse("added:-1 week", reg)
+    assert res.diagnostics
+    d = res.diagnostics[0]
+    assert d.raw_value == "-1"
+    assert d.startchar == len("added:")
+    assert d.endchar == len("added:-1")
+    assert any(isinstance(n, ast.Term) and n.text == "week" for n in _nodes(res.ast))
+
+
+@pytest.mark.parametrize(
     ("query", "text"),
     [
         pytest.param("added:2005-01-01 invoice", "invoice", id="day-precision-then-a-word"),
@@ -721,34 +888,39 @@ def test_rfc3339_lowercase_t_and_z(reg: FieldRegistry) -> None:
 
 
 @pytest.mark.parametrize(
-    ("query", "fragment"),
+    "query",
     [
-        pytest.param("added:2026-08-04T10:30:00", "2026-08-", id="full-date"),
-        pytest.param("added:2026-08T10:30", "2026-", id="no-day"),
+        pytest.param("added:2026-08-04T10:30:00", id="full-date"),
+        pytest.param("added:2026-08T10:30", id="no-day"),
     ],
 )
 def test_bare_unquoted_t_value_is_rejected_not_truncated(
     reg: FieldRegistry,
     query: str,
-    fragment: str,
 ) -> None:
     # DIVERGENCES.md entry 54, superseding entry 49. Without quotes the
     # tokenizer splits the value at its colons before the date grammar
-    # runs, leaving the date field the fragment named above -- cut off
-    # after a separator, mid-token. Real whoosh swallows that dangling
-    # separator and reads the fragment as a whole, shorter date (the
-    # August-2026 month window, or the 2026 year window), then ANDs the
-    # rest of the timestamp on as free text; entry 49 used to keep that
-    # truncation for parity. It is a silently wrong query with no
-    # diagnostic, so the fragment is now a bad date instead. The quoted
-    # spelling (entry 48, test_rfc3339_t_z_is_an_absolute_utc_instant_not_
-    # local above) and the bracketed-range spelling are the ones that
-    # honor the full value.
+    # runs, leaving the date field a fragment cut off after a separator,
+    # mid-token. Real whoosh swallows that dangling separator and reads the
+    # fragment as a whole, shorter date (the August-2026 month window, or
+    # the 2026 year window), then ANDs the rest of the timestamp on as free
+    # text; entry 49 used to keep that truncation for parity. It is a
+    # silently wrong query with no diagnostic, so the fragment is now a bad
+    # date instead. The quoted spelling (entry 48,
+    # test_rfc3339_t_z_is_an_absolute_utc_instant_not_local above) and the
+    # bracketed-range spelling are the ones that honor the full value.
+    #
+    # raw_value itself is the FULL value the user typed here, not the
+    # tokenizer's cut-off fragment: DIVERGENCES.md entry 58 widens the
+    # diagnostic to cover the immediately-adjacent leftover text once the
+    # tokenizer's own fragment fails to parse (see
+    # test_bad_date_raw_value_widens_to_cover_a_contiguous_leftover_fragment
+    # above for that mechanism in isolation).
     res = dparse(query, reg)
     assert res.diagnostics
     assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
     assert res.diagnostics[0].field == FieldRef("added")
-    assert res.diagnostics[0].raw_value == fragment
+    assert res.diagnostics[0].raw_value == query[len("added:") :]
     assert not any(isinstance(n, ast.DateRange) for n in _nodes(res.ast))
 
 
@@ -1345,6 +1517,47 @@ def test_range_out_of_range_diagnostic_names_the_failing_bound(
     assert bad_bound in res.diagnostics[0].message
     assert res.diagnostics[0].field == FieldRef("created")
     assert res.diagnostics[0].raw_value == bad_bound
+
+
+@pytest.mark.parametrize(
+    ("query", "bad_bound"),
+    [
+        pytest.param("added:[qqq TO zzz]foo", "qqq", id="both-bounds-bad-trailing-text"),
+        pytest.param("added:[2020 TO qqq]foo", "qqq", id="end-bound-bad-trailing-text"),
+    ],
+)
+def test_range_error_raw_value_is_not_glued_to_a_trailing_leftover(
+    reg: FieldRegistry, query: str, bad_bound: str
+) -> None:
+    """DIVERGENCES.md entry 58's widening only applies to a bare, unquoted
+    WordNode value, not a range_to_node error: a range error's raw_value
+    is a single BOUND string, not a slice of the source text at the error
+    node's own span, so gluing a following sibling's text onto it (as the
+    word-value widening does) would produce a string that appears nowhere
+    in the query and does not match the error's own span.
+    """
+    res = dparse(query, reg)
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics[0].raw_value == bad_bound
+    assert any(isinstance(n, ast.Term) and n.text == "foo" for n in _nodes(res.ast))
+
+
+def test_quoted_value_error_raw_value_is_not_glued_to_a_trailing_leftover(
+    reg: FieldRegistry,
+) -> None:
+    """The same shape as the range case above, for a double-quoted value:
+    a PhraseNode's .text has its surrounding quotes stripped, but its span
+    still includes them, so it is not a slice of the source text at its
+    own span either. added:"qqq"foo must report raw_value='qqq' (matching
+    its own 'qqq' span, quotes excluded), not 'qqqfoo' (which would match
+    neither the query text at that span nor anything the user typed).
+    """
+    res = dparse('added:"qqq"foo', reg)
+    assert res.diagnostics
+    assert res.diagnostics[0].kind is DiagnosticKind.BAD_DATE
+    assert res.diagnostics[0].raw_value == "qqq"
+    assert any(isinstance(n, ast.Term) and n.text == "foo" for n in _nodes(res.ast))
 
 
 @pytest.mark.parametrize(

@@ -2843,20 +2843,20 @@ parse-then-emit pipeline).
     matches to the end of its text, `ToEnd` rejects it, and the value
     diagnoses `BAD_DATE` naming the field and the offending text.
 
-    What `raw_value` carries, since it is the one string here that can
-    reach an end user: it is **the fragment the tokenizer handed the date
-    field, not the text the user typed**. For `added:2005-01-01T00:00:00Z`
-    it is `2005-01-` (measured), because the colons split the value before
-    any date parsing happens, as described above -- the rest of the
-    timestamp never reaches this diagnostic at all. A host quoting
-    `raw_value` back in an error message is therefore quoting something
-    nobody wrote, and should say what it wants the user to do (quote the
-    timestamp, per entry 48) in its own words rather than presenting the
-    fragment as the offending input. Pinned in
-    `tests/test_parser_dates.py`'s
-    `test_bare_unquoted_t_value_is_rejected_not_truncated`, which asserts
-    the exact fragment per spelling (`2026-08-` for a full date,
-    `2026-` when the day is absent).
+    What `raw_value` carries, updated by entry 58: this paragraph
+    originally documented `raw_value` as **the fragment the tokenizer
+    handed the date field, not the text the user typed** (for
+    `added:2005-01-01T00:00:00Z`, `2005-01-`, because the colons split the
+    value before any date parsing happens, as described above). Entry 58
+    widens `raw_value` to cover this exact kind of contiguous leftover
+    fragment (for this same query it is now the full
+    `2005-01-01T00:00:00Z`, with narrower scope limits of its own -- see
+    that entry). The advice this paragraph is really making holds
+    regardless of that widening, since it was never specific to the old
+    narrower behavior: a host should say what it wants the user to do
+    (quote the timestamp, per entry 48) in its own words
+    rather than presenting `raw_value` as if it were a self-explanatory
+    error message.
 
     The boundary, deliberately drawn where it is. A remainder that is a
     *clean token boundary* is still a term, not part of the value:
@@ -3090,3 +3090,166 @@ parse-then-emit pipeline).
     `test_do_fieldnames_consecutive_demoted_candidates_at_end_of_group`;
     `tests/differential/corpus_docs.txt`'s `aa:bb:cc` line, with its
     matching `tests/differential/allowlist.py` entry.
+
+58. **A `BAD_DATE` diagnostic's `raw_value` now reports the full
+    contiguous value the user typed, not just the fragment the tokenizer
+    cut it to before the date grammar ran (whoosh-compat improvement, no
+    whoosh equivalent).** Supersedes entry 54's "What `raw_value` carries"
+    paragraph. Before this entry, `raw_value` was exactly the text
+    `_error` (`src/whoosh_compat/parser/dateparse.py`) received: for
+    `added:2005-01-01T00:00:00Z` that was `2005-01-` (measured there),
+    because the tokenizer's colon-boundary detection had already cut the
+    value before any date parsing happened, and the rest of the timestamp
+    reached `do_dates` as a separate, unfielded sibling node the date
+    grammar never saw. A host quoting that back at a user was quoting
+    something nobody wrote, exactly the problem entry 54 already
+    described.
+
+    `do_dates`'s new `_widen_bad_date_error` (immediately after
+    `text_to_node`/`range_to_node` produces a `DateErrorNode`) looks ahead
+    at the group for text immediately (no gap: `sib.startchar == end`)
+    after the rejected fragment, via the new `_leftover_fragment_text`
+    helper, and folds each one's text into the diagnostic's
+    `message`/`raw_value`, widening `startchar`/`endchar` (both the
+    `Diagnostic`'s own copy and the resulting `ast.ErrorLeaf` node's) to
+    match. For `added:2005-01-01T00:00:00Z`, `raw_value` is now the full
+    `2005-01-01T00:00:00Z`.
+
+    `_leftover_fragment_text` recognizes two shapes, not one, and the
+    filter ordering this relies on is load-bearing, not incidental:
+    `FILTER_MULTIFIELD` and `FILTER_DATES` share a filter priority (110),
+    with `MultifieldPlugin` always winning that tie (it is registered
+    before `DateParserPlugin` inside `MultifieldParser.__init__`), so by
+    the time `do_dates` runs, an originally-unfielded leftover sibling has
+    *already* been rewritten by `do_multifield` into an `OrGroup` of one
+    same-text, same-span `copy.copy` of itself per default field.
+
+    `do_dates` must keep running AFTER `do_multifield`, not before: an
+    UNFIELDED value on a DATE default field (`wc.parse("yesterday",
+    default_fields=["content", "added"], ...)` with `added` a DATETIME
+    field) depends on `do_multifield` running first to assign it the
+    `added` fieldname before `do_dates` can recognize it as a date at all
+    (`do_dates` only ever looks at a node's OWN fieldname, which an
+    unfielded node has none of until multifield assigns one). Reordered
+    the other way, `do_dates` would see the still-unfielded node, find no
+    fieldname to resolve a spec from, and skip it entirely, so
+    multifield's later expansion would produce a literal `Term`/`TermRange`
+    on a DATETIME field instead of a `DateRange` -- a silent divergence
+    from real whoosh (verified against the oracle: whoosh produces the
+    `DateRange`), and one nothing in the existing suite exercised, since
+    nothing put a DATE/DATETIME field in `default_fields` before this
+    entry. The filter priorities therefore stay exactly as they were
+    (`do_dates` still runs after `do_multifield`); `_leftover_fragment_text`
+    is what was taught to also recognize the multifield-rewritten
+    `OrGroup` shape instead, detected structurally (every child a
+    `WordNode` with identical text/span, differing only in fieldname/boost)
+    rather than by field membership, so a genuine multi-term `OrGroup` the
+    user actually wrote is never mistaken for one.
+    `test_unfielded_value_still_resolves_as_a_date_with_a_date_default_field`
+    pins this case.
+
+    Deliberately does **not** cross whitespace. A date value ends at the
+    first space by this grammar's own design (`DateParserPlugin` never
+    supports whoosh's "free" undelimited multi-word mode, see the class
+    docstring), so `added:-1 week`'s `raw_value` stays exactly `-1`:
+    `week` was never part of the attempted value in the first place, and
+    there is no principled stopping point for how many trailing
+    whitespace-separated words to absorb once that boundary is crossed
+    (`added:-1 week invoice` -- is `invoice` part of the value too?). A
+    scoped, deliberately narrower version of whoosh's free mode that could
+    make these shapes parse successfully instead of merely reporting more
+    completely is tracked separately as future work, out of scope here.
+
+    Also does not widen past a wildcard/prefix leftover:
+    `added:2005-01-01T00:00:00Z*` still reports only `2005-01-`, since
+    `WildcardPlugin.do_wildcards` (priority 50) has already turned the
+    trailing `*`-bearing fragment into a `WildcardNode`/`PrefixNode` by the
+    time `do_dates` runs, which `_leftover_fragment_text` does not
+    recognize (deliberately: a wildcard pattern is not plain leftover
+    text). Narrower than the shape this entry set out to fix, but not
+    incorrect: the diagnostic still reports a real, if partial, prefix of
+    what the user typed, same as before this entry for that one spelling.
+
+    Widening only applies when the rejected value's own `raw_value` is
+    EXACTLY the source text at its node's own span: a bare, unquoted
+    `WordNode`. `do_dates` states this as a positive precondition
+    (`type(node) is syntax.WordNode`) rather than excluding specific node
+    kinds one at a time, because two different kinds fail it for two
+    different reasons, and a blacklist approach only ever excludes the
+    ones already found:
+
+    * a `range_to_node` error (a bracketed range whose bound(s) fail to
+      parse) has a `raw_value` that is a single BOUND string (`qqq` out of
+      `[qqq TO zzz]`), not a slice of the source text at the error node's
+      own span at all; gluing a following contiguous sibling's text onto
+      it produces a string that appears nowhere in the query
+      (`added:[qqq TO zzz]foo` would report `raw_value='qqqfoo'`);
+    * a quoted `PhraseNode` (`added:"qqq"foo`) has its surrounding quotes
+      stripped from `.text`, but its span still includes them, so
+      `raw_value` is a slice of the source text with a two-character
+      offset the naive concatenation does not account for (same failure
+      mode, `raw_value='qqqfoo'` instead of `'qqq'`).
+
+    Both are pinned:
+    `test_range_error_raw_value_is_not_glued_to_a_trailing_leftover` and
+    `test_quoted_value_error_raw_value_is_not_glued_to_a_trailing_leftover`.
+
+    A third scope limit, this one specific to a DATE/DATETIME field in
+    `default_fields`: the fielded and unfielded spellings of the same
+    value widen differently. `added:2005-01-01T00:00:00Z` (explicitly
+    fielded) widens as described above. The bare `2005-01-01T00:00:00Z`
+    (relying on `added` being a default field) does not: `do_dates`
+    recurses into the `OrGroup` `do_multifield` already built for it
+    before `do_dates` runs, and the sibling lookup inside that recursion
+    only ever sees the `OrGroup`'s own children (all sharing one
+    startchar), never a leftover outside it. `raw_value` stays `2005-01-`
+    for the unfielded spelling, exactly the pre-entry-58 behavior. Still
+    correct (an unwidened `raw_value` is still a genuine source-text
+    slice, just a shorter one), just narrower than the fielded case.
+
+    Widening a fielded value on a DATE default field also introduces a
+    new, and so far undeduplicated, overlap: the leftover sibling is
+    ITSELF attempted as a date under a DATE default field (the same
+    `OrGroup` recursion above tries to date-parse its `added` copy), so it
+    can raise its own `BAD_DATE` diagnostic with a span nested entirely
+    inside the widened diagnostic's span (`(6, 26)` containing `(14,
+    26)` for `added:2005-01-01T00:00:00Z` with `added` in
+    `default_fields`). Before this entry the two diagnostics' spans were
+    adjacent and disjoint; a host that highlights every diagnostic span in
+    a query will now double-highlight that overlapping range. No query
+    semantics change (both diagnostics already existed; only their spans
+    now overlap instead of touching), so this is left as a known, mild
+    display wrinkle rather than fixed here: suppressing the
+    now-partially-redundant inner diagnostic would need do_dates to know
+    about a WIDER diagnostic that hasn't been computed yet at the point it
+    processes the inner one, a larger restructuring than this entry's
+    scope.
+
+    This is purely a diagnostic-reporting change: the leftover node(s)
+    folded into `raw_value` are left exactly where they already were in
+    the tree (still an ordinary term on whatever default field(s) apply),
+    so what the query actually searches for is completely unchanged, only
+    what the diagnostic reports about the rejected value widens.
+    Consequently this needs no differential-triage paperwork (allowlist
+    entry, corpus line): `Diagnostic`/`raw_value` has no whoosh equivalent
+    to diverge from, and the AST shape the differential harness compares
+    is unaffected (the entry-6 diagnostic skip already treats any
+    `BAD_DATE`-bearing query as unconditionally out of structural
+    comparison, regardless of what the diagnostic inside it says).
+
+    Test references: `tests/test_parser_dates.py`'s
+    `test_bad_date_raw_value_widens_to_cover_a_contiguous_leftover_fragment`
+    (the `OrGroup`-shaped leftover, the only shape reachable through
+    `whoosh_compat.parse()`),
+    `test_bad_date_raw_value_widens_via_a_bare_wordnode_leftover` (the
+    other shape, only reachable through a plain, no-default-field
+    `QueryParser`),
+    `test_bad_date_raw_value_does_not_widen_past_a_wildcard_leftover`,
+    `test_whitespace_separated_leftover_is_not_folded_into_raw_value`,
+    `test_unfielded_value_still_resolves_as_a_date_with_a_date_default_field`
+    (the multifield-ordering regression above),
+    `test_range_error_raw_value_is_not_glued_to_a_trailing_leftover` and
+    `test_quoted_value_error_raw_value_is_not_glued_to_a_trailing_leftover`
+    (the scope-limiting precondition above), and the updated
+    `test_bare_unquoted_t_value_is_rejected_not_truncated` (entry 54's own
+    pinned example, now asserting the widened value).
