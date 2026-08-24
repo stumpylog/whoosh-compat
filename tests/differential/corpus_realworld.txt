@@ -191,6 +191,21 @@ type: A OR type: B OR custom_field_name >= 2025-01-01
 document_type:[Receipt]
 tag: 11-33 Mirka
 
+# --- KNOWN DIVERGENCE (DIVERGENCES.md entry 15, allowlist.py): a value
+# surviving at least one default field's own analyzer as 2+ distinct
+# tokens resolves Multitoken.DEFAULT differently on each side. Previously
+# unclaimed by entry 15's separator-character approximation; now claimed
+# by its field-kind-aware rebuild.
+02091-C-71
+02091-C-712
+02091-C-71a
+02091-C-76hallo
+9,90
+test 12,34 some use
+वर्तमान
+वर्तमान क्षण की धन्यता
+ASN>1593902
+
 # --- KNOWN DIVERGENCE (DIVERGENCES.md entry 18, allowlist.py): a bare
 # separated-ISO date diverges structurally even though both sides agree on
 # the value.
@@ -215,6 +230,12 @@ NOT tag:* OR NOT correspondent:*
 tag:steuer AND tag:valentin AND (title:*2025 OR (NOT title:*202[0-4] AND NOT title:*201[0-9] AND created:[2025-01-01T00:00:00Z TO 2026-01-01T00:00:00Z}))
 tag:steuer AND tag:valentin AND (title:*2024 OR (NOT title:*202[0-3] AND NOT title:*201[0-9] AND created:[2024-01-01T00:00:00Z TO 2025-01-01T00:00:00Z}))
 created:[-1yr to -0yr}
+
+# --- CONFIRMED PARITY: entry 15's over-claim on an unknown field
+# followed by a bracket range. These do not split into 2+ tokens on
+# either side; entry 15's regex narrowing resolves the over-claim.
+customDateField:[now to 2 weeks]
+customDateField:[now to next friday]
 
 # --- skipped: whoosh-compat reports a parse diagnostic for these (the
 # uniform DIVERGENCES.md entry 6 skip, counted by
@@ -247,37 +268,16 @@ type:A OR type:B OR notes:C
 #       modified:today
 #       produ*name
 #
-# (b) UNCLAIMED DIVERGENCE: these measurably diverge from the oracle and no
-#     allowlist entry claims them. They are NOT allowlisted here: an
-#     unclaimed divergence is a finding to escalate, not paperwork to write.
-#     See the pre-release report
-#     (.superpowers/sdd/2026-08-20-pre-release-grammar-and-emitter-fixes/
-#     real-world-corpus-integration-report.md) for the triage of each. All
-#     of these are entry 15's Multitoken.DEFAULT mechanism reached through a
-#     separator the entry-15 allowlist regex's dash/colon approximation does
-#     not model (a one-character interior piece, a comma, a ">", or a
-#     script whose analyzer splits inside a single word):
-#       02091-C-71
-#       02091-C-712
-#       02091-C-71a
-#       02091-C-76hallo
-#       9,90
-#       test 12,34 some use
-#       वर्तमान
-#       वर्तमान क्षण की धन्यता
-#       ASN>1593902
+# (b) UNCLAIMED DIVERGENCE: resolved. These shapes measurably diverge from the
+#     oracle. Previously unclaimed by entry 15's separator-character
+#     approximation, now claimed by field-kind-aware rebuild. See the live
+#     corpus lines above ("KNOWN DIVERGENCE ... entry 15").
 #
-# (c) OVER-CLAIMED: an existing allowlist entry matches these, but they
-#     measurably compare EQUAL, so adding them would trip the strict-xfail
-#     staleness assertion. Reported, not silently narrowed around. Entry
-#     12's own three both-relative-bound lines are now resolved (entry 12's
-#     regex now excludes that shape; see the live corpus lines above,
-#     "CONFIRMED PARITY"). The remaining two are entry 15's unknown-field
-#     alternative, which claims an unknown field followed by a bracket range
-#     that does not split into 2+ tokens; still open, a separate concern
-#     from this one:
-#       customDateField:[now to 2 weeks]
-#       customDateField:[now to next friday]
+# (c) OVER-CLAIMED: resolved. Entry 12's over-claims were narrowed by
+#     regex revision (see above, "CONFIRMED PARITY"). Entry 15's
+#     unknown-field bracket-range over-claims are also resolved by
+#     field-kind-aware rebuild. See the live corpus lines above
+#     ("CONFIRMED PARITY: entry 15's over-claim").
 #
 # (d) ORACLE CRASH: resolved. real whoosh raises
 #     AttributeError("'datetime.datetime' object has no attribute
