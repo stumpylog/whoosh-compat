@@ -337,6 +337,14 @@ def _survivor_tail(survivor: str, filler: str) -> str:
     there is no earlier survivor for a possessive leading filler to
     accidentally eat into.
 
+    Only valid where the prefix's colon is itself a genuine analyzer split
+    point, which is true for TEXT (StandardAnalyzer splits the merged
+    unknown-field blob on the colon) but not for comma_values KEYWORD
+    (only a literal comma splits a token, never colon): counting the
+    prefix as a KEYWORD survivor wrongly admits a colon-only value with no
+    comma at all (measured: "zzz:x"). Use `_survivor_chain` on the value
+    alone for a KEYWORD alternative that follows this kind of prefix.
+
     NOT interchangeable with `_survivor_chain`: using `_survivor_chain`
     for a value that follows an already-consumed prefix requires 2 MORE
     survivors from scratch within just that tail (wrong: measured, this
@@ -1629,10 +1637,10 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
             r"(?!(?:\[|\{)[^\]}]*?\b(?i:to)\b[^\]}]*?(?:\]|\}))(?!\")"
             r"(?:"
             rf"'(?:{_survivor_tail(_TEXT_SURVIVOR, _UF_QUOTED_FILLER)}"
-            rf"|{_survivor_tail(_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})'(?=[\s)]|$)"
+            rf"|{_survivor_chain(_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})'(?=[\s)]|$)"
             r"|"
             rf"(?:{_survivor_tail(_TEXT_SURVIVOR, _UF_FILLER)}"
-            rf"|{_survivor_tail(_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})"
+            rf"|{_survivor_chain(_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})"
             r"'?(?=[\s)]|$)"
             r")"
         ),

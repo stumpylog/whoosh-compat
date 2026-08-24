@@ -179,7 +179,7 @@ def test_entry15_fielded_regex_covers_every_analyzer_splitting_field(field: str)
     registry means a newly registered field fails here instead of
     silently shrinking coverage.
     """
-    reason = allowed_reason(f"asn:1 OR {field}:'a,b'")
+    reason = allowed_reason(f"asn:1 OR {field}:'ab,cd'")
     assert reason is not None, f"entry-15 fielded regex does not cover {field!r}"
     assert "entry 15" in reason, f"{field!r} matched a different entry: {reason!r}"
 
