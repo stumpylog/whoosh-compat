@@ -37,6 +37,7 @@ import pytest
 from whoosh.analysis import STOP_WORDS
 
 from tests.differential.allowlist import ALLOW
+from tests.differential.allowlist import allowed_entry
 from tests.differential.allowlist import allowed_reason
 from tests.differential.oracle import ORACLE_REGISTRY
 from whoosh_compat.fields import FieldKind
@@ -430,3 +431,89 @@ def test_the_lowercase_expanding_character_set_is_exactly_i_dot() -> None:
 
     expanding = {c for c in map(chr, range(0x80, sys.maxunicode + 1)) if len(c.lower()) > 1}
     assert expanding == {"İ"}
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
+        pytest.param("02091-C-71", id="dash-interior-1char-piece"),
+        pytest.param("02091-C-712", id="dash-interior-1char-piece-2"),
+        pytest.param("02091-C-71a", id="dash-interior-1char-piece-3"),
+        pytest.param("02091-C-76hallo", id="dash-interior-1char-piece-4"),
+        pytest.param("9,90", id="bare-comma-keyword-path"),
+        pytest.param("test 12,34 some use", id="comma-keyword-path-in-context"),
+        pytest.param("ASN>1593902", id="comparison-operator-separator"),
+        pytest.param("वर्तमान", id="devanagari-single-word"),
+        pytest.param("वर्तमान क्षण की धन्यता", id="devanagari-phrase"),
+        pytest.param("'02091-C-71'", id="bare-single-quoted"),
+        pytest.param("zzz:foobar", id="unknown-field-colon"),
+        pytest.param("zzz:İ", id="unknown-field-colon-i-exception"),
+        pytest.param("document_type:[Receipt]", id="unknown-field-bracket-no-range"),
+        pytest.param("attrs:İ", id="unknown-field-colon-i-exception-2"),
+        pytest.param("foobar:today", id="unknown-field-colon-keyword-value"),
+        pytest.param("dat:'-1 year to now'", id="unknown-field-quoted-with-internal-spaces"),
+        pytest.param(
+            "type: A OR type: B OR custom_field_name >= 2025-01-01",
+            id="unknown-field-in-larger-query",
+        ),
+        pytest.param("tag: 11-33 Mirka", id="unknown-field-dash-value"),
+        pytest.param("title:ab-cd OR x", id="fielded-text-dash-in-or"),
+        pytest.param("title:'ab-cd' OR x", id="fielded-text-single-quoted-in-or"),
+        pytest.param("title:ASN>1593902 OR x", id="fielded-text-comparison-operator-in-or"),
+        pytest.param("title:a.b-cd OR x", id="fielded-text-dot-glue-plus-dash-in-or"),
+        pytest.param("title:ab--cd OR x", id="fielded-text-double-dash-in-or"),
+        pytest.param("tag:'0,00' OR x", id="fielded-keyword-single-quoted-in-or"),
+        pytest.param("title:02091-C-71 OR x", id="fielded-text-interior-1char-piece-in-or"),
+    ],
+)
+def test_entry_15_claims_genuine_divergences(q: str) -> None:
+    """Every shape here is a genuine, measured divergence per the design
+    spec (docs/superpowers/specs/2026-08-24-issue-47-multitoken-boundary-design.md);
+    entry 15's two allowlist regexes must claim all of them.
+    """
+
+    entry = allowed_entry(q)
+    assert entry is not None, f"expected {q!r} to be claimed by an allowlist entry"
+    assert "entry 15" in entry[0], f"expected {q!r} claimed by entry 15, got: {entry[0]!r}"
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
+        pytest.param("200[1-9]", id="bracket-class-not-a-dash-split"),
+        pytest.param("ab-ab", id="all-identical-dash-chain"),
+        pytest.param("ab-ab-ab", id="all-identical-dash-chain-longer"),
+        pytest.param("AB-ab", id="all-identical-dash-chain-case-insensitive"),
+        pytest.param("hello", id="plain-single-word"),
+        pytest.param("example", id="plain-single-word-2"),
+        pytest.param("title", id="plain-single-word-3"),
+        pytest.param("a,a", id="all-identical-comma-pair"),
+        pytest.param("title:ab-cd", id="known-field-no-or"),
+        pytest.param('"ab-cd"', id="bare-double-quoted"),
+        pytest.param('title:"ab-cd"', id="known-field-double-quoted-no-or"),
+        pytest.param("zzz:[2020 TO 2024]", id="unknown-field-genuine-range"),
+        pytest.param('zzz:"ab-cd"', id="unknown-field-double-quoted"),
+        pytest.param("zzz:[2020 To 2024]", id="unknown-field-range-mixed-case-to"),
+        pytest.param("zzz:[2020 tO 2024]", id="unknown-field-range-mixed-case-to-2"),
+        pytest.param("zzz:[2020 TO 2024}", id="unknown-field-range-mismatched-bracket"),
+        pytest.param("tag:ab,cd", id="unquoted-keyword-comma-no-or"),
+        pytest.param("produ*name", id="wildcard-not-a-dash-split"),
+        pytest.param("9.90", id="dot-glued-not-a-comma-split"),
+        pytest.param("19?90", id="single-char-wildcard-not-a-dash-split"),
+        pytest.param('title:"ab-cd" OR x', id="fielded-text-double-quoted-in-or"),
+        pytest.param('tag:"ab,cd" OR x', id="fielded-keyword-double-quoted-in-or"),
+        pytest.param('tag:"9,90" OR x', id="fielded-keyword-double-quoted-in-or-2"),
+        pytest.param("title:'9,90' OR x", id="fielded-text-single-quoted-comma-in-or"),
+        pytest.param("tag:ab,cd OR x", id="fielded-keyword-unquoted-comma-in-or"),
+    ],
+)
+def test_entry_15_does_not_claim_agreeing_shapes(q: str) -> None:
+    """Every shape here compares EQUAL to the oracle (measured directly
+    during design, see the spec's Corrections 3-8); entry 15's two
+    allowlist regexes must NOT claim any of them, or a future differential
+    run would strict-xfail-fail on a query that does not actually diverge.
+    """
+
+    entry = allowed_entry(q)
+    if entry is not None:
+        assert "entry 15" not in entry[0], f"{q!r} wrongly claimed by entry 15: {entry[0]!r}"
