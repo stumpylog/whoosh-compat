@@ -641,6 +641,81 @@ def test_bare_rfc3339_value_is_a_result_level_divergence() -> None:
     assert tantivy_ids("added:'2020-06-15T14:00:00'") == [7]
 
 
+def test_unquoted_multiword_date_value_is_a_result_level_divergence(
+    tindex_prop: TIndex,
+) -> None:
+    """DIVERGENCES.md entry 61: the harm entry 61's rejection closes, pinned
+    here as document sets rather than as a query shape. Real whoosh reads
+    "created:december 2019" as December of the basedate's year (not 2019)
+    and ANDs a stray "2019" term (multifield-expanded across V2_FIELDS) onto
+    it, so it silently matches the wrong document and reports no error at
+    all. whoosh-compat refuses to build the query, raising QueryError with a
+    BAD_DATE diagnostic instead.
+
+    This test builds its own two-document dual index (the same
+    dedicated-corpus convention as
+    ``test_bare_rfc3339_value_is_a_result_level_divergence`` just above)
+    rather than using the shared DOCS_PROP fixture, so the December-2019
+    document and the December-of-BASE's-year document land exactly where
+    the divergence needs them; the year is derived from BASE rather than
+    hardcoded, so the test does not rot when BASE changes.
+    """
+
+    december_2019 = datetime(2019, 12, 10, 12, 0, tzinfo=BERLIN)
+    december_base_year = datetime(BASE.year, 12, 10, 12, 0, tzinfo=BERLIN)
+
+    wix = RamStorage().create_index(oracle_schema())
+    writer = wix.writer()
+    writer.add_document(
+        id=8,
+        title="Old Invoice",
+        content="an invoice from a previous year",
+        added=_to_naive_utc(december_2019),
+        created=_to_naive_utc(december_2019),
+        modified=_to_naive_utc(december_2019),
+        has_correspondent=False,
+        has_tag=False,
+        has_type=False,
+        has_path=False,
+        has_custom_fields=False,
+        has_owner=False,
+    )
+    writer.add_document(
+        id=9,
+        title="Current Invoice",
+        content="invoice referencing tax year 2019 for the records",
+        added=_to_naive_utc(december_base_year),
+        created=_to_naive_utc(december_base_year),
+        modified=_to_naive_utc(december_base_year),
+        has_correspondent=False,
+        has_tag=False,
+        has_type=False,
+        has_path=False,
+        has_custom_fields=False,
+        has_owner=False,
+    )
+    writer.commit()
+
+    q = "created:december 2019"
+
+    # Real whoosh: "december" resolves to December of the basedate's year
+    # (2019 is swallowed as the year for that reading, not kept as one), and
+    # the stray "2019" term is ANDed on, multifield-expanded across
+    # V2_FIELDS. Doc 9 (December of BASE's year, whose content happens to
+    # mention "2019") matches; doc 8 (actually dated December 2019) does not,
+    # the wrong answer a user relying on this spelling would silently get.
+    assert whoosh_search_ids(wix, q, BASE, BERLIN) == [9]
+
+    # whoosh-compat: entry 61 rejects the unquoted multi-word date value
+    # outright, so no query is ever built for either document.
+    result = wc_parse(
+        q, registry=_PROP_REGISTRY, default_fields=V2_FIELDS, basedate=BASE, tz=BERLIN
+    )
+    with pytest.raises(QueryError) as exc:
+        emit_(result.ast, index=tindex_prop[0], registry=_PROP_REGISTRY)
+    assert exc.value.diagnostic.kind is DiagnosticKind.BAD_DATE
+
+
 def test_not_under_andnot_is_a_result_level_divergence(
     windex_prop: WhooshIndex, tindex_prop: TIndex
 ) -> None:
