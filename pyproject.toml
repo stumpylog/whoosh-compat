@@ -70,6 +70,9 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "wall_clock: asserts on elapsed wall-clock time, so it cannot run under a\n coverage-guided fuzzer (see tests/differential/test_hypothesis.py)",
+]
 
 [tool.mypy]
 python_version = "3.11"

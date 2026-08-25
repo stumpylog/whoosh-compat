@@ -6,6 +6,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+import pytest
 import tantivy
 from hypothesis import example
 from hypothesis import given
@@ -364,6 +365,13 @@ def _alternating_query(depth: int) -> str:
 _MAX_GROUP_NESTING_DEPTH = 200
 
 
+# Marked ``wall_clock`` because the budgets below assert on elapsed time.
+# Coverage-guided fuzzers (HypoFuzz) trace every branch, which inflates a
+# depth-36 parse from ~0.1s to ~20s: a ~180x overhead that blows the budget
+# on correct code. Any such runner must deselect this marker
+# (``-m "not wall_clock"``); the property is still covered by the normal
+# pytest run, where the only instrumentation is coverage's.
+@pytest.mark.wall_clock
 @given(st.integers(min_value=1, max_value=60))
 @settings(max_examples=30, deadline=None)
 @example(depth=1)

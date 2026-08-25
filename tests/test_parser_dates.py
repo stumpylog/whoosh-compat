@@ -2145,6 +2145,7 @@ def test_range_exclusive_bounds_ignored_for_ambiguous_bounds(reg: FieldRegistry)
 # --- RFC3339 "Z" recognition is linear in the value length ----------------
 
 
+@pytest.mark.wall_clock
 def test_rfc3339_z_check_is_linear_in_value_length() -> None:
     """The "Z" gate looks for a "T" somewhere before a trailing "Z"; the
     regex spelling of that used to backtrack quadratically over a run of
@@ -2172,6 +2173,7 @@ def test_rfc3339_z_check_is_linear_in_value_length() -> None:
     assert elapsed < 2.0
 
 
+@pytest.mark.wall_clock
 def test_rfc3339_z_designator_still_recognized_on_a_long_value() -> None:
     # The accepting half of the same shape: a real (if absurdly long) "T"-run
     # ending in the designator is still split, and still cheaply.
@@ -2184,6 +2186,7 @@ def test_rfc3339_z_designator_still_recognized_on_a_long_value() -> None:
     assert elapsed < 2.0
 
 
+@pytest.mark.wall_clock
 def test_to_span_split_is_linear_in_value_length() -> None:
     """The two-sided "A to B" splitter used to look for its separator with a
     quantifier-based regex (``(?:\\s+|\\s*,\\s*)to(?:\\s+|\\s*,\\s*)``) matched
@@ -2207,6 +2210,7 @@ def test_to_span_split_is_linear_in_value_length() -> None:
     assert elapsed < 2.0
 
 
+@pytest.mark.wall_clock
 def test_to_span_split_still_recognized_on_long_values() -> None:
     # The accepting half of the same shape: a real two-sided span still
     # splits correctly (each side's own "Z" recognized independently), and

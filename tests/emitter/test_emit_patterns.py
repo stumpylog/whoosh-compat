@@ -796,6 +796,7 @@ _DOS_BUDGET_SECONDS = 2.0
 
 
 @pytest.mark.parametrize("normalizer", [None, str.lower], ids=["identity", "lowercase"])
+@pytest.mark.wall_clock
 def test_unmatched_bracket_pattern_translates_in_linear_time(
     normalizer: Callable[[str], str] | None,
 ) -> None:
@@ -813,6 +814,7 @@ def test_unmatched_bracket_pattern_translates_in_linear_time(
     assert elapsed < _DOS_BUDGET_SECONDS
 
 
+@pytest.mark.wall_clock
 def test_late_closing_bracket_translates_in_linear_time() -> None:
     """The companion shape: every "[" is followed by a "]", but only at the
     very end of the pattern, so the forward scan for a close is long and
@@ -829,6 +831,7 @@ def test_late_closing_bracket_translates_in_linear_time() -> None:
     assert elapsed < _DOS_BUDGET_SECONDS
 
 
+@pytest.mark.wall_clock
 def test_many_small_classes_translate_in_linear_time() -> None:
     """The third shape, and the one the scan fix alone did not cover: many
     *closed* classes. Folding a class body used to rebuild the whole pattern

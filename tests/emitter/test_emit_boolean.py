@@ -686,6 +686,7 @@ def test_alternating_nesting_emit_is_not_exponential() -> None:
     assert len(calls) < 2000, f"analyzer called {len(calls)} times for depth 40 (expected < 2000)"
 
 
+@pytest.mark.wall_clock
 def test_alternating_nesting_emit_is_fast() -> None:
     calls: list[str] = []
     index, registry = _alternating_drop_fixture(calls)

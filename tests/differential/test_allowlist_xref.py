@@ -763,6 +763,7 @@ def _entry_15_patterns() -> list[re.Pattern[str]]:
     return [pattern for pattern, reason, _kind in ALLOW if "entry 15" in reason]
 
 
+@pytest.mark.wall_clock
 def test_entry_15_range_lookahead_is_linear_on_an_unclosed_bracket() -> None:
     r"""Entry 15's unknown-field-colon alternative excludes a genuine
     bracketed range with a lookahead. Written with two lazy `[^\]}]*?`
@@ -809,6 +810,7 @@ def _entry_43_patterns() -> list[re.Pattern[str]]:
     return [pattern for pattern, reason, _kind in ALLOW if "entry 43" in reason]
 
 
+@pytest.mark.wall_clock
 def test_entry_43_range_case_fold_lookahead_is_linear_on_an_unclosed_bracket() -> None:
     r"""Entry 43's TermRange-case-fold pattern hunts an uppercase letter
     on either side of a "to" separator inside a bracketed range, written
@@ -852,6 +854,7 @@ def _entry_23_composed_patterns() -> list[re.Pattern[str]]:
     ]
 
 
+@pytest.mark.wall_clock
 def test_entry_23_composed_pattern_is_linear_on_an_unclosed_bracket() -> None:
     r"""Entry 23's composed NOT/empty-group/zero-token pattern is three
     `.*`-existence lookaheads chained with no consuming match after them:
@@ -889,6 +892,7 @@ def _entry_27_patterns() -> list[re.Pattern[str]]:
     return [pattern for pattern, reason, _kind in ALLOW if "entry 27" in reason]
 
 
+@pytest.mark.wall_clock
 def test_entry_27_pattern_is_linear_on_an_unclosed_bracket() -> None:
     r"""Entry 27's ANDNOT/ANDMAYBE/REQUIRE pattern is two `.*`-existence
     lookaheads with nothing consuming after them, the same zero-width
