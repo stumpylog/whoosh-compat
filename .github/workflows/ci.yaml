@@ -136,8 +136,9 @@ jobs:
           wheel=$(ls dist/*.whl)
 
           echo "Checking sdist contents: $sdist"
+          sdist_contents=$(tar -tzf "$sdist")
           for f in LICENSE NOTICE py.typed; do
-            if ! tar -tzf "$sdist" | grep -q "$f"; then
+            if ! grep -q "$f" <<< "$sdist_contents"; then
               echo "::error::$f missing from sdist"
               exit 1
             fi
