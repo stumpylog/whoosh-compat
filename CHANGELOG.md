@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Intentional behavioral differences from real Whoosh are not changelog material; they are permanently documented, each with its rationale, in [DIVERGENCES.md](./DIVERGENCES.md).
 
+## [0.2.0]
+
+### Changed
+
+- **Behavior break:** an unquoted multi-word date value (`created:december 2019`, `created:2020 to 2021`) is now rejected with a `BAD_DATE` diagnostic naming the whole value, instead of silently truncating to its first token and reinterpreting the remainder as free-text search terms. The truncating behavior returned wrong documents with no error at all: `created:december 2019` matched December of the current year. Quoted and bracketed spellings (`created:"december 2019"`, `created:[2020 TO 2021]`) were always correct and are unchanged, and remain the way to write these values. Hosts need no code change, since the diagnostic reuses the existing `BAD_DATE` kind. See DIVERGENCES.md entry 61.
+
 ## [0.1.0] - 2026-08-25
 
 First release.

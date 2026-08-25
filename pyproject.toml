@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "whoosh-compat"
-version = "0.1.0"
+version = "0.2.0"
 description = "Whoosh query-language parser emitting programmatic tantivy queries"
 readme = "README.md"
 license = "BSD-2-Clause"
