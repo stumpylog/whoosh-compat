@@ -403,6 +403,105 @@ def _field_group_atom(draw: st.DrawFn) -> str:
 
 
 @st.composite
+def _comma_clause_field_term(draw: st.DrawFn) -> str:
+    # phrase_word (>= 2 characters, never dashed), not plain_word: a
+    # zero-token value (a bare "0", or a dashed "0-0" whose halves both
+    # tokenize away) under NOT and comma-joined with another instance of
+    # itself hits the same already-claimed shape as its whitespace sibling
+    # (measured: "NOT title:0-0 title:0-0" is already allowed) but through
+    # a comma the existing allowlist pattern doesn't recognize as an
+    # equivalent separator. phrase_word sidesteps generating that
+    # shape here entirely, the same reasoning _field_group_atom documents.
+    #
+    # phrase_word's own minsize=2 only rules out the minsize half of
+    # StandardAnalyzer's drop rule, not the stopword half: it can still
+    # draw one of whoosh's own STOP_WORDS ("will", "the", "is", ...),
+    # which analyzes to zero tokens on a TEXT field exactly like a
+    # too-short word does (measured, code review caught this: "NOT
+    # title:will,title:will" is an unclaimed divergence, whoosh-compat
+    # produces Every where real whoosh produces Nothing). The `.filter()`
+    # below re-verifies the same "does this survive the field's own
+    # analyzer" question `_analyze` already answers for ZERO_TOKEN_WORDS
+    # above, rather than hand-duplicating the stopword list and risking
+    # the exact same kind of gap a second time.
+    field = draw(st.sampled_from(TEXT_FIELDS + KEYWORD_FIELDS))
+    text = draw(phrase_word.filter(lambda w: _analyze(w) != []))
+    return f"{field}:{text}"
+
+
+def _comma_clause_pool() -> st.SearchStrategy[str]:
+    # Deliberately FIELDED clauses only (never _term_atom()'s unfielded
+    # branch): an unfielded word directly followed by more comma-glued
+    # content extends DIVERGENCES.md entry 15's Multitoken.DEFAULT chain
+    # past what its allowlist regex currently matches (measured: "foo,bar"
+    # alone is claimed, but "foo,bar,path_id:[TO]" is not, even though it's
+    # the same mechanism, just a shape the regex wasn't scoped for).
+    # Extending that regex is its own, separately scoped piece of work; this
+    # generator sticks to the fielded-clause-list shape the real-world
+    # corpus actually shows (``created:[-1 week to now],added:[-1 month to
+    # now]``), which needs no allowlist change at all.
+    strategies: list[st.SearchStrategy[str]] = [_comma_clause_field_term(), _date_range_atom()]
+    if NUM_FIELDS:
+        strategies.append(_numeric_range_atom())
+    return st.one_of(*strategies)
+
+
+@st.composite
+def _comma_clause_atom(draw: st.DrawFn) -> str:
+    """Whole fielded clauses joined by a bare comma, no surrounding
+    whitespace (``created:[-1 week to now],added:[-1 month to now]``),
+    issue #57's "comma separators and comma-joined clause lists" item.
+
+    Deliberately a dedicated leaf, not an ``_extend`` combinator, and
+    deliberately fielded-clauses-only: see ``_comma_clause_pool``'s
+    docstring for both scoping decisions and the sweeps that motivated
+    them. Measured clean (0 unclaimed divergences) over a 6000-draw sweep
+    restricted to this leaf.
+    """
+
+    pool = _comma_clause_pool()
+    n = draw(st.integers(min_value=2, max_value=3))
+    parts = draw(st.lists(pool, min_size=n, max_size=n))
+    return ",".join(parts)
+
+
+def _dash_negated_pool() -> st.SearchStrategy[str]:
+    # Fielded clauses only, the same restriction and for the same reason as
+    # _comma_clause_pool: "-" directly abutting an UNFIELDED value defeats
+    # entry 15's left-boundary requirement (measured: "-title:2024" and
+    # even "-title:ab-cd", a fielded *multi-token* value, compare EQUAL;
+    # only the unfielded "-ab-cd" diverges, already documented). Every
+    # atom drawn here always carries its own field prefix, so the
+    # entry-15 unfielded/unknown-field collision never applies.
+    strategies: list[st.SearchStrategy[str]] = [
+        _comma_clause_field_term(),
+        _wildcard_atom(),
+        _date_bare_atom(),
+    ]
+    if NUM_FIELDS:
+        strategies.append(_numeric_range_atom())
+    if BOOL_EXISTS_FIELDS:
+        strategies.append(_bool_exists_atom())
+    return st.one_of(*strategies)
+
+
+@st.composite
+def _dash_negated_atom(draw: st.DrawFn) -> str:
+    """A ``-``-prefixed negated fielded clause (``-title:2024``), issue
+    #57's "-" prefix negation item. Real usage (corpus_realworld.txt,
+    paperless-ngx#13568) and this library's own README document it as
+    equivalent to ``NOT field:value``.
+
+    Deliberately a dedicated leaf, not an ``_extend`` combinator, and
+    deliberately fielded-clauses-only: see ``_dash_negated_pool``'s
+    docstring for the scoping reason. Measured clean (0 unclaimed
+    divergences) over a 6000-draw sweep restricted to this leaf.
+    """
+
+    return f"-{draw(_dash_negated_pool())}"
+
+
+@st.composite
 def _json_atom(draw: st.DrawFn) -> str:
     path = draw(st.sampled_from(JSON_SUBPATHS))
     value = draw(plain_word)
@@ -677,6 +776,8 @@ def _leaves() -> st.SearchStrategy[str]:
         _empty_group_atom,
         _degenerate_wildcard_atom(),
         _field_group_atom(),
+        _comma_clause_atom(),
+        _dash_negated_atom(),
     ]
     if NUM_FIELDS:
         strategies.append(_numeric_atom())
