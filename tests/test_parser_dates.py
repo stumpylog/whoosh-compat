@@ -327,8 +327,10 @@ def test_bad_date_raw_value_widens_to_cover_a_contiguous_leftover_fragment(
     term in the tree, exactly as before this fix), only what the
     diagnostic reports changes.
 
-    See test_whitespace_separated_leftover_is_not_folded_into_raw_value
-    below for the boundary this deliberately does NOT cross.
+    See test_whitespace_separated_value_is_rejected_as_a_whole below for
+    the boundary this widening deliberately does NOT cross, and for the
+    separate rule (DIVERGENCES.md entry 61) that claims the
+    whitespace-separated shapes instead.
     """
     res = dparse(query, reg)
     assert res.diagnostics
@@ -454,25 +456,22 @@ def test_bad_date_raw_value_only_widens_the_explicitly_fielded_spelling(
     assert "2005-01-01T00:00:00Z" not in unfielded_values
 
 
-def test_whitespace_separated_leftover_is_not_folded_into_raw_value(
+def test_whitespace_separated_value_is_rejected_as_a_whole(
     reg: FieldRegistry,
 ) -> None:
-    """The boundary the widening above must not cross: a date value ends
-    at the first whitespace by this grammar's own design (DateParserPlugin
-    free=False, no undelimited multi-word joining), so "week" in
-    "added:-1 week" was never part of the attempted value and folding it
-    in would have no principled stopping point (how many following words?
-    "added:-1 week invoice" would then need to decide whether "invoice" is
-    part of the value too). raw_value stays exactly the single token that
-    was actually handed to the date grammar.
+    """The boundary entry 58 declined to cross, and entry 61's rule for
+    crossing it: raw_value covers the whole run when the grammar consumes a
+    joined candidate in full, and stops exactly there. "added:-1 week
+    invoice" answers entry 58's own question, since "-1 week invoice" does
+    not parse while "-1 week" does, so "invoice" stays an ordinary term.
     """
-    res = dparse("added:-1 week", reg)
+    res = dparse("added:-1 week invoice", reg)
     assert res.diagnostics
     d = res.diagnostics[0]
-    assert d.raw_value == "-1"
+    assert d.raw_value == "-1 week"
     assert d.startchar == len("added:")
-    assert d.endchar == len("added:-1")
-    assert any(isinstance(n, ast.Term) and n.text == "week" for n in _nodes(res.ast))
+    assert d.endchar == len("added:-1 week")
+    assert any(isinstance(n, ast.Term) and n.text == "invoice" for n in _nodes(res.ast))
 
 
 @pytest.mark.parametrize(

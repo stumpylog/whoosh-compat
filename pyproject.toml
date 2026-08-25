@@ -156,4 +156,5 @@ exclude = [
 #                   default.py's _priorized), forked verbatim
 #   ot            - a local variable (`ot = self.OpTagger`), not a word
 #   runn          - the Porter-stemmed form of "running" used as test data
-ignore-words-list = "unparseable,nd,thur,febuary,priorized,ot,runn"
+#   fo            - the stem in the example wildcard pattern `notes:fo*`
+ignore-words-list = "unparseable,nd,thur,febuary,priorized,ot,runn,fo"

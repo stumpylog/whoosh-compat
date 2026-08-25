@@ -771,6 +771,14 @@ parse-then-emit pipeline).
     quoting is already known, removes that failure mode rather than
     narrowing it.
 
+    The `do_date_phrases` join runs at filter priority 101, ahead of entry
+    61's rule at 102, and that ordering is what keeps the two entries from
+    contradicting each other: by the time entry 61 looks for an unquoted
+    multi-word date value to reject, `created:previous month` is already
+    one joined value the grammar accepts, so there is no two-word run left
+    for it to see. Entry 61 rejects the unquoted multi-word values this
+    entry does *not* claim, not these six.
+
     The widening is confined to those six phrases on an explicitly named
     date field. Nothing else about a date value becomes whitespace-greedy:
     `created:previous week AND title:foo`, `created:previous week invoice`,
@@ -3013,7 +3021,19 @@ parse-then-emit pipeline).
     `added:2005-01-01 invoice` and `created:2020 invoice` keep meaning
     "that date, and the word invoice", because the value there consumed
     its own text exactly and the remainder is whitespace-separated rather
-    than glued on. Whitespace separators are for the same reason left on
+    than glued on. Both named examples still mean exactly that, but the
+    general claim needs one qualifier, added by entry 61: a
+    whitespace-separated remainder stays a term unless the value and the
+    remainder *together* parse as one complete date value, in which case
+    entry 61 rejects the whole run and asks the user to quote it
+    (`created:2020 august 4` does; `created:2020 invoice` does not, which
+    is why that example is unaffected). What this paragraph says about
+    *dangling separators* is untouched by that qualifier, and so is the
+    rest of this paragraph about whitespace inside the grammar: entry 61
+    is a filter running before the grammar sees a value, not a change to
+    how the grammar itself ends one.
+
+    Whitespace separators are for the same reason left on
     whoosh's behavior exactly: `simple`'s own `(?=(\s|$))` guard already
     treats whitespace as a valid end of a date value, so a trailing space
     inside a quoted value (`added:'2005-01-01 '`) still parses, and
@@ -3319,17 +3339,31 @@ parse-then-emit pipeline).
     `test_unfielded_value_still_resolves_as_a_date_with_a_date_default_field`
     pins this case.
 
-    Deliberately does **not** cross whitespace. A date value ends at the
+    This entry's own widening deliberately does **not** cross whitespace.
+    A date value ends at the
     first space by this grammar's own design (`DateParserPlugin` never
     supports whoosh's "free" undelimited multi-word mode, see the class
-    docstring), so `added:-1 week`'s `raw_value` stays exactly `-1`:
-    `week` was never part of the attempted value in the first place, and
-    there is no principled stopping point for how many trailing
-    whitespace-separated words to absorb once that boundary is crossed
-    (`added:-1 week invoice` -- is `invoice` part of the value too?). A
-    scoped, deliberately narrower version of whoosh's free mode that could
-    make these shapes parse successfully instead of merely reporting more
-    completely is tracked separately as future work, out of scope here.
+    docstring), so `week` in `added:-1 week` was never part of the
+    attempted value that this entry widens the report of, and when this
+    entry was written there appeared to be no principled stopping point
+    for how many trailing whitespace-separated words to absorb once that
+    boundary is crossed (`added:-1 week invoice` -- is `invoice` part of
+    the value too?).
+
+    Both halves of that are superseded by entry 61, which supplies the
+    stopping point: full consumption by the date grammar. It answers the
+    question above directly, and the answer is no: `invoice` is not part
+    of the value, because `-1 week invoice` does not parse in full while
+    `-1 week` does. The resolution reached is also the opposite of the one
+    this entry anticipated. The "scoped, narrower version of whoosh's free
+    mode" imagined here would have made these shapes *parse
+    successfully*; what shipped instead **rejects** them, so
+    `added:-1 week` is now a `BAD_DATE` naming `-1 week` in full and
+    telling the user to quote it, rather than a `-1` diagnostic with
+    `week` surviving as a term. This entry's widening mechanism is
+    unchanged by that; entry 61 simply reaches the whitespace-separated
+    shapes first, so the ones described here as out of reach are no longer
+    the ones that arrive.
 
     Also does not widen past a wildcard/prefix leftover:
     `added:2005-01-01T00:00:00Z*` still reports only `2005-01-`, since
@@ -3416,7 +3450,8 @@ parse-then-emit pipeline).
     other shape, only reachable through a plain, no-default-field
     `QueryParser`),
     `test_bad_date_raw_value_does_not_widen_past_a_wildcard_leftover`,
-    `test_whitespace_separated_leftover_is_not_folded_into_raw_value`,
+    `test_whitespace_separated_value_is_rejected_as_a_whole` (the
+    whitespace boundary, as entry 61 leaves it),
     `test_unfielded_value_still_resolves_as_a_date_with_a_date_default_field`
     (the multifield-ordering regression above),
     `test_range_error_raw_value_is_not_glued_to_a_trailing_leftover` and
@@ -3561,3 +3596,139 @@ parse-then-emit pipeline).
     diagnostics-present check instead of comparing structurally equal, and
     is pinned by `tests/differential/test_differential.py`'s
     `test_diagnostic_skip_count_matches_corpus`.
+
+61. **An unquoted multi-word date value on an explicitly named date field
+    is rejected (`Diagnostic(kind=BAD_DATE)`) instead of silently
+    truncating to its first word (whoosh-bug, not reproduced).**
+    `created:december 2019` is one date value in any reading a user would
+    give it. The whoosh grammar ends a value at the first space, so the
+    date field receives `december` alone, which resolves against the base
+    date to December of the *current* year, and `2019` is left behind as
+    an ordinary default-field term ANDed onto the query. None of that is
+    reported: the query runs, and returns documents from the wrong year
+    that happen to mention 2019.
+
+    Measured against the pinned oracle (basedate 2026-08-04 10:30
+    Europe/Berlin), real whoosh degrades exactly that way, in each of the
+    three shapes this rule covers:
+
+    ```
+    created:december 2019 -> created:[Dec 2026] AND (content:2019 OR ...)
+    created:2020 to 2021  -> created:[2020]     AND (tag:to) AND (...2021)
+    created:2020 august 4 -> created:[2020]     AND (...august) AND (tag:4)
+    ```
+
+    (The leftover terms are shown on a KEYWORD default field, since on a
+    TEXT one the oracle's analyzer removes `to` as a stopword and `4` as a
+    short token before the query is built, per entry 59. The date bound is
+    the part that matters, and it is the same either way.) In none of the
+    three does whoosh raise, warn, or report anything; each is a working
+    query for something the user did not ask for.
+
+    Diverged from anyway, under the rule entry 54 applies to the
+    half-consumed case: a silently wrong query with no diagnostic is a
+    defect, not a convention. Unlike entry 54's shape, every spelling this
+    rule rejects already has a working spelling that means what the user
+    meant, so the diagnostic can name the fix rather than only the
+    problem: `created:"december 2019"`, `created:[2020 TO 2021]` and
+    `created:"2020 august 4"` all parse to the range described, and the
+    message says so (`'december 2019' is a date value written without
+    quotes; quote it as created:"december 2019"`). `kind` stays
+    `BAD_DATE` rather than becoming a new kind, because `kind` is the
+    machine-stable half of the contract a host branches on and a host that
+    already routes BAD_DATE to an invalid-date response needs no change to
+    route this; the distinction lives in the message.
+
+    The stopping rule, which is what makes this implementable at all: **a
+    joined candidate is rejected only if the grammar consumes it in
+    full.** `DateParserPlugin.do_unquoted_date_values` (filter priority
+    `FILTER_UNQUOTED_DATE_VALUES = 102`) takes a bare `WordNode` carrying
+    an explicit DATE/DATETIME field name, collects the plain unfielded
+    word siblings following it (anything else, an operator, a group, a
+    wildcard, a phrase, a word with its own field name, ends the run),
+    joins them longest-first with single spaces, and replaces the whole
+    run with the diagnostic for the first candidate that both parses and
+    ends exactly at the end of its own text. If no candidate is consumed
+    in full, nothing changes: the query keeps whatever it already meant.
+    The lookahead is capped (15 words) purely as a budget, with no
+    correctness claim of its own; `test_grammar_never_exceeds_lookahead_cap`
+    is what keeps that number honest against the longest run the grammar
+    can actually use.
+
+    That is the principled stopping point entry 58 said did not exist, and
+    it answers that entry's own question directly: in
+    `added:-1 week invoice`, `invoice` is not part of the value, because
+    `-1 week invoice` does not parse while `-1 week` does. The resolution
+    is also the opposite of the one entry 58 anticipated. It expected a
+    narrowed version of whoosh's free undelimited mode that would make
+    these shapes *parse*; what shipped rejects them and tells the user to
+    quote, on the ground that a query which cannot be read one way without
+    guessing should not be guessed at.
+
+    Explicitly fielded values only, for the reason `do_date_phrases` gives
+    for the same restriction (entry 19): reaching a value through the
+    *default* field would claim far more of the query than "the user wrote
+    `added:` in front of it", and with a DATE field among the default
+    fields every adjacent pair of words in the query would become a
+    candidate. The cost of that exclusion is named rather than hidden: a
+    plain `QueryParser` whose default field is itself a date field keeps
+    the silent truncation this entry closes everywhere else, pinned by
+    `test_date_default_field_is_deliberately_excluded`.
+
+    Ordering against entry 19 is load-bearing, not incidental. Entry 19's
+    `do_date_phrases` joins its six multi-word keywords at priority 101,
+    ahead of this rule at 102, so by the time this filter runs
+    `added:previous month` is already a single value the grammar accepts,
+    not a two-word run to reject. Reversed, the two rules would contradict
+    each other and the keyword widening entry 19 exists to provide would
+    be unreachable.
+
+    **The boundary against entry 54, and what enforces it.** Two word
+    nodes can be adjacent with no whitespace between them, because the
+    tokenizer also splits values the user wrote together: a bare RFC3339
+    timestamp splits at its colons, so `added:2026-08-04T10:30:00` reaches
+    this filter as `2026-08-` immediately abutting `04T10:30:00`. The
+    grammar accepts the space-joined form `2026-08- 04T10:30:00` as a full
+    parse (measured), so with nothing to stop it this rule would swallow
+    bare RFC3339 timestamps wholesale and quote back at the user a value
+    containing a space nobody typed. The private helper
+    `_whitespace_separated` is the guard: it truncates the collected run
+    at the first word abutting its predecessor, so this entry claims only
+    runs whose words were written with whitespace between them. Everything
+    the tokenizer cut out of a single written-together value stays entry
+    54's to reject and entry 58's to report, with `raw_value` widened by
+    contiguity rather than joined with spaces. That is the whole of the
+    boundary: whitespace on this side, contiguity on the other, and no
+    query shape belongs to both. It is pinned directly by the
+    `abutting-colon-split` row of `test_unquoted_date_rejection_cell_matrix`
+    rather than only indirectly by the entry 54 and 58 regression tests
+    continuing to pass.
+
+    **The accepted regression.** A word that abuts a date value and
+    happens to complete a longer date value with it is now rejected where
+    it used to be an ordinary search term. `created:2020 august 4`,
+    meaning "documents from 2020 that mention august 4", worked before and
+    now errors, because `2020 august 4` is a valid date value; so do
+    `created:2020 12` and `created:today 3pm`. The correction is to make
+    the two halves explicit: `created:2020 AND august 4` gives back the
+    2020 range plus the two terms, and `created:today AND 3pm` the day
+    plus the term. Accepted deliberately: a user should be explicit when a
+    search term abuts a date value, and the alternative is keeping a
+    silently wrong query for the far more common case where the run really
+    was one value. The regression needs the run to parse *in full*, which
+    is narrower than it sounds: `created:2020 august` is untouched,
+    because the grammar does not accept a year followed by a bare month
+    name as a complete value (measured), and so is `created:2020 invoice`
+    (entry 54's boundary paragraph), where the remainder is not part of
+    any date.
+
+    Test references: `tests/test_parser_dates.py`'s
+    `test_unquoted_date_rejection_cell_matrix` (the kind/spelling
+    exhaustiveness matrix, including the abutting colon-split row above),
+    `test_date_default_field_is_deliberately_excluded`,
+    `test_whitespace_separated_value_is_rejected_as_a_whole` (entry 58's
+    question, answered), `test_grammar_never_exceeds_lookahead_cap` (the
+    lookahead budget),
+    `test_a_whitespace_separated_term_after_a_date_is_still_a_term` and
+    `test_now_followed_by_unquoted_offset_words_reads_as_now_plus_free_text`
+    (runs that do not parse in full and so are left alone).
