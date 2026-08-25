@@ -25,6 +25,11 @@ FILTER_FIELDNAMES = 100
 # whitespace between them intact: before MultifieldPlugin (110) rewrites an
 # unfielded node into a group, and well before whitespace removal (500).
 FILTER_DATE_PHRASES = 101
+# 102 runs after the keyword-phrase join (101), so the six two-word keyword
+# phrases are already one value node and are never seen as an unquoted
+# multi-word run, and before comma values (105) and multifield (110), so
+# sibling nodes are still bare unfielded WordNodes.
+FILTER_UNQUOTED_DATE_VALUES = 102
 FILTER_COMMA_VALUES = 105
 FILTER_MULTIFIELD = 110
 FILTER_DATES = 110

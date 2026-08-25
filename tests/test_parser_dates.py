@@ -2119,3 +2119,65 @@ def test_quoted_relative_span_exactness_follows_a_backwards_swap(
     assert quoted.incl_hi == bracketed.incl_hi
     assert quoted.lo == bracketed.lo
     assert quoted.incl_lo == bracketed.incl_lo
+
+
+# Today's diagnostics for shapes entry 61 must not disturb, measured before
+# the rule existed. An empty list means the query parses cleanly.
+_BASELINE_DIAGNOSTICS: dict[str, list[str]] = {
+    "created:2020 invoice": [],
+    "added:now-3days": ["now-3days"],
+    "added:previous month": [],
+    'created:"december 2019"': [],
+    "created:'december 2019'": [],
+    "created:[2020 TO 2021]": [],
+}
+
+
+@pytest.mark.parametrize(
+    ("query", "raw_value"),
+    [
+        pytest.param("created:december 2019", "december 2019", id="named-month-year"),
+        pytest.param("created:2020 to 2021", "2020 to 2021", id="two-sided-year-range"),
+        pytest.param("created:2020 august 4", "2020 august 4", id="year-month-day"),
+        pytest.param("added:-1 week", "-1 week", id="relative-offset"),
+        pytest.param("added:12 december 2019", "12 december 2019", id="day-month-year"),
+        pytest.param("created:-1 year to now", "-1 year to now", id="relative-range"),
+    ],
+)
+def test_unquoted_multiword_date_value_is_rejected(
+    reg: FieldRegistry, query: str, raw_value: str
+) -> None:
+    """An unquoted date value the grammar can consume in full is rejected
+    naming the whole run, rather than truncating to its first token and
+    letting the remainder become free-text terms (DIVERGENCES.md entry 61).
+    """
+    res = dparse(query, reg)
+    assert len(res.diagnostics) == 1
+    d = res.diagnostics[0]
+    assert d.kind is DiagnosticKind.BAD_DATE
+    assert d.raw_value == raw_value
+    # The span covers the entire run, from the value's first character to
+    # the last joined word's last character.
+    assert d.startchar == query.index(":") + 1
+    assert d.endchar == len(query)
+    # No leftover term survives from inside the rejected run.
+    assert not [n for n in _nodes(res.ast) if isinstance(n, ast.Term)]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("created:2020 invoice", id="remainder-is-not-a-date"),
+        pytest.param("added:now-3days", id="prefix-stops-mid-token"),
+        pytest.param("added:previous month", id="entry-19-keyword-phrase-still-works"),
+        pytest.param('created:"december 2019"', id="double-quoted-already-correct"),
+        pytest.param("created:'december 2019'", id="single-quoted-already-correct"),
+        pytest.param("created:[2020 TO 2021]", id="bracketed-already-correct"),
+    ],
+)
+def test_unquoted_date_rejection_leaves_other_shapes_alone(reg: FieldRegistry, query: str) -> None:
+    """The rule fires only when a joined candidate is consumed in full.
+    Everything else parses exactly as it did before entry 61.
+    """
+    res = dparse(query, reg)
+    assert [d.raw_value for d in res.diagnostics] == _BASELINE_DIAGNOSTICS[query]

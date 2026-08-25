@@ -929,6 +929,7 @@ class DateParserPlugin(Plugin):
     def filters(self, parser: Any) -> list[tuple[Any, int]]:
         # Run after FieldsPlugin (100) has assigned field names.
         return [(self.do_date_phrases, priorities.FILTER_DATE_PHRASES),
+                (self.do_unquoted_date_values, priorities.FILTER_UNQUOTED_DATE_VALUES),
                 (self.do_dates, priorities.FILTER_DATES)]
 
     # -- time helpers --------------------------------------------------
@@ -1129,6 +1130,15 @@ class DateParserPlugin(Plugin):
         "this": frozenset({"month", "year"}),
     }
 
+    # A guard against pathological input, not a derivation from the grammar.
+    # The longest expression the grammar is known to accept is 11 whitespace
+    # tokens ("12 december 2019 3 pm to 12 december 2020 3 pm": Time12's
+    # regex allows a space before am/pm, so the spaced spelling costs two
+    # word nodes where the compact "3pm" costs one). This cap sits well
+    # above that and carries no correctness claim;
+    # test_grammar_never_exceeds_lookahead_cap is what keeps it honest.
+    _UNQUOTED_LOOKAHEAD: ClassVar[int] = 15
+
     def _is_time_of_day(self, text: str) -> bool:
         """Whether ``text`` alone is a time of day the grammar recognizes
         ("3pm", "13:45", "noon", "midnight", "now").
@@ -1267,6 +1277,135 @@ class DateParserPlugin(Plugin):
                     joined.startchar = head.startchar
                     joined.endchar = last.endchar
                     group[i:idxs[-1] + 1] = [joined]
+            i += 1
+
+        return group
+
+    def _fully_parses(self, text: str) -> bool:
+        """Whether the date grammar consumes *all* of ``text``.
+
+        Uses the non-``ToEnd`` prefix match and compares the stop position
+        against the length, which is equivalent to ``ToEnd`` succeeding:
+        ``ToEnd.parse`` tests ``d and newpos == len(text)``, and no value the
+        grammar returns is falsy without being None (neither ``adatetime``
+        nor ``timespan`` defines ``__bool__``/``__len__``, and ``datetime``
+        is always truthy). Spelled ``is not None`` here anyway.
+
+        Guarded like :meth:`_is_time_of_day`: the grammar reports bad input
+        through diagnostics and must never raise out of the parse pipeline,
+        so a value that blows up simply is not a date.
+        """
+
+        try:
+            parsed, pos = self.dateparser.parse(text, self._local_now())
+        except (ValueError, OverflowError, TimeError):
+            return False
+        return parsed is not None and pos == len(text)
+
+    @staticmethod
+    def _whitespace_separated(group: syntax.GroupNode, idxs: list[int]) -> list[int]:
+        """``idxs`` truncated at the first node that abuts its predecessor.
+
+        :meth:`_phrase_words` skips whitespace nodes but does not require
+        one, so its run can also contain nodes the tokenizer split out of a
+        single written-together value.
+        """
+
+        for n in range(1, len(idxs)):
+            if group[idxs[n - 1]].endchar == group[idxs[n]].startchar:
+                return idxs[:n]
+        return idxs
+
+    def _unquoted_error(
+        self, text: str, spec: FieldSpec, startchar: int | None, endchar: int | None
+    ) -> DateErrorNode:
+        """The diagnostic for a date value written without quotes.
+
+        Deliberately ``BAD_DATE`` rather than a new kind: ``kind`` is the
+        machine-stable half of the contract a host branches on, and a host
+        that already routes BAD_DATE to an invalid-date response needs no
+        change to route this. The distinction lives in the message.
+        """
+
+        diagnostic = Diagnostic(
+            message=(
+                f"{text!r} is a date value written without quotes; "
+                f'quote it as {spec.name}:"{text}"'
+            ),
+            kind=DiagnosticKind.BAD_DATE,
+            cause=cause_for(DiagnosticKind.BAD_DATE),
+            startchar=startchar,
+            endchar=endchar,
+            field=FieldRef(spec.name),
+            field_kind=spec.kind,
+            raw_value=text,
+        )
+        return DateErrorNode(diagnostic)
+
+    def do_unquoted_date_values(self, parser: Any, group: syntax.GroupNode) -> syntax.GroupNode:
+        """Reject an unquoted multi-word date value instead of letting it
+        truncate to its first token.
+
+        Whoosh's grammar ends a date value at the first space, so
+        ``created:december 2019`` reaches the date field as ``december``
+        alone (December of the current year) with ``2019`` left over as an
+        ordinary term: a query that runs, returns the wrong documents, and
+        reports nothing. Real whoosh degrades the same way. See
+        DIVERGENCES.md entry 61 for why this fork rejects instead.
+
+        Fires only when a run of adjacent plain words, joined longest-first,
+        is consumed *in full* by the grammar. Full consumption is the
+        stopping point entry 58 said did not exist, and it answers that
+        entry's own question: in ``added:-1 week invoice``, ``invoice`` is
+        not part of the value, because ``-1 week invoice`` does not parse
+        while ``-1 week`` does.
+
+        Explicitly fielded values only, for the reason
+        :meth:`do_date_phrases` gives for the same restriction: reaching a
+        value through the *default* field would claim far more of the query
+        than "the user wrote ``added:`` in front of it". With a DATE default
+        field every adjacent word pair would become a candidate.
+        """
+
+        registry = parser.registry
+
+        for i, node in enumerate(group):
+            if isinstance(node, syntax.GroupNode):
+                group[i] = self.do_unquoted_date_values(parser, node)
+
+        i = 0
+        while i < len(group):
+            head = group[i]
+            if not (type(head) is syntax.WordNode and head.fieldname is not None):
+                i += 1
+                continue
+            spec = self._date_spec(registry, head.fieldname)
+            if spec is None:
+                i += 1
+                continue
+
+            idxs = [i, *self._phrase_words(group, i, limit=self._UNQUOTED_LOOKAHEAD)]
+            # Whitespace-separated words only. Two word nodes can also be
+            # adjacent with nothing between them, when the tokenizer split
+            # one value the user wrote without any space (a bare RFC 3339
+            # timestamp splits at its colons); joining those with a space
+            # would name back a value nobody typed, and that shape already
+            # has its own handling (DIVERGENCES.md entries 54 and 58).
+            idxs = self._whitespace_separated(group, idxs)
+            words = [cast(str, group[j].text) for j in idxs]
+
+            for k in range(len(words), 1, -1):
+                joined = " ".join(words[:k])
+                if not self._fully_parses(joined):
+                    continue
+                last = group[idxs[k - 1]]
+                error = self._unquoted_error(
+                    joined, spec, head.startchar, last.endchar
+                )
+                error.startchar = head.startchar
+                error.endchar = last.endchar
+                group[i:idxs[k - 1] + 1] = [error]
+                break
             i += 1
 
         return group
