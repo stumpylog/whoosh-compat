@@ -63,15 +63,21 @@ def _plugin_for_cap_test() -> DateParserPlugin:
     ],
 )
 def test_grammar_never_exceeds_lookahead_cap(text: str) -> None:
-    """The lookahead cap is a safety bound, not a derivation, so it needs a
-    test rather than an argument. Both meridiem spellings are covered
-    deliberately: Time12 allows a space before am/pm, so "3 pm" costs two
-    word nodes where "3pm" costs one, and a cap derived from the compact
-    spelling alone is too small by two per bound.
+    """The lookahead cap is a safety bound with no derivation behind it, so
+    it needs a test rather than an argument.
 
-    If the grammar grows an expression longer than the cap, this fails
-    loudly instead of the rule silently declining the longest values it
-    exists to reject.
+    This proves a lower bound only: the cap cannot be smaller than the
+    longest sample below without one of these cases failing. It does not
+    prove an upper bound; it samples known grammar shapes, it does not
+    search the grammar for its longest expression. Both meridiem spellings
+    are included because that is what makes the lower bound meaningful:
+    Time12 allows a space before am/pm, so "3 pm" costs two word nodes
+    where "3pm" costs one, and an earlier cap derived from the compact
+    spelling alone was too small by two per bound.
+
+    Anyone extending the date grammar with a spelling longer than what is
+    sampled here must add that spelling as a new case, or the cap can
+    silently stop covering the grammar without this test noticing.
     """
     plugin = _plugin_for_cap_test()
     assert plugin._fully_parses(text), "sample is not a full parse, fix the sample"
