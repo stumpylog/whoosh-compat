@@ -768,6 +768,44 @@ def test_andnot_zero_token_positive_matches_everything_here(
     assert whoosh_search_ids_prop(windex_prop, q) == []
 
 
+def test_orphaned_comma_clause_is_a_result_level_divergence(
+    windex_prop: WhooshIndex, tindex_prop: TIndex
+) -> None:
+    """DIVERGENCES.md entry 23, reached through an orphaned separator
+    instead of a zero-token word: a comma with no word character
+    immediately before it (here because a ``]`` precedes it) is not
+    absorbed into a preceding word, so real whoosh parses it as a clause
+    of its own contributing no terms, and that empty clause poisons the
+    enclosing conjunction. whoosh-compat drops the contributing-nothing
+    clause during analysis and lets the siblings stand alone, the same
+    uniform analysis-time-drop policy this entry already accepts.
+
+    The unbounded range is not what diverges: the components below show
+    ``created:[TO]`` alone, and the whitespace-joined pair with no comma at
+    all, matching every document on both sides. Only the orphaned comma
+    changes the answer, and only on whoosh's side.
+    """
+
+    q = "created:[TO],created:[TO]"
+    assert allowed_result_reason(q) is not None
+    # Real whoosh: And([DateRange, Or([]), DateRange]), matching nothing.
+    assert whoosh_search_ids_prop(windex_prop, q) == []
+    assert tantivy_search_ids_prop(tindex_prop, q) == [1, 2, 3, 4]
+
+    # The components, agreeing on both sides, isolating the comma.
+    for agreeing in ("created:[TO]", "created:[TO] created:[TO]"):
+        assert whoosh_search_ids_prop(windex_prop, agreeing) == [1, 2, 3, 4]
+        assert tantivy_search_ids_prop(tindex_prop, agreeing) == [1, 2, 3, 4]
+
+    # A comma ATTACHED to a preceding word is absorbed harmlessly by
+    # whoosh, so it neither diverges nor matches the allowlist entry.
+    attached = "content:invoice,content:invoice"
+    assert allowed_result_reason(attached) is None
+    assert whoosh_search_ids_prop(windex_prop, attached) == tantivy_search_ids_prop(
+        tindex_prop, attached
+    )
+
+
 def test_numeric_range_small_bounds_is_a_whoosh_bug(
     windex_prop: WhooshIndex, tindex_prop: TIndex
 ) -> None:

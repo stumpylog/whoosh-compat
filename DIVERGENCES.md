@@ -1421,6 +1421,57 @@ parse-then-emit pipeline).
     `tests/emitter/test_acceptance_property.py`'s
     `test_andnot_zero_token_positive_matches_everything_here`.
 
+    **The orphaned-separator shape, reached with no `NOT` and no `Every`
+    at all.** The same analysis-time-drop versus structural-poison
+    mechanism is reachable through a *separator* that has no word to
+    attach to, with no `NOT`/`ANDNOT`/`ANDMAYBE`/`REQUIRE` keyword and no
+    match-all anywhere in the query. Real whoosh absorbs a comma into the
+    word immediately preceding it, but when nothing word-like precedes it
+    (a `]` or a `}` does, or whitespace does, or the query opens with it)
+    there is no word to absorb into, and the comma becomes a clause of its
+    own that contributes no terms. Measured directly against the pinned
+    oracle:
+
+    ```
+    created:[TO],created:[TO]     whoosh: And([DateRange, Or([]), DateRange])  -> matches nothing
+    created:[TO] created:[TO]     whoosh: And([DateRange, DateRange])          -> matches everything
+    content:doc , content:doc     whoosh: And([Term, Or([]), Term])            -> matches nothing
+    content:doc,content:doc       whoosh: And([Term, Term])                    -> matches the term
+    ,content:doc                  whoosh: And([Or([]), Term])                  -> matches nothing
+    ```
+
+    The empty clause is a real conjunct in whoosh's tree, so it poisons the
+    whole `And` regardless of what its siblings match. whoosh-compat drops
+    the contributing-nothing clause during its analysis pass and lets the
+    siblings stand alone, which is the identical "uniform, timing-
+    independent drop" policy the rest of this entry keeps, just reached
+    through punctuation rather than through a word whose analyzer happens
+    to consume it. Nothing new is decided here; the same predictability
+    reasoning applies, and whoosh-compat's behavior is unchanged.
+
+    Worth stating explicitly, since it is the boundary of the shape: a
+    comma **attached** to a preceding word (`content:doc,content:doc`,
+    `tag:a,b`, `tag_id:1,2`, a trailing `content:doc,`) is absorbed
+    harmlessly and both sides agree on the tree *and* on the result. Only
+    the orphaned spelling diverges, which is why
+    `tests/emitter/result_allowlist.py`'s entry for it is scoped to a comma
+    preceded by a bracket, a brace, whitespace, or the start of the query
+    rather than to commas generally. The existing result-level entry-23
+    pattern does not reach this shape at all: it requires a
+    `NOT`/`ANDNOT`/`ANDMAYBE`/`REQUIRE` keyword or a bare `*` plus a
+    `field:zeroTokenWord` spelling, and the clause that empties out here is
+    bare punctuation, not a word any analyzer could be asked about. The
+    divergence is result-level only: the AST-level comparison for
+    `created:[TO],created:[TO]` runs and agrees, pinned by a
+    `tests/differential/corpus_realworld.txt` corpus line.
+
+    Test references: `tests/emitter/result_allowlist.py`'s orphaned-comma
+    entry; `tests/emitter/test_acceptance_property.py`'s
+    `test_orphaned_comma_clause_is_a_result_level_divergence`, which
+    asserts the empty oracle id set against whoosh-compat's full one and
+    isolates the comma by also asserting that both the single unbounded
+    range and the whitespace-joined pair agree on every document.
+
     **Consequence for anything that reads polarity: read it before
     analysis, not after.** The survivor rule above is polarity-blind by
     construction, and it has to be (which side dropped is exactly what it

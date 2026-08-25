@@ -238,6 +238,17 @@ created:[-1yr to -0yr}
 customDateField:[now to 2 weeks]
 customDateField:[now to next friday]
 
+# --- CONFIRMED PARITY (result-level divergence only, DIVERGENCES.md entry
+# 23): a comma with no word character before it (here a "]" precedes it) is
+# not absorbed into a preceding word, so real whoosh parses it as an empty
+# clause that poisons the conjunction and matches nothing, while
+# whoosh-compat drops the contributing-nothing clause during analysis. That
+# difference is invisible to this AST-level layer, which compares equal;
+# the proof lives in tests/emitter/test_acceptance_property.py's
+# test_orphaned_comma_clause_is_a_result_level_divergence. Pinned here so
+# the AST-level agreement cannot regress silently.
+created:[TO],created:[TO]
+
 # --- skipped: whoosh-compat reports a parse diagnostic for these (the
 # uniform DIVERGENCES.md entry 6 skip, counted by
 # test_diagnostic_skip_count_matches_corpus), except the last, whose oracle

@@ -170,6 +170,42 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
             " structure"
         ),
     ),
+    # DIVERGENCES.md entry 23 (design, result-level extension), reached
+    # through an orphaned separator rather than through a zero-token word:
+    # a comma with no word character immediately before it (because a "]",
+    # a "}" or whitespace precedes it, or because it opens the query) is
+    # not absorbed into a preceding word by whoosh's comma handling. Real
+    # whoosh parses it as a clause of its own that contributes no terms,
+    # and that empty clause poisons the enclosing conjunction: measured
+    # directly against the pinned oracle, "created:[TO],created:[TO]"
+    # parses to And([DateRange, Or([]), DateRange]) and matches NO
+    # documents, while the comma-less "created:[TO] created:[TO]" matches
+    # every document. whoosh-compat drops the contributing-nothing clause
+    # during its analysis pass and lets the siblings stand alone, so it
+    # matches normally: the same "uniform analysis-time drop vs. real
+    # whoosh's structure-dependent poison" tradeoff entry 23 already
+    # accepts as deliberate.
+    #
+    # The entry-23 pattern above does not already cover this shape. That
+    # one requires a NOT/ANDNOT/ANDMAYBE/REQUIRE keyword or a bare "*"
+    # PLUS a "field:zeroTokenWord" spelling, and this query has neither:
+    # the clause that empties out is bare punctuation, not a word any
+    # analyzer could be asked about. Scoped to the orphaned spelling only.
+    # A comma ATTACHED to a preceding word ("content:doc,content:doc",
+    # "tag:a,b", a trailing "content:doc,") is absorbed harmlessly by
+    # whoosh and agrees with whoosh-compat on both the tree and the
+    # result, so it must NOT match here (verified against the oracle for
+    # each of those spellings).
+    (
+        re.compile(r"(?:^|[\s\]}])\s*,"),
+        (
+            "DIVERGENCES.md entry 23 (design, result-level extension): a comma"
+            " with no word to attach to becomes an empty clause in real whoosh"
+            " that poisons the enclosing conjunction (matching nothing), while"
+            " whoosh-compat drops the contributing-nothing clause during"
+            " analysis and lets its siblings stand alone"
+        ),
+    ),
     # DIVERGENCES.md entry 33 (design, result-level extension): a
     # whitespace-padded quoted BOOLEAN_EXISTS value reads False in
     # whoosh-compat (strips before the trues/falses membership check) but
