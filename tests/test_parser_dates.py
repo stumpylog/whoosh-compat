@@ -42,6 +42,42 @@ def _nodes(node: ast.Node) -> Iterator[ast.Node]:
         yield from _nodes(child)
 
 
+def _plugin_for_cap_test() -> DateParserPlugin:
+    return DateParserPlugin(BASE, BERLIN)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param(
+            "12 december 2019 3pm to 12 december 2020 3pm",
+            id="compact-meridiem-two-sided",
+        ),
+        pytest.param(
+            "12 december 2019 3 pm to 12 december 2020 3 pm",
+            id="spaced-meridiem-two-sided",
+        ),
+        pytest.param("12 december 2019 3 pm", id="spaced-meridiem-one-sided"),
+        pytest.param("-1 week to +2 months", id="relative-two-sided"),
+        pytest.param("last tuesday to next friday", id="keyword-two-sided"),
+    ],
+)
+def test_grammar_never_exceeds_lookahead_cap(text: str) -> None:
+    """The lookahead cap is a safety bound, not a derivation, so it needs a
+    test rather than an argument. Both meridiem spellings are covered
+    deliberately: Time12 allows a space before am/pm, so "3 pm" costs two
+    word nodes where "3pm" costs one, and a cap derived from the compact
+    spelling alone is too small by two per bound.
+
+    If the grammar grows an expression longer than the cap, this fails
+    loudly instead of the rule silently declining the longest values it
+    exists to reject.
+    """
+    plugin = _plugin_for_cap_test()
+    assert plugin._fully_parses(text), "sample is not a full parse, fix the sample"
+    assert len(text.split()) <= plugin._UNQUOTED_LOOKAHEAD + 1
+
+
 @pytest.mark.parametrize(
     "query",
     [

@@ -20,6 +20,7 @@ from tests.differential.strategies import query_text
 from whoosh_compat import FieldKind
 from whoosh_compat import FieldRegistry
 from whoosh_compat import FieldSpec
+from whoosh_compat import ParseResult
 from whoosh_compat import parse
 from whoosh_compat.errors import QueryParserError
 
@@ -84,6 +85,27 @@ def test_known_crashers_stay_fixed(q: str) -> None:
     involved at all.
     """
     parse(q, registry=REGISTRY, default_fields=["content"], tz=UTC)
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        pytest.param("added:december 2019", id="fires"),
+        pytest.param("added:9999999999999999999 december", id="overflowing-numeric-run"),
+        pytest.param("added:-1 " + " ".join(["week"] * 40), id="long-run-past-the-cap"),
+        pytest.param("added:0000-00-00 00", id="out-of-range-components"),
+    ],
+)
+def test_unquoted_date_join_never_raises(query: str) -> None:
+    """The join runs the date grammar over arbitrary user text up to
+    _UNQUOTED_LOOKAHEAD times per date-fielded word. The grammar can raise
+    ValueError/OverflowError/TimeError on absurd components, and parse()
+    must convert bad user input into diagnostics, never an exception.
+    """
+    result = parse(query, registry=REGISTRY, default_fields=["content"])
+    assert isinstance(result, ParseResult)
+    for diagnostic in result.diagnostics:
+        assert diagnostic.kind is not None
 
 
 def test_compounded_nesting_becomes_query_parser_error() -> None:
