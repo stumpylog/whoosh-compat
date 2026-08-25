@@ -166,9 +166,21 @@ def test_diagnostic_skip_count_matches_corpus() -> None:
     # this harness) and now diagnoses SINGLE_CHAR_BRACKET_RANGE before
     # analysis ever runs, so it takes this skip instead. No corpus line was
     # added; an existing one's classification changed.
-    assert count == 16, (
+    #
+    # Rose from 16 to 19 with DIVERGENCES.md entry 61: `corpus_realworld.txt`'s
+    # three new lines (`created:december 2019`, `created:2020 to 2021`,
+    # `created:2020 august 4`) are exactly the shapes entry 61 rejects, an
+    # unquoted multi-word date value on an explicitly named date field that
+    # used to truncate silently to its first word. Each now diagnoses
+    # BAD_DATE naming the whole run instead of parsing the truncated
+    # fragment, so each takes this skip instead of comparing structurally
+    # equal. A fourth new line, `created:2020 august`, is deliberately NOT
+    # among these three: a bare year followed by a bare month name does not
+    # parse as a complete date value in this grammar (measured), so it
+    # neither diagnoses nor diverges, and is not counted here.
+    assert count == 19, (
         f"{count} corpus queries now take the DIVERGENCES.md entry 6 diagnostic skip,"
-        " expected 15; if this is an intentional parser change (diagnosing a new"
+        " expected 19; if this is an intentional parser change (diagnosing a new"
         " shape, or fixing one that used to diagnose), update this pinned count and"
         " say so in the commit message, don't just silently adjust the number"
     )

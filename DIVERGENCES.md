@@ -3732,3 +3732,13 @@ parse-then-emit pipeline).
     `test_a_whitespace_separated_term_after_a_date_is_still_a_term` and
     `test_now_followed_by_unquoted_offset_words_reads_as_now_plus_free_text`
     (runs that do not parse in full and so are left alone).
+    `tests/differential/corpus_realworld.txt`'s `created:december 2019`,
+    `created:2020 to 2021` and `created:2020 august 4` lines each now skip
+    via the existing entry 6 diagnostics-present check instead of
+    comparing structurally equal, since this entry's rule is a parse-time
+    diagnostic rather than a MISMATCH-shaped divergence: no `allowlist.py`
+    entry is needed for them, only the corpus lines themselves and the
+    updated count in `test_diagnostic_skip_count_matches_corpus`. The
+    fourth corpus line, `created:2020 august`, is the accepted regression's
+    own boundary case named above and is pinned precisely because it does
+    not diagnose and still compares equal to the oracle.

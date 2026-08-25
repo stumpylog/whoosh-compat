@@ -264,6 +264,11 @@ type:A OR type:B OR notes:C
 # at parse time now instead, before analysis ever runs.
 title:200[1-9]
 
+created:december 2019
+created:2020 to 2021
+created:2020 august 4
+created:2020 august
+
 # --- OMITTED: harvested queries deliberately NOT added as corpus lines,
 # with the reason for each. Nothing here was rewritten to make it fit.
 #
