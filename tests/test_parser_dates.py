@@ -434,6 +434,125 @@ def test_whitespace_separated_leftover_is_not_folded_into_raw_value(
 
 
 @pytest.mark.parametrize(
+    ("query", "fires", "note"),
+    [
+        pytest.param(
+            "added:december 2019",
+            True,
+            "DATETIME fires like DATE date_only",
+            id="datetime-field",
+        ),
+        pytest.param(
+            "title:december 2019",
+            False,
+            "non-date field is never a candidate",
+            id="non-date-field",
+        ),
+        pytest.param(
+            "december 2019",
+            False,
+            "no explicit field, deliberately excluded",
+            id="default-field-multifield",
+        ),
+        pytest.param(
+            "created:2020,2021",
+            False,
+            "single token, no run to join",
+            id="comma-no-space",
+        ),
+        pytest.param(
+            "created:2020, 2021",
+            False,
+            "candidate with a comma does not parse",
+            id="comma-with-space",
+        ),
+        pytest.param(
+            "created:december title:2019",
+            False,
+            "next sibling carries its own field",
+            id="next-sibling-fielded",
+        ),
+        pytest.param(
+            "created:december AND 2019",
+            False,
+            "an operator ends the run",
+            id="operator-between",
+        ),
+        pytest.param(
+            "created:december 20*",
+            False,
+            "a prefix node is not a plain word",
+            id="wildcard-next",
+        ),
+        pytest.param(
+            "(created:december 2019)",
+            True,
+            "recursion reaches nested groups",
+            id="inside-group",
+        ),
+        pytest.param(
+            "created:december 2019^2",
+            True,
+            "boost ends the run after its word",
+            id="boosted",
+        ),
+        pytest.param(
+            "added:2026-08-04T10:30:00",
+            False,
+            "colon-split fragments abut, so the run is truncated and the rule declines",
+            id="abutting-colon-split",
+        ),
+    ],
+)
+def test_unquoted_date_rejection_cell_matrix(
+    reg: FieldRegistry, query: str, fires: bool, note: str
+) -> None:
+    """Every (node type, field kind, value spelling) cell the rule can reach,
+    each ending in exactly one outcome. Extend this, never carve exceptions
+    out of it: a rule scoped by node type or field kind that lands in one
+    cell and misses its siblings is this codebase's dominant defect class.
+    """
+    res = dparse(query, reg)
+    unquoted = [
+        d
+        for d in res.diagnostics
+        if d.kind is DiagnosticKind.BAD_DATE and " " in (d.raw_value or "")
+    ]
+    assert bool(unquoted) is fires, note
+
+
+def _parse_with_date_default_field(query: str, reg: FieldRegistry) -> wc.ParseResult:
+    """A plain QueryParser (not a MultifieldParser) whose default field is
+    itself a DATE/DATETIME field, mirroring
+    test_bare_date_keyword_under_query_parser_default_date_field's
+    construction rather than wc.parse's MultifieldParser one.
+    """
+    parser = QueryParser("added", reg)
+    parser.add_plugin(DateParserPlugin(BASE, BERLIN))
+    node = ast.normalize(parser.parse(query))
+    return wc.ParseResult(ast=node, diagnostics=tuple(parser.diagnostics))
+
+
+def test_date_default_field_is_deliberately_excluded(reg: FieldRegistry) -> None:
+    """A plain parser whose default field is itself a DATE field keeps the
+    truncating behavior: do_dates resolves an unfielded node through
+    parser.fieldname, but do_unquoted_date_values deliberately does not,
+    for the reason do_date_phrases gives for the same restriction. With a
+    date default field every adjacent word pair in the query would become a
+    join candidate, so the rule would reject far more than it repairs.
+
+    A scope exclusion with a named cost, pinned so it cannot drift: the
+    silent truncation this rule closes elsewhere still happens here.
+    """
+    res = _parse_with_date_default_field("december 2019", reg)
+    assert not [
+        d
+        for d in res.diagnostics
+        if d.kind is DiagnosticKind.BAD_DATE and " " in (d.raw_value or "")
+    ]
+
+
+@pytest.mark.parametrize(
     ("query", "text"),
     [
         pytest.param("added:2005-01-01 invoice", "invoice", id="day-precision-then-a-word"),
