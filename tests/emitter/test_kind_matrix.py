@@ -246,19 +246,25 @@ ALL_COLUMNS = frozenset(
         "bracket-range",
         "comma-list",
         "boosted",
+        "unquoted-multiword",
     }
 )
 
+# "unquoted-multiword" is a date-only production: for every other kind two
+# adjacent words are simply two terms, with no joined value for a grammar to
+# consume, so the column is inapplicable rather than carved out.
+_NON_DATE = ALL_COLUMNS - {"unquoted-multiword"}
+
 ROW_COLUMNS: dict[str, frozenset[str]] = {
     # TEXT/KEYWORD: every column is a meaningful, distinct production.
-    "text": ALL_COLUMNS,
-    "keyword": ALL_COLUMNS,
+    "text": _NON_DATE,
+    "keyword": _NON_DATE,
     # U64: no bracket-range distinction from "comma-list" is needed beyond
     # what's already covered; comma-list is exercised on the comma_values
     # row instead of the plain one, where it is a distinct shape (an AND
     # of split values) rather than just a malformed-number diagnostic.
-    "u64-plain": ALL_COLUMNS,
-    "u64-comma": ALL_COLUMNS,
+    "u64-plain": _NON_DATE,
+    "u64-comma": _NON_DATE,
     # DATE/DATETIME: wildcard-ish columns collide with the date grammar
     # (WildcardPlugin never even sees them; DateParserPlugin claims the
     # text first and reports BAD_DATE), and comma_values is not a valid
@@ -271,11 +277,16 @@ ROW_COLUMNS: dict[str, frozenset[str]] = {
     "datetime": ALL_COLUMNS,
     # BOOLEAN_EXISTS: no numeric/date bound to range over, and comma_values
     # is not a valid BOOLEAN_EXISTS configuration.
-    "boolean-exists-fast": ALL_COLUMNS - {"comma-list"},
-    "boolean-exists-nonfast": ALL_COLUMNS - {"comma-list"},
+    "boolean-exists-fast": _NON_DATE - {"comma-list"},
+    "boolean-exists-nonfast": _NON_DATE - {"comma-list"},
     # JSON subpath: comma_values is not a valid JSON configuration.
-    "json-nonfast": ALL_COLUMNS - {"comma-list"},
-    "json-fast": ALL_COLUMNS - {"comma-list"},
+    # JSON subpaths cannot be date typed today (SubpathSpec carries only
+    # `default`, and resolving a subpath ref yields the parent JSON FieldSpec),
+    # so "unquoted-multiword" is unreachable rather than merely inapplicable
+    # here. When per-subpath numeric/date/boolean typing lands, this cell
+    # reopens and belongs to whoever implements it.
+    "json-nonfast": _NON_DATE - {"comma-list"},
+    "json-fast": _NON_DATE - {"comma-list"},
 }
 
 
@@ -373,6 +384,7 @@ CELLS: list[ParameterSet] = [
     _param("date", "bracket-range", "created:[2020-03-15 TO 2020-03-15]", Search([1])),
     _param("date", "comma-list", "created:2020-03-15,2020-03-15", Diag()),
     _param("date", "boosted", "created:2020-03-15^2.0", Search([1])),
+    _param("date", "unquoted-multiword", "created:december 2019", Diag()),
     # -- DATETIME (added, fast, not date_only) -------------------------------
     # A full ISO instant ("...T10:00:00Z") only parses within a quoted value
     # when written as a single field:value leaf (the colons in the
@@ -413,6 +425,7 @@ CELLS: list[ParameterSet] = [
     ),
     _param("datetime", "comma-list", "added:2020-03-15,2020-03-15", Diag()),
     _param("datetime", "boosted", "added:2020-03-15^2.0", Search([1])),
+    _param("datetime", "unquoted-multiword", "added:december 2019", Diag()),
     # -- BOOLEAN_EXISTS, fast target (has_tag -> tag_id) ---------------------
     _param("boolean-exists-fast", "bare", "has_tag:true", Search([1, 2, 4])),
     _param("boolean-exists-fast", "single-quoted", "has_tag:'true'", Search([1, 2, 4])),
