@@ -772,12 +772,34 @@ parse-then-emit pipeline).
     narrowing it.
 
     The `do_date_phrases` join runs at filter priority 101, ahead of entry
-    61's rule at 102, and that ordering is what keeps the two entries from
-    contradicting each other: by the time entry 61 looks for an unquoted
-    multi-word date value to reject, `created:previous month` is already
-    one joined value the grammar accepts, so there is no two-word run left
-    for it to see. Entry 61 rejects the unquoted multi-word values this
-    entry does *not* claim, not these six.
+    61's rule at 102, and that ordering is what keeps a bare phrase safe:
+    by the time entry 61 looks for a run to reject, `added:previous month`
+    is already one joined value the grammar accepts, so there is no
+    two-word run left there for it to see, and it parses clean (measured).
+
+    The two entries do meet, though, and the joined value is where. A
+    joined phrase is an ordinary word node, so it can serve as the *head*
+    of a run entry 61 then extends over the words that follow it.
+    Measured, basedate 2026-08-04 10:30 Europe/Berlin:
+
+    ```
+    added:previous month          -> clean
+    added:previous month to now   -> BAD_DATE('previous month to now')
+    added:previous month 3 pm     -> BAD_DATE('previous month 3 pm')
+    added:"previous month to now" -> clean
+    ```
+
+    So this entry's promise, that the unquoted spelling reaches the grammar
+    as the quoted spelling would, holds for a phrase alone and for a phrase
+    plus a trailing time of day *as the grammar reads it* (see the two
+    outcomes below), but not once the joined value is only the start of a
+    longer date expression: `added:"previous month 3 pm"` parses while
+    `added:previous month 3 pm` is rejected. That asymmetry is entry 61's
+    rule doing exactly what it exists to do, and it lands here too: an
+    unquoted run that reads as one date value in full is the silent-wrong
+    class, and quoting is the repair. It is recorded here rather than only
+    there so a reader of this entry is not told the widening covers more
+    than it does.
 
     The widening is confined to those six phrases on an explicitly named
     date field. Nothing else about a date value becomes whitespace-greedy:
@@ -3683,11 +3705,36 @@ parse-then-emit pipeline).
     each other and the keyword widening entry 19 exists to provide would
     be unreachable.
 
+    Ordering protects the *bare* phrase, and nothing more than that. A
+    joined phrase is a perfectly ordinary word node, so it is also a
+    legitimate head for this rule, which then extends the run over
+    whatever plain words follow it. Measured, basedate 2026-08-04 10:30
+    Europe/Berlin: `added:previous month` is clean, while
+    `added:previous month to now` and `added:previous month 3 pm` are both
+    rejected here, naming the whole run. Quoting repairs both
+    (`added:"previous month to now"` and `added:"previous month 3 pm"`
+    parse), which is the asymmetry this entry accepts everywhere else: the
+    unquoted spelling of a complete multi-word date value is rejected, the
+    quoted one is the way to write it. Pinned by the
+    `joined-keyword-phrase-then-more-words` row of
+    `test_unquoted_date_rejection_cell_matrix` and by
+    `corpus_realworld.txt`'s `created:previous month to now` line.
+
     **The boundary against entry 54, and what enforces it.** Two word
-    nodes can be adjacent with no whitespace between them, because the
-    tokenizer also splits values the user wrote together: a bare RFC3339
-    timestamp splits at its colons, so `added:2026-08-04T10:30:00` reaches
-    this filter as `2026-08-` immediately abutting `04T10:30:00`. The
+    nodes can be adjacent with no whitespace between them, because a plain
+    word is not tagged at all: it is whatever interstitial text is left
+    between two tagger matches. In a bare RFC3339 timestamp the field-name
+    expression (`[\w.]+:`) matches `04T10:` inside the value, and word
+    characters do not include `-`, so that candidate starts right after
+    the last dash and the text before it, `2026-08-`, is closed off as its
+    own word. `do_fieldnames` then rejects `04T10:` and `30:` as unknown
+    fields and chains them back onto the word after them (entry 57), which
+    is why the colons themselves survive inside a single node. Measured,
+    `added:2026-08-04T10:30:00` reaches this filter as `('2026-08-', 6 to
+    14)` immediately abutting `('04T10:30:00', 14 to 25)`, a boundary one
+    character past a dash rather than at any colon; the same chaining
+    leaves `10:30` whole in `created:december 2019 10:30`, so a colon is
+    not what splits a value here. The
     grammar accepts the space-joined form `2026-08- 04T10:30:00` as a full
     parse (measured), so with nothing to stop it this rule would swallow
     bare RFC3339 timestamps wholesale and quote back at the user a value
@@ -3733,12 +3780,13 @@ parse-then-emit pipeline).
     `test_now_followed_by_unquoted_offset_words_reads_as_now_plus_free_text`
     (runs that do not parse in full and so are left alone).
     `tests/differential/corpus_realworld.txt`'s `created:december 2019`,
-    `created:2020 to 2021` and `created:2020 august 4` lines each now skip
-    via the existing entry 6 diagnostics-present check instead of
-    comparing structurally equal, since this entry's rule is a parse-time
-    diagnostic rather than a MISMATCH-shaped divergence: no `allowlist.py`
-    entry is needed for them, only the corpus lines themselves and the
-    updated count in `test_diagnostic_skip_count_matches_corpus`. The
-    fourth corpus line, `created:2020 august`, is the accepted regression's
-    own boundary case named above and is pinned precisely because it does
-    not diagnose and still compares equal to the oracle.
+    `created:2020 to 2021`, `created:2020 august 4` and
+    `created:previous month to now` lines each now skip via the existing
+    entry 6 diagnostics-present check instead of comparing structurally
+    equal, since this entry's rule is a parse-time diagnostic rather than
+    a MISMATCH-shaped divergence: no `allowlist.py` entry is needed for
+    them, only the corpus lines themselves and the updated count in
+    `test_diagnostic_skip_count_matches_corpus`. The fifth corpus line,
+    `created:2020 august`, is the accepted regression's own boundary case
+    named above and is pinned precisely because it does not diagnose and
+    still compares equal to the oracle.

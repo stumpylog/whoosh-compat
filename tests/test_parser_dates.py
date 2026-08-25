@@ -475,83 +475,133 @@ def test_whitespace_separated_value_is_rejected_as_a_whole(
 
 
 @pytest.mark.parametrize(
-    ("query", "fires", "note"),
+    ("query", "fires", "residual", "note"),
     [
         pytest.param(
             "added:december 2019",
             True,
+            None,
             "DATETIME fires like DATE date_only",
             id="datetime-field",
         ),
         pytest.param(
             "title:december 2019",
             False,
+            None,
             "non-date field is never a candidate",
             id="non-date-field",
         ),
         pytest.param(
             "december 2019",
             False,
+            None,
             "no explicit field, deliberately excluded",
             id="default-field-multifield",
         ),
         pytest.param(
             "created:2020,2021",
             False,
+            None,
             "single token, no run to join",
             id="comma-no-space",
         ),
         pytest.param(
             "created:2020, 2021",
             False,
+            None,
             "candidate with a comma does not parse",
             id="comma-with-space",
         ),
         pytest.param(
             "created:december title:2019",
             False,
+            None,
             "next sibling carries its own field",
             id="next-sibling-fielded",
         ),
         pytest.param(
             "created:december AND 2019",
             False,
+            None,
             "an operator ends the run",
             id="operator-between",
         ),
         pytest.param(
             "created:december 20*",
             False,
+            None,
             "a prefix node is not a plain word",
             id="wildcard-next",
         ),
         pytest.param(
             "(created:december 2019)",
             True,
+            None,
             "recursion reaches nested groups",
             id="inside-group",
         ),
         pytest.param(
             "created:december 2019^2",
             True,
+            None,
             "boost ends the run after its word",
             id="boosted",
         ),
         pytest.param(
             "added:2026-08-04T10:30:00",
             False,
-            "colon-split fragments abut, so the run is truncated and the rule declines",
+            "2026-08-04T10:30:00",
+            "colon-split fragments abut, so the run is truncated and the rule declines,"
+            " leaving the value to the entries 54/58 rejection it already had",
             id="abutting-colon-split",
+        ),
+        pytest.param(
+            "added:previous month to now",
+            True,
+            None,
+            "a joined keyword phrase is a HEAD like any other word, so words"
+            " following it are still a run this rule can claim",
+            id="joined-keyword-phrase-then-more-words",
+        ),
+        pytest.param(
+            "added:2026-08-04 T10:30:00",
+            True,
+            None,
+            "whitespace before the T fragment, so the two nodes do not abut and"
+            " the run survives _whitespace_separated",
+            id="spaced-t-fragment",
+        ),
+        pytest.param(
+            "created:december 2019 10:30",
+            True,
+            None,
+            "a clock time trailing a month-and-year run; its colons live inside a"
+            " single node, so they never break the run",
+            id="date-then-clock-time",
+        ),
+        pytest.param(
+            "added:10:30 december 2019",
+            True,
+            None,
+            "the same run with the clock time as the HEAD instead of the tail",
+            id="clock-time-then-date",
         ),
     ],
 )
 def test_unquoted_date_rejection_cell_matrix(
-    reg: FieldRegistry, query: str, fires: bool, note: str
+    reg: FieldRegistry, query: str, fires: bool, residual: str | None, note: str
 ) -> None:
     """Every (node type, field kind, value spelling) cell the rule can reach,
     each ending in exactly one outcome. Extend this, never carve exceptions
     out of it: a rule scoped by node type or field kind that lands in one
     cell and misses its siblings is this codebase's dominant defect class.
+
+    ``fires`` is read through a proxy (a BAD_DATE whose ``raw_value`` carries
+    a space), which is sound only because this rule is the only producer of a
+    spaced ``raw_value``. ``residual`` is the other half of the outcome: where
+    a row declines *and* another rule is meant to reject the same value, it
+    names that value, so "did not fire" cannot quietly become "nothing
+    diagnosed it at all".
     """
     res = dparse(query, reg)
     unquoted = [
@@ -560,6 +610,14 @@ def test_unquoted_date_rejection_cell_matrix(
         if d.kind is DiagnosticKind.BAD_DATE and " " in (d.raw_value or "")
     ]
     assert bool(unquoted) is fires, note
+    if residual is not None:
+        surviving = [
+            d
+            for d in res.diagnostics
+            if d.kind is DiagnosticKind.BAD_DATE and d.raw_value == residual
+        ]
+        assert surviving, note
+        assert surviving[0].message == f"{residual!r} is not a recognizable date"
 
 
 def _parse_with_date_default_field(query: str, reg: FieldRegistry) -> wc.ParseResult:

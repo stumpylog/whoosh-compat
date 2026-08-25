@@ -142,15 +142,28 @@ forked from in turn. Within the forked pipeline:
 - **`parser/dateparse.py` + `parser/times.py`**: the natural-language date
   grammar (`Sequence`/`Combo`/`Choice`/`Bag`/`Regex` parser-combinator
   elements feeding `adatetime`/`timespan`) ported structurally unchanged.
-  What's downstream of a successful date parse is new (see §4). One thing
-  *upstream* of it is new too: `DateParserPlugin.do_date_phrases`, a filter
-  running just after fieldname assignment that joins an unquoted multi-word
-  date keyword (`added:previous month`) back into a single value node before
-  the grammar sees it. In Whoosh a value always ends at the first space, so
-  this is a deliberate widening, confined to the six known phrases (plus a
-  trailing time of day) on an explicitly named date field so that no other
-  date value becomes whitespace-greedy; `DIVERGENCES.md` entry 19 records
-  what it does and does not cover.
+  What's downstream of a successful date parse is new (see §4). Two filters
+  *upstream* of it are new too, and they run in this order, just after
+  fieldname assignment and both confined to an explicitly named date field:
+  - `DateParserPlugin.do_date_phrases` (priority 101) joins an unquoted
+    multi-word date keyword (`added:previous month`) back into a single
+    value node before the grammar sees it. In Whoosh a value always ends at
+    the first space, so this is a deliberate widening, confined to the six
+    known phrases (plus a trailing time of day) so that no other date value
+    becomes whitespace-greedy; `DIVERGENCES.md` entry 19 records what it
+    does and does not cover.
+  - `DateParserPlugin.do_unquoted_date_values` (priority 102) rejects what
+    the widening does not cover, rather than letting Whoosh's first-space
+    rule truncate it. It joins the words following a date-fielded word
+    longest-first and, if the grammar consumes a candidate *in full*,
+    replaces the whole run with a `BAD_DATE` diagnostic naming the value
+    and the quoted spelling that works. Full consumption is the whole
+    stopping rule: `added:-1 week invoice` keeps `invoice` as a term
+    because `-1 week invoice` does not parse. Running second is what lets a
+    joined keyword phrase stand as a value on its own while still serving
+    as the head of a longer run (`added:previous month to now` is
+    rejected); `DIVERGENCES.md` entry 61 records the rule, its accepted
+    regression and its boundary against entry 54.
 
 **`ast.py`**: frozen dataclasses (`Term`, `And`, `Or`, `Not`, `AndNot`,
 `AndMaybe`, `Require`, `Phrase`, `Prefix`, `Wildcard`, `TermRange`,

@@ -1319,7 +1319,8 @@ class DateParserPlugin(Plugin):
     def _unquoted_error(
         self, text: str, spec: FieldSpec, startchar: int | None, endchar: int | None
     ) -> DateErrorNode:
-        """The diagnostic for a date value written without quotes.
+        """The diagnostic for a date value written without quotes, on a node
+        already carrying the same span.
 
         Deliberately ``BAD_DATE`` rather than a new kind: ``kind`` is the
         machine-stable half of the contract a host branches on, and a host
@@ -1340,7 +1341,10 @@ class DateParserPlugin(Plugin):
             field_kind=spec.kind,
             raw_value=text,
         )
-        return DateErrorNode(diagnostic)
+        node = DateErrorNode(diagnostic)
+        node.startchar = startchar
+        node.endchar = endchar
+        return node
 
     def do_unquoted_date_values(self, parser: Any, group: syntax.GroupNode) -> syntax.GroupNode:
         """Reject an unquoted multi-word date value instead of letting it
@@ -1386,11 +1390,16 @@ class DateParserPlugin(Plugin):
 
             idxs = [i, *self._phrase_words(group, i, limit=self._UNQUOTED_LOOKAHEAD)]
             # Whitespace-separated words only. Two word nodes can also be
-            # adjacent with nothing between them, when the tokenizer split
-            # one value the user wrote without any space (a bare RFC 3339
-            # timestamp splits at its colons); joining those with a space
-            # would name back a value nobody typed, and that shape already
-            # has its own handling (DIVERGENCES.md entries 54 and 58).
+            # adjacent with nothing between them, because a plain word is
+            # only the interstitial text between tagger matches: in a bare
+            # RFC 3339 timestamp the field-name expression ("[\w.]+:")
+            # matches "04T10:" inside it, so "2026-08-" ends where that
+            # candidate starts (after the "-", which is not a word
+            # character), and do_fieldnames later chains the rejected
+            # candidate back onto the word after it. Joining those two
+            # across the seam with a space would name back a value nobody
+            # typed, and that shape already has its own handling
+            # (DIVERGENCES.md entries 54 and 58).
             idxs = self._whitespace_separated(group, idxs)
             words = [cast(str, group[j].text) for j in idxs]
 
@@ -1402,8 +1411,6 @@ class DateParserPlugin(Plugin):
                 error = self._unquoted_error(
                     joined, spec, head.startchar, last.endchar
                 )
-                error.startchar = head.startchar
-                error.endchar = last.endchar
                 group[i:idxs[k - 1] + 1] = [error]
                 break
             i += 1
