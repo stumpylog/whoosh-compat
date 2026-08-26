@@ -33,6 +33,9 @@ from __future__ import annotations
 import pathlib
 import re
 import time
+import unicodedata
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 import pytest
 from whoosh.analysis import STOP_WORDS
@@ -41,7 +44,20 @@ from tests.differential.allowlist import ALLOW
 from tests.differential.allowlist import allowed_entry
 from tests.differential.allowlist import allowed_reason
 from tests.differential.oracle import ORACLE_REGISTRY
+from tests.differential.oracle import V2_FIELDS
+from tests.differential.oracle import compat_raw_parse
+from tests.differential.oracle import oracle_parse
+from tests.differential.oracle import to_ast
+from whoosh_compat.ast import analyze
+from whoosh_compat.ast import normalize
 from whoosh_compat.fields import FieldKind
+
+# Same fixed basedate/timezone the other differential modules use, so a
+# shape that happens to carry date text resolves identically here. The
+# shapes in this module are date-free, but drifting from the shared value
+# would be a trap for the first one that is not.
+_BERLIN = ZoneInfo("Europe/Berlin")
+_BASE = datetime(2026, 8, 4, 10, 30, tzinfo=_BERLIN)
 
 _ROOT = pathlib.Path(__file__).resolve().parents[2]
 _DIVERGENCES_PATH = _ROOT / "DIVERGENCES.md"
@@ -636,6 +652,71 @@ def test_entry_15_does_not_claim_agreeing_shapes(q: str) -> None:
     entry = allowed_entry(q)
     if entry is not None:
         assert "entry 15" not in entry[0], f"{q!r} wrongly claimed by entry 15: {entry[0]!r}"
+
+
+# Every punctuation character that can lead a bare term without turning it
+# into some other construct. Deliberately excludes the two quote characters
+# (they diverge identically, but entry 15's regex carries its own
+# single-quote handling, so a generic leading run would fight it) and the
+# two wildcard characters "?" and "*" (they route through WildcardPlugin
+# into a Prefix/Wildcard node, which has no Multitoken.DEFAULT combinator
+# question at all, and both sides agree).
+_ENTRY_15_LEADING_PUNCTUATION = "-+><!@#$%&=|~;./"
+
+
+@pytest.mark.parametrize(
+    "punct",
+    [
+        pytest.param(c, id=f"leading-{unicodedata.name(c).lower().replace(' ', '-')}")
+        for c in _ENTRY_15_LEADING_PUNCTUATION
+    ],
+)
+def test_entry_15_claims_values_behind_leading_punctuation(punct: str) -> None:
+    """A leading punctuation character does not change entry 15's mechanism.
+
+    Measured: "ab-cd", "-ab-cd", "+ab-cd" and ">ab-cd" all produce the
+    identical divergence, whoosh-compat's flat ``Or(Term...)`` against real
+    whoosh's ``Or(And(Term, Term), ...)``, since the punctuation is not part
+    of any token the analyzer emits. Entry 15's regex nonetheless required
+    start-of-string, whitespace or "(" immediately before the value, so
+    every one of these went unclaimed while the bare "ab-cd" was claimed.
+    """
+
+    q = f"{punct}ab-cd"
+    entry = allowed_entry(q)
+    assert entry is not None, f"expected {q!r} to be claimed by an allowlist entry"
+    assert "entry 15" in entry[0], f"expected {q!r} claimed by entry 15, got: {entry[0]!r}"
+
+    # Claiming a shape that no longer diverges would silently delete
+    # coverage: the fuzz layer returns early on an allowlisted query without
+    # comparing, so nothing else would notice. The corpus layer's
+    # strict-xfail plays this role for corpus lines, but every corpus file
+    # here is provenance-bound (docs, paperless-ngx tests, verbatim
+    # real-world queries), so a synthetic shape cannot be added to one; the
+    # equivalent proof is made directly instead.
+    expected = to_ast(oracle_parse(q, _BASE, _BERLIN), ORACLE_REGISTRY)
+    assert expected is not None, f"oracle produced no comparable query for {q!r}"
+    raw_ast, diagnostics = compat_raw_parse(q, ORACLE_REGISTRY, V2_FIELDS, _BERLIN, _BASE)
+    assert not diagnostics, f"{q!r} unexpectedly produced diagnostics: {diagnostics!r}"
+    assert normalize(analyze(raw_ast, ORACLE_REGISTRY)) != normalize(expected), (
+        f"allowlist entry stale: {q!r} no longer diverges, so entry 15 now"
+        " over-claims it; re-triage per the differential-triage skill"
+    )
+
+
+def test_entry_15_leading_punctuation_does_not_reach_into_a_word() -> None:
+    """The leading-punctuation run must not let the pattern start matching
+    mid-word: that is why it sits after the existing start/whitespace/"("
+    boundary rather than replacing it with a wider lookbehind.
+    """
+
+    # A single token whose own text happens to contain punctuation is a
+    # different shape from punctuation leading a term, and stays governed by
+    # whether the whole token splits into 2+ analyzer tokens.
+    for q in ("ab-cd", "xab-cd"):
+        entry = allowed_entry(q)
+        assert entry is not None, f"{q!r} should still be claimed on its own merits"
+        assert "entry 15" in entry[0], f"{q!r} should still be claimed by entry 15"
 
 
 @pytest.mark.parametrize(

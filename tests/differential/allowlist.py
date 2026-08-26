@@ -1891,13 +1891,13 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # ALLOW, so they claim those shapes first.
     (
         re.compile(
-            r"(?:^|(?<=[\s(]))(?P<e15bq>')?"
+            r"(?:^|(?<=[\s(]))(?:[^\w\s'\"]*)(?P<e15bq>')?"
             rf"(?:(?!{_survivor_not_all_identical(_TEXT_SURVIVOR, _BARE_FILLER, 'e15bts')})"
             rf"{_survivor_chain(_TEXT_SURVIVOR, _BARE_FILLER)}"
             rf"|(?!{_survivor_not_all_identical(_KEYWORD_SURVIVOR, _KEYWORD_FILLER, 'e15bks')})"
             rf"{_survivor_chain(_KEYWORD_SURVIVOR, _KEYWORD_FILLER)})"
             r"(?(e15bq)'|)(?=[\s)]|$)"
-            rf"|(?:^|(?<=[\s(]))\b(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared)\b)"
+            rf"|(?:^|(?<=[\s(]))(?:[^\w\s'\"]*)\b(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared)\b)"
             rf"(?!{_TEXT_STOPWORD})(?P<e15ufpfx>\w{{2,}}):"
             rf"(?!(?:{REGISTERED_FIELDS_PATTERN}|is_shared):)"
             rf"{_RANGE_LOOKAHEAD}"

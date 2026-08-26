@@ -567,6 +567,26 @@ parse-then-emit pipeline).
     confirming the comma split, not the colon, is what makes the
     difference.
 
+    Also under-claimed, and for a reason that had nothing to do with the
+    value itself: a leading punctuation character. The allowlist regex
+    required start-of-string, whitespace or `(` immediately before the
+    value, so `ab-cd` was claimed while `-ab-cd`, `+ab-cd` and `>ab-cd`
+    were not, even though all four produce byte-identical trees on both
+    sides (whoosh-compat's flat `Or(Term...)` against real whoosh's
+    `Or(And(Term, Term), ...)`). The punctuation is not part of any token
+    the analyzer emits, so it cannot change this entry's mechanism. The
+    regex now allows a run of leading punctuation after that boundary
+    rather than replacing the boundary with a wider lookbehind, which
+    would let the pattern start matching mid-word. Sixteen characters are
+    covered; the two quote characters are deliberately excluded, since the
+    regex carries its own single-quote handling that a generic leading run
+    would fight, and `?` and `*` need no claim because they route through
+    `WildcardPlugin` into a pattern node that has no `Multitoken.DEFAULT`
+    question at all. One adjacent shape stays unclaimed and is a separate
+    cause: a leading `.` before a *registered* field name
+    (`.title:ab-cd`), which is entry 14's dot-inclusive fieldname tagger
+    rather than this entry.
+
     Corpus lines: the two `tests/differential/corpus_paperless.txt` lines
     named above, plus the two entry-15 KNOWN DIVERGENCE blocks in
     `tests/differential/corpus_realworld.txt`: the unknown-field-demoted
