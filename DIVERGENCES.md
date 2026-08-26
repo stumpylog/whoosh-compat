@@ -372,6 +372,29 @@ parse-then-emit pipeline).
     one leading field prefix) rather than on "a colon precedes the dotted
     run", which would reach inside such a phrase.
 
+    A *leading* dot is the same cut, and was missed because the pattern
+    required a word character before the dot: it claimed `x.title:abcd`
+    and not `.title:abcd`. whoosh-compat absorbs the dot into the field
+    name, so `.title:abcd` looks like one unknown field and demotes to an
+    unfielded search across every default field, while real whoosh splits
+    the dot off as its own term and still recognizes `title:`, giving
+    `title:abcd` plus a term for `.` (measured: 13 terms against 2). Only
+    `.` does this; `-title:abcd` and its siblings compare EQUAL, since no
+    other punctuation is in whoosh-compat's fieldname character class. A
+    dot with no name after it (`.:abcd`) is not a field candidate on
+    either side and compares EQUAL, so the pattern requires a name.
+
+    Two shapes moved here from other entries as part of that, both because
+    a reason string has to name the cause the query actually exhibits.
+    `.zzz:abcd` was claimed by entry 15, whose combinator mechanism
+    presupposes that both sides agree on the value's text; they do not
+    (real whoosh yields `.`, `zzz` and `zzz:abcd`, whoosh-compat yields
+    `.zzz:abcd`), so the tagger cut is what happens. `.created:2020-01-01`
+    was claimed by entry 18, which describes a date value parsing
+    differently; with the dot absorbed whoosh-compat never reaches date
+    parsing at all and builds no `DateRange` node. This entry sits earlier
+    in `ALLOW` than both, so it claims these shapes now.
+
     Test references: `tests/differential/allowlist.py`'s two `custom_fields\.`
     / `notes\.` entries (AST-level: neither side's tree matches, by
     construction); `tests/emitter/test_acceptance_e2e.py::test_notes_user_json_subpath_has_no_v2_analogue`
@@ -380,8 +403,10 @@ parse-then-emit pipeline).
     whoosh oracle index with a plain-TEXT `notes` field, even when that
     index's `notes` field is populated with the same underlying data
     flattened to plain text); `tests/differential/test_allowlist_xref.py`'s
-    `test_entry_14_claims_dotted_name_colon_shapes` and
-    `test_entry_14_does_not_claim_dotless_or_quoted_shapes`;
+    `test_entry_14_claims_dotted_name_colon_shapes`,
+    `test_entry_14_does_not_claim_dotless_or_quoted_shapes`,
+    `test_entry_14_claims_leading_dot_field_names` and
+    `test_entry_14_does_not_claim_leading_dot_lookalikes`;
     `tests/differential/corpus_docs.txt`'s `title:ab.cd:9 OR x` /
     `ab.cd:ef` lines.
 

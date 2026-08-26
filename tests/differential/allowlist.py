@@ -794,7 +794,7 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # ("title:ab.cd", "9.90", both EQUAL, see entry 46's "a dot never
     # splits a token" finding).
     (
-        re.compile(r"(?:^|(?<=[\s(]))(?:[\w.]+:)?\w+(?:\.\w+)+:"),
+        re.compile(r"(?:^|(?<=[\s(]))(?:[\w.]+:)?(?:\w+(?:\.\w+)+|\.+\w+(?:\.\w+)*):"),
         (
             "DIVERGENCES.md entry 14 (design, generalized): the dot-inclusive"
             " FieldsPlugin tagger ([\\w.]+: vs whoosh's \\w+:) cuts any dotted"

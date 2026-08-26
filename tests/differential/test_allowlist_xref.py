@@ -786,6 +786,85 @@ def test_entry_14_does_not_claim_dotless_or_quoted_shapes(q: str) -> None:
 @pytest.mark.parametrize(
     "q",
     [
+        pytest.param(".title:abcd", id="leading-dot-registered-text-field"),
+        pytest.param(".title:ab-cd", id="leading-dot-registered-field-multitoken"),
+        pytest.param(".title:", id="leading-dot-registered-field-no-value"),
+        pytest.param(".title:'a b'", id="leading-dot-registered-field-quoted"),
+        pytest.param(".content:abcd", id="leading-dot-content"),
+        pytest.param(".correspondent:abcd", id="leading-dot-correspondent"),
+        pytest.param(".tag:abcd", id="leading-dot-keyword-field"),
+        pytest.param(".type:abcd", id="leading-dot-type"),
+        # An unknown name behind a leading dot. Used to be claimed by entry
+        # 15, whose mechanism is a combinator question that presupposes both
+        # sides agree on the value's TEXT. They do not here: real whoosh
+        # yields ".", "zzz" and "zzz:abcd" while whoosh-compat yields
+        # ".zzz:abcd", so the tagger cut is the cause and entry 14 is the
+        # right owner. Entry 14 sits earlier in ALLOW, so it claims first.
+        pytest.param(".zzz:abcd", id="leading-dot-unknown-field"),
+        pytest.param(".zzz:ab-cd", id="leading-dot-unknown-field-multitoken"),
+        # Same re-attribution for a date field: with the dot absorbed,
+        # whoosh-compat never reaches date parsing at all (no DateRange node
+        # is built), so entry 18's "the date value parses differently" is
+        # not what happens here.
+        pytest.param(".created:2020-01-01", id="leading-dot-date-field"),
+        pytest.param(".9:abcd", id="leading-dot-numeric-name"),
+        pytest.param("..title:abcd", id="two-leading-dots"),
+        pytest.param(".a.title:abcd", id="leading-dot-then-interior-dot"),
+        pytest.param("x .title:abcd", id="leading-dot-after-a-word"),
+        pytest.param("(.title:abcd)", id="leading-dot-in-parens"),
+    ],
+)
+def test_entry_14_claims_leading_dot_field_names(q: str) -> None:
+    r"""A LEADING dot is the same tagger cut as an interior one.
+
+    whoosh-compat's dot-inclusive ``[\w.]+:`` absorbs the dot into the
+    field name, so ".title:abcd" looks like one unknown field and demotes
+    to an unfielded text search across every default field; real whoosh's
+    ``\w+:`` splits the dot off as its own term and still recognizes
+    "title:". Entry 14's pattern required a word character before the dot,
+    so it claimed the interior spelling ("x.title:abcd") and missed every
+    leading one.
+    """
+
+    entry = allowed_entry(q)
+    assert entry is not None, f"expected {q!r} to be claimed by an allowlist entry"
+    assert "entry 14" in entry[0], f"expected {q!r} claimed by entry 14, got: {entry[0]!r}"
+
+    # Same self-proving check as entry 15's leading-punctuation test: the
+    # corpus files are provenance-bound, so these synthetic shapes cannot
+    # take a corpus line and its strict-xfail.
+    expected = to_ast(oracle_parse(q, _BASE, _BERLIN), ORACLE_REGISTRY)
+    assert expected is not None, f"oracle produced no comparable query for {q!r}"
+    raw_ast, diagnostics = compat_raw_parse(q, ORACLE_REGISTRY, V2_FIELDS, _BERLIN, _BASE)
+    assert not diagnostics, f"{q!r} unexpectedly produced diagnostics: {diagnostics!r}"
+    assert normalize(analyze(raw_ast, ORACLE_REGISTRY)) != normalize(expected), (
+        f"allowlist entry stale: {q!r} no longer diverges, so entry 14 now"
+        " over-claims it; re-triage per the differential-triage skill"
+    )
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
+        # A dot with no name after it is not a field candidate on either
+        # side, and compares EQUAL.
+        pytest.param(".:abcd", id="leading-dot-no-name"),
+        pytest.param("title:ab-cd", id="registered-field-no-dot"),
+        pytest.param("abcd", id="bare-word"),
+    ],
+)
+def test_entry_14_does_not_claim_leading_dot_lookalikes(q: str) -> None:
+    """The leading-dot alternative must require a name after the dots, or it
+    would claim shapes that compare EQUAL and silently delete coverage.
+    """
+
+    reason = allowed_reason(q)
+    assert reason is None or "entry 14" not in reason, f"{q!r} wrongly claimed: {reason!r}"
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
         pytest.param("aa:bb:cc", id="two-rejected-candidates-original"),
         pytest.param("zzz:and:9", id="second-segment-is-a-stopword"),
         pytest.param("zzz:the:the", id="both-tail-segments-are-stopwords"),
