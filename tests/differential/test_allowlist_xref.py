@@ -786,6 +786,84 @@ def test_entry_14_does_not_claim_dotless_or_quoted_shapes(q: str) -> None:
 @pytest.mark.parametrize(
     "q",
     [
+        pytest.param("-title:x ANDNOT title:y", id="dash-zero-token-andnot-zero-token"),
+        pytest.param("-title:x ANDMAYBE title:y", id="dash-zero-token-andmaybe-zero-token"),
+        pytest.param("-title:x REQUIRE title:y", id="dash-zero-token-require-zero-token"),
+        pytest.param("-title:the ANDNOT title:the", id="dash-stopword-andnot-stopword"),
+        pytest.param("-title:x ANDNOT title:the", id="dash-minsize-andnot-stopword"),
+        pytest.param("-content:the ANDNOT content:a", id="dash-zero-token-other-text-field"),
+        # The same shape wrapped in a group behind the dash, which is what
+        # a "-" applied to a compound child produces. Found by a fuzz probe
+        # of that combinator after the un-wrapped spelling was claimed.
+        pytest.param("-(title:in REQUIRE title:in)", id="dash-group-wrapped-require"),
+        pytest.param("-(title:x ANDNOT title:y)", id="dash-group-wrapped-andnot"),
+    ],
+)
+def test_entry_23_claims_dash_negated_zero_token_under_asymmetric_operators(q: str) -> None:
+    """The "-" spelling of NOT reaches entry 23's mechanism, but only in
+    combination.
+
+    Unlike the ``NOT`` spelling, a dash-negated zero-token term is NOT a
+    divergence on its own: "-title:x" compares EQUAL while "NOT title:x"
+    diverges. It only diverges when it is the left operand of an operator
+    whose two sides have asymmetric roles (ANDNOT, ANDMAYBE, REQUIRE) and
+    the right operand is also zero-token, at which point real whoosh
+    collapses the whole query to Nothing while whoosh-compat drops the
+    contributing-nothing clauses and keeps a searchable residue. AND and OR
+    compare EQUAL throughout. The claim therefore has to be a
+    co-occurrence, the same shape entry 23's composed sibling uses, rather
+    than adding "-" as an alternative to its NOT prefix, which would claim
+    the agreeing "-title:x" too.
+    """
+
+    entry = allowed_entry(q)
+    assert entry is not None, f"expected {q!r} to be claimed by an allowlist entry"
+    assert "entry 23" in entry[0], f"expected {q!r} claimed by entry 23, got: {entry[0]!r}"
+
+    expected = to_ast(oracle_parse(q, _BASE, _BERLIN), ORACLE_REGISTRY)
+    assert expected is not None, f"oracle produced no comparable query for {q!r}"
+    raw_ast, diagnostics = compat_raw_parse(q, ORACLE_REGISTRY, V2_FIELDS, _BERLIN, _BASE)
+    assert not diagnostics, f"{q!r} unexpectedly produced diagnostics: {diagnostics!r}"
+    assert normalize(analyze(raw_ast, ORACLE_REGISTRY)) != normalize(expected), (
+        f"allowlist entry stale: {q!r} no longer diverges, so entry 23 now"
+        " over-claims it; re-triage per the differential-triage skill"
+    )
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
+        # Measured EQUAL: the dash spelling alone is not this divergence.
+        pytest.param("-title:x", id="dash-zero-token-alone"),
+        pytest.param("-title:the", id="dash-stopword-alone"),
+        # A real right operand leaves something to search on both sides.
+        pytest.param("-title:x ANDNOT title:abcd", id="dash-zero-token-andnot-real"),
+        # A real left operand is not zero-token at all.
+        pytest.param("-title:abcd ANDNOT title:y", id="dash-real-andnot-zero-token"),
+        # AND and OR are symmetric and compare EQUAL.
+        pytest.param("-title:x AND title:y", id="dash-zero-token-and-zero-token"),
+        pytest.param("-title:x OR title:y", id="dash-zero-token-or-zero-token"),
+        # KEYWORD fields have no minsize/stopword filtering, so a
+        # single-character value there is not zero-token.
+        pytest.param("-tag:x ANDNOT tag:y", id="dash-keyword-single-char"),
+        # A group wrapper does not make an agreeing shape diverge either.
+        pytest.param("-(title:x AND title:y)", id="dash-group-wrapped-and"),
+        pytest.param("-(title:abcd ANDNOT title:efgh)", id="dash-group-wrapped-real"),
+    ],
+)
+def test_entry_23_does_not_claim_agreeing_dash_shapes(q: str) -> None:
+    """Each shape here compares EQUAL (measured); the dash co-occurrence
+    entry must not claim any of them, or the fuzz layer would stop
+    comparing a query that does not diverge.
+    """
+
+    reason = allowed_reason(q)
+    assert reason is None or "entry 23" not in reason, f"{q!r} wrongly claimed: {reason!r}"
+
+
+@pytest.mark.parametrize(
+    "q",
+    [
         pytest.param(".title:abcd", id="leading-dot-registered-text-field"),
         pytest.param(".title:ab-cd", id="leading-dot-registered-field-multitoken"),
         pytest.param(".title:", id="leading-dot-registered-field-no-value"),

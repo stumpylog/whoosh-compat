@@ -897,16 +897,17 @@ def _extend(children: st.SearchStrategy[str]) -> st.SearchStrategy[str]:
     # the real-world corpus (corpus_realworld.txt) is full of. Measured
     # clean over a 3000-draw sweep.
     #
-    # Its "-" sibling ("-tag:x") is deliberately NOT generated, though the
-    # corpus carries it and issue #13568's reporter fixed a broken query by
-    # rewriting "NOT x" as "-x": measured, "-" directly abutting a value
-    # defeats the entry-15 allowlist pattern's left boundary (it requires
-    # start-of-string, whitespace or "(" before the value), so "-ab-cd" is
-    # a genuine, currently unclaimed entry-15 divergence while "ab-cd" and
-    # "NOT ab-cd" are claimed. Generating it days before a release would
-    # only turn a documented gap into a CI flake; see the pre-release
-    # real-world-corpus report for the escalation.
     bare_negated = children.map(lambda c: f"NOT {c}")
+    # Its "-" sibling ("-tag:x"), which the corpus carries and which issue
+    # #13568's reporter used to fix a broken query by rewriting "NOT x" as
+    # "-x". This was withheld while two allowlist gaps made it a CI flake
+    # rather than a finding, both since closed: entry 15's left boundary
+    # required start-of-string, whitespace or "(" before a value, leaving
+    # "-ab-cd" unclaimed, and entry 23 had no "-" spelling, leaving a
+    # dash-negated zero-token term under ANDNOT/ANDMAYBE/REQUIRE unclaimed.
+    # Measured clean (0 unclaimed divergences) over an 8000-draw sweep with
+    # this combinator enabled.
+    dash_negated = children.map(lambda c: f"-{c}")
     boosted = st.tuples(children, st.sampled_from(_BOOSTS)).map(lambda t: f"({t[0]})^{t[1]}")
     binary = st.tuples(children, st.sampled_from(_BINARY_OPS), children).map(
         lambda t: f"({t[0]}) {t[1]} ({t[2]})"
@@ -924,7 +925,16 @@ def _extend(children: st.SearchStrategy[str]) -> st.SearchStrategy[str]:
     unparen_binary = st.tuples(children, st.sampled_from(_BINARY_OPS), children).map(
         lambda t: f"{t[0]} {t[1]} {t[2]}"
     )
-    return st.one_of(group, negated, bare_negated, boosted, binary, implicit_and, unparen_binary)
+    return st.one_of(
+        group,
+        negated,
+        bare_negated,
+        dash_negated,
+        boosted,
+        binary,
+        implicit_and,
+        unparen_binary,
+    )
 
 
 def query_text(max_leaves: int = 8) -> st.SearchStrategy[str]:

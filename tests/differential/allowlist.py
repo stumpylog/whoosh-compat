@@ -1425,6 +1425,39 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         ),
         DivergenceKind.MISMATCH,
     ),
+    # design (DIVERGENCES.md entry 23, "-" spelling): the dash negation of
+    # a zero-token term is NOT this divergence on its own. "-title:x"
+    # compares EQUAL while "NOT title:x" diverges, because the dash leaves
+    # a searchable "-" term behind on both sides. It only diverges in
+    # combination: as the left operand of an operator whose two sides have
+    # asymmetric roles (ANDNOT, ANDMAYBE, REQUIRE) with a zero-token right
+    # operand, where real whoosh collapses the whole query to Nothing and
+    # whoosh-compat drops the contributing-nothing clauses and keeps the
+    # residue. AND and OR compare EQUAL throughout, and so does any
+    # spelling with a real (non-zero-token) operand on either side. The
+    # claim is therefore a co-occurrence, like the composed entry below,
+    # rather than "-" added as an alternative to the NOT prefix above,
+    # which would claim the agreeing "-title:x" too. KEYWORD fields stay
+    # out for the same reason the entry above gives: their analyzer has no
+    # minsize/stopword filtering, so a single-character value is not
+    # zero-token.
+    (
+        re.compile(
+            rf"(?<![\w])-\(?\s*(?:{TEXT_FIELDS_PATTERN}):"
+            rf"{ZERO_TOKEN_WORD}(?:[-,/]{ZERO_TOKEN_WORD})*[-,/]?(?![\w.,/-])"
+            r"\s+(?:ANDNOT|ANDMAYBE|REQUIRE)\s+"
+            rf"(?:{TEXT_FIELDS_PATTERN}):"
+            rf"{ZERO_TOKEN_WORD}(?:[-,/]{ZERO_TOKEN_WORD})*[-,/]?(?![\w.,/-])"
+        ),
+        (
+            'DIVERGENCES.md entry 23 ("-" spelling): a dash-negated zero-token'
+            " term as the left operand of ANDNOT/ANDMAYBE/REQUIRE whose right"
+            " operand is also zero-token collapses to Nothing in real whoosh,"
+            " while whoosh-compat drops the contributing-nothing clauses and"
+            " keeps a searchable residue"
+        ),
+        DivergenceKind.MISMATCH,
+    ),
     # design (DIVERGENCES.md entries 23 and 40 jointly): the composed
     # family of the two entries above: a NOT anywhere in the query, an
     # empty group anywhere, and a zero-token word anywhere, in arbitrary

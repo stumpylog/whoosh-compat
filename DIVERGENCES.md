@@ -1257,6 +1257,27 @@ parse-then-emit pipeline).
     was discovered, even though it disagrees with whoosh, is more
     predictable than a rule that depends on an implementation detail.
 
+    The `-` spelling of `NOT` reaches this mechanism only in combination,
+    which is why it needed its own allowlist entry rather than a `-`
+    alternative on the `NOT` one. On its own, `-title:x` compares EQUAL
+    while `NOT title:x` diverges: the dash leaves a searchable `-` term
+    behind on both sides, so there is no all-negative group to pad and
+    nothing collapses. It diverges only as the left operand of an operator
+    whose two sides have asymmetric roles (`ANDNOT`, `ANDMAYBE`,
+    `REQUIRE`) when the right operand is also zero-token, at which point
+    real whoosh collapses the whole query to `Nothing` while whoosh-compat
+    drops the contributing-nothing clauses and keeps the residue.
+    Symmetric `AND` and `OR` compare EQUAL throughout, as does any
+    spelling with a real (non-zero-token) operand on either side. Adding
+    `-` as an alternative to the `NOT` prefix would therefore have claimed
+    the agreeing `-title:x` and silently stopped comparing it.
+
+    Closing that gap, together with entry 15's leading-punctuation
+    boundary, is what allowed the grammar-aware fuzzer to start generating
+    `-` as a general combinator (`-{child}`, not just the fielded
+    `-field:value` leaf). Both gaps had to close first: with either open,
+    generating the combinator produced a CI failure rather than a finding.
+
     Test references: `tests/emitter/test_emit_boolean.py`'s
     `test_not_zero_token_term_matches_everything`. The grammar-aware
     property fuzzer (`tests/differential/strategies.py`,
