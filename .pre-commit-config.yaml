@@ -55,7 +55,13 @@ repos:
       # upstream whoosh (see pyproject.toml's [tool.ruff.format] exclude
       # list and ARCHITECTURE.md's "why a fork" section for which files
       # those are and why).
+      #
+      # types_or adds markdown, which ruff's default file types leave out:
+      # ruff formats python code blocks inside .md, and CI runs
+      # `ruff format --check .` over the whole tree, so without this the
+      # hook passes locally while CI fails on a documented snippet.
       - id: ruff-format
+        types_or: [python, pyi, jupyter, markdown]
   # mypy is intentionally not wired in here: it needs the project's own
   # virtualenv (tantivy, whoosh, types-python-dateutil, ...) rather than
   # pre-commit's isolated hook environments to type-check meaningfully, so

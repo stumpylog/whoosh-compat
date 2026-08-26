@@ -283,7 +283,7 @@ Parse every stored query and look at what comes back. Three outcomes matter:
    out = q
    for d in sorted(result.diagnostics, key=lambda d: -d.startchar):
        if d.kind is DiagnosticKind.BAD_DATE and d.startchar is not None:
-           out = f'{out[:d.startchar]}"{out[d.startchar:d.endchar]}"{out[d.endchar:]}'
+           out = f'{out[: d.startchar]}"{out[d.startchar : d.endchar]}"{out[d.endchar :]}'
    ```
 
    | stored query | rewritten |
