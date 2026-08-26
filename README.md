@@ -463,22 +463,57 @@ It drives five properties:
 These run at a modest `max_examples` in CI so the suite stays fast. To run
 a longer local soak (recommended before a release, or after touching
 `parser/`, `ast.py`, or `emitters/`), raise the example count for a single
-run without editing the files:
+run without editing the files.
 
-```bash
-uv run python - <<'EOF'
+Note that a Hypothesis **profile cannot do this**. Registering a profile
+with a higher `max_examples` and loading it has no effect here, because
+every property in this repository sets `max_examples` explicitly in its
+own `@settings(...)`, and an explicit value beats the profile default no
+matter when the profile is loaded. A run set up that way silently executes
+the committed CI counts while appearing to run thousands of examples
+(`--hypothesis-show-statistics` reports the real number, and says
+`Stopped because settings.max_examples=300`).
+
+What does work is rewriting the settings object the `@given` wrapper reads
+at call time. Save this as `soak_plugin.py` somewhere on `PYTHONPATH` and
+pass it with `-p`:
+
+```python
+import os
+
 import hypothesis
-hypothesis.settings.register_profile("soak", max_examples=5000, deadline=None)
-hypothesis.settings.load_profile("soak")
-import pytest
-raise SystemExit(pytest.main(["tests/differential/test_hypothesis.py", "tests/emitter/test_hypothesis_e2e.py", "-q"]))
-EOF
+
+_TARGET = int(os.environ.get("SOAK_MAX_EXAMPLES", "5000"))
+
+
+def pytest_collection_modifyitems(session, config, items):
+    for item in items:
+        fn = getattr(item, "obj", None)
+        current = getattr(fn, "_hypothesis_internal_use_settings", None)
+        if current is None or current.max_examples >= _TARGET:
+            continue
+        fn._hypothesis_internal_use_settings = hypothesis.settings(
+            current, max_examples=_TARGET, deadline=None
+        )
 ```
 
-or edit the `max_examples=300` values in those two files directly for the
-duration of the run. Keep long soaks (thousands of examples) **out of
-CI**: they take minutes, not seconds, and are meant for local/pre-release
-verification, not every push.
+```bash
+SOAK_MAX_EXAMPLES=5000 uv run pytest   tests/differential/test_hypothesis.py tests/emitter/test_hypothesis_e2e.py   -p soak_plugin -q --hypothesis-show-statistics
+```
+
+Two properties want their own (smaller) target rather than this one.
+`tests/emitter/test_acceptance_property.py`'s generated-query property
+runs a real whoosh search *and* a real tantivy search per example, and
+takes its count from the `WHOOSH_COMPAT_ACCEPTANCE_SOAK_EXAMPLES`
+environment variable instead. And `test_alternating_nesting_depth_cost_budget`
+asserts on elapsed wall-clock time, so it is marked `wall_clock`: any
+runner that adds instrumentation must deselect it with
+`-m "not wall_clock"`.
+
+Editing the `max_examples` values in those files directly, for the
+duration of the run, also works and needs no plugin. Keep long soaks
+(thousands of examples) **out of CI**: they take minutes, not seconds, and
+are meant for local/pre-release verification, not every push.
 
 **HypoFuzz** (coverage-guided fuzzing that runs existing Hypothesis
 properties under instrumentation) was evaluated for this purpose and is
