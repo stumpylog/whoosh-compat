@@ -252,6 +252,62 @@ nesting-depth cap bounds recursion, not CPU time, so a host accepting
 untrusted query strings should enforce its own length limit (a few KB
 comfortably covers any human-written query) before calling `parse()`.
 
+### Adopting the library: sweep stored queries first
+
+A host switching to this library from real Whoosh usually carries a body of
+stored queries written against the old engine: saved views, bookmarks,
+scheduled searches. Some of those queries never worked the way their author
+intended, and real Whoosh gave no sign of it. Parsed by the pinned oracle at
+a base date in 2026, `created:december 2019` resolves to a window over
+**December 2026** and searches for `2019` as a free-text word. Nobody who
+saved that query was told anything was wrong.
+
+Where this library rejects such a value instead (`DIVERGENCES.md` entry 61),
+the stored query stops returning wrong documents and starts returning a
+diagnostic. That is the intended improvement, but it lands on users who were
+not aware they had a broken query, so it is worth doing before cutting over
+rather than discovering it in production.
+
+Parse every stored query and look at what comes back. Three outcomes matter:
+
+1. **No diagnostics, `emit()` succeeds.** Nothing to do.
+2. **A diagnostic with a mechanical fix.** The unquoted multi-word date
+   family is the common one. Every such diagnostic spans exactly the
+   offending value on `startchar`/`endchar`, so the fix is an insert of two
+   quote characters. Apply one query's diagnostics in descending
+   `startchar` order, so rewriting one value does not shift the spans
+   before it:
+
+   ```python
+   result = whoosh_compat.parse(q, registry=..., default_fields=..., tz=..., basedate=...)
+   out = q
+   for d in sorted(result.diagnostics, key=lambda d: -d.startchar):
+       if d.kind is DiagnosticKind.BAD_DATE and d.startchar is not None:
+           out = f'{out[:d.startchar]}"{out[d.startchar:d.endchar]}"{out[d.endchar:]}'
+   ```
+
+   | stored query | rewritten |
+   | --- | --- |
+   | `created:december 2019` | `created:"december 2019"` |
+   | `created:2020 to 2021` | `created:"2020 to 2021"` |
+   | `created:previous month to now` | `created:"previous month to now"` |
+   | `created:december 2019 OR added:2020 august 4` | `created:"december 2019" OR added:"2020 august 4"` |
+
+3. **A diagnostic with no mechanical fix.** A malformed date
+   (`created:20231340`), a pattern on a numeric or BOOLEAN_EXISTS field
+   (`type_id:1*`), a single-character bracket range. These need a human, or
+   a decision to drop the clause.
+
+**Re-parse the rewritten query and keep the rewrite only if it comes back
+with no diagnostics.** Case 2 and case 3 are not distinguishable ahead of
+time: `BAD_DATE` covers both, and there is currently no stable field that
+separates them (see issue #68). Quoting `created:last week` produces
+`created:"last" week`, which is still `BAD_DATE`, since Whoosh's date
+grammar has no `last` keyword and the diagnostic spans only that word. A
+rewrite that does not come back clean is a case-3 query wearing a case-2
+costume; leave it alone and report it.
+
+
 ## Supported query syntax
 
 Parity target is **Whoosh's intended grammar**, not every Whoosh plugin.

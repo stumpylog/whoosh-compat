@@ -10,44 +10,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - **Behavior break:** an unquoted multi-word date value (`created:december 2019`, `created:2020 to 2021`) is now rejected with a `BAD_DATE` diagnostic naming the whole value, instead of silently truncating to its first token and reinterpreting the remainder as free-text search terms. The truncating behavior returned wrong documents with no error at all: `created:december 2019` matched December of the current year. Quoted and bracketed spellings (`created:"december 2019"`, `created:[2020 TO 2021]`) were always correct and are unchanged, and remain the way to write these values. Hosts need no code change, since the diagnostic reuses the existing `BAD_DATE` kind. An unquoted multi-word date keyword (`created:previous month`) still parses on its own, but is affected once more words follow it: `created:previous month to now` is rejected the same way, and `created:"previous month to now"` is the spelling that works. See DIVERGENCES.md entry 61.
 
-### Migrating stored queries from 0.1.0
+### Migrating stored queries
 
-Only the shapes described above are affected: a date-fielded value written
-without quotes that continues past the part the date grammar resolves. A
-host holding stored queries (saved views, bookmarks, scheduled searches)
-can rewrite them mechanically rather than surfacing the break to users.
+Hosts upgrading from 0.1.0, and hosts adopting this library from real
+Whoosh, both carry stored queries (saved views, bookmarks, scheduled
+searches) that may contain the affected shapes. Under real Whoosh those
+queries returned wrong documents silently rather than failing, so an
+affected stored query can be of any age and its author was never told.
 
-Every affected diagnostic spans exactly the offending value on
-`startchar`/`endchar`, so the rewrite is an insert of two quote characters.
-Apply the diagnostics of one query in descending `startchar` order, so that
-rewriting one value does not shift the spans of the ones before it:
-
-```python
-result = whoosh_compat.parse(q, registry=..., default_fields=..., tz=..., basedate=...)
-out = q
-for d in sorted(result.diagnostics, key=lambda d: -d.startchar):
-    if d.kind is DiagnosticKind.BAD_DATE and d.startchar is not None:
-        out = f'{out[:d.startchar]}"{out[d.startchar:d.endchar]}"{out[d.endchar:]}'
-```
-
-**Re-parse the result and keep it only if it comes back with no
-diagnostics.** The rewrite is not safe to apply blindly, because
-`BAD_DATE` also covers values that no spelling can fix. `created:last week`
-becomes `created:"last" week`, which is still `BAD_DATE`, since whoosh's
-date grammar has no `last` keyword and the diagnostic spans only the word
-`last`. A stored query that does not come back clean needs a human, not a
-rewrite. There is currently no stable field that tells the two cases apart
-ahead of time (see issue #68); re-parsing is the reliable check.
-
-Verified rewrites, each parsing clean afterwards:
-
-| stored query | rewritten |
-| --- | --- |
-| `created:december 2019` | `created:"december 2019"` |
-| `created:2020 to 2021` | `created:"2020 to 2021"` |
-| `created:previous month to now` | `created:"previous month to now"` |
-| `created:december 2019 AND title:invoice` | `created:"december 2019" AND title:invoice` |
-| `created:december 2019 OR added:2020 august 4` | `created:"december 2019" OR added:"2020 august 4"` |
+README's "Adopting the library: sweep stored queries first" gives the
+sweep: parse every stored query, rewrite the mechanically fixable ones by
+quoting at the span the diagnostic carries, and re-parse to confirm, since
+`BAD_DATE` also covers values no quoting can fix.
 
 ## [0.1.0] - 2026-08-25
 
