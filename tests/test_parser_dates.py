@@ -596,18 +596,18 @@ def test_unquoted_date_rejection_cell_matrix(
     out of it: a rule scoped by node type or field kind that lands in one
     cell and misses its siblings is this codebase's dominant defect class.
 
-    ``fires`` is read through a proxy (a BAD_DATE whose ``raw_value`` carries
-    a space), which is sound only because this rule is the only producer of a
-    spaced ``raw_value``. ``residual`` is the other half of the outcome: where
-    a row declines *and* another rule is meant to reject the same value, it
-    names that value, so "did not fire" cannot quietly become "nothing
-    diagnosed it at all".
+    ``fires`` is read off ``suggestion``, which this rule is the only
+    producer of: it is populated exactly when the value parses once quoted,
+    which is this rule's own precondition. That is an exact signal rather
+    than the spaced-``raw_value`` proxy this test used before ``suggestion``
+    existed. ``residual`` is the other half of the outcome: where a row
+    declines *and* another rule is meant to reject the same value, it names
+    that value, so "did not fire" cannot quietly become "nothing diagnosed
+    it at all".
     """
     res = dparse(query, reg)
     unquoted = [
-        d
-        for d in res.diagnostics
-        if d.kind is DiagnosticKind.BAD_DATE and " " in (d.raw_value or "")
+        d for d in res.diagnostics if d.kind is DiagnosticKind.BAD_DATE and d.suggestion is not None
     ]
     assert bool(unquoted) is fires, note
     if residual is not None:
@@ -2403,3 +2403,118 @@ def test_unquoted_date_rejection_leaves_other_shapes_alone(reg: FieldRegistry, q
     """
     res = dparse(query, reg)
     assert [d.raw_value for d in res.diagnostics] == _BASELINE_DIAGNOSTICS[query]
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_suggestion", "expected_fixed"),
+    [
+        pytest.param(
+            "created:december 2019",
+            '"december 2019"',
+            'created:"december 2019"',
+            id="date-field-month-and-year",
+        ),
+        pytest.param(
+            "added:december 2019",
+            '"december 2019"',
+            'added:"december 2019"',
+            id="datetime-field-month-and-year",
+        ),
+        pytest.param(
+            "created:2020 to 2021",
+            '"2020 to 2021"',
+            'created:"2020 to 2021"',
+            id="range-spelling",
+        ),
+        pytest.param(
+            "created:previous month to now",
+            '"previous month to now"',
+            'created:"previous month to now"',
+            id="keyword-phrase-then-more-words",
+        ),
+        pytest.param(
+            "created:december 2019 AND title:invoice",
+            '"december 2019"',
+            'created:"december 2019" AND title:invoice',
+            id="value-not-at-end-of-query",
+        ),
+    ],
+)
+def test_unquoted_date_diagnostic_carries_a_span_replacement(
+    reg: FieldRegistry, query: str, expected_suggestion: str, expected_fixed: str
+) -> None:
+    """``suggestion`` is the replacement text for the diagnostic's own span.
+
+    A host splices it in (``q[:startchar] + suggestion + q[endchar:]``) rather
+    than re-deriving the quoting rule, and the result parses clean. Asserting
+    the spliced query as well as the field keeps the two halves of the
+    contract, the span and the replacement, honest about each other: a
+    correct string at the wrong offsets would still fail here.
+    """
+
+    res = dparse(query, reg)
+    (diag,) = [d for d in res.diagnostics if d.kind is DiagnosticKind.BAD_DATE]
+
+    assert diag.suggestion == expected_suggestion
+    assert diag.startchar is not None
+    assert diag.endchar is not None
+
+    fixed = query[: diag.startchar] + diag.suggestion + query[diag.endchar :]
+    assert fixed == expected_fixed
+    assert not dparse(fixed, reg).diagnostics, "the suggested rewrite must parse clean"
+
+
+@pytest.mark.parametrize(
+    ("query", "note"),
+    [
+        pytest.param(
+            "created:20231340",
+            "a malformed date has no spelling that works, so there is nothing to suggest",
+            id="malformed-date",
+        ),
+        pytest.param(
+            "created:last week",
+            "whoosh's date grammar has no 'last' keyword, so quoting does not"
+            " help either: 'created:\"last\" week' still diagnoses",
+            id="unrecognized-keyword",
+        ),
+        pytest.param(
+            "asn:notanumber",
+            "BAD_NUMBER: no spelling makes this a number",
+            id="bad-number",
+        ),
+        pytest.param(
+            "tag_id:1*",
+            "PATTERN_ON_NUMERIC: the field cannot do patterns in any spelling,"
+            " so the fix is not a rewrite",
+            id="pattern-on-numeric",
+        ),
+        pytest.param(
+            "has_tag:t*",
+            "PATTERN_ON_BOOLEAN_EXISTS: same, on the boolean-exists kind",
+            id="pattern-on-boolean-exists",
+        ),
+        pytest.param(
+            "title:200[1-9]",
+            "SINGLE_CHAR_BRACKET_RANGE offers two fixes with different"
+            " meanings (add a wildcard, or quote it as literal text), and they"
+            " match different documents. A suggestion is a spelling fix, never"
+            " a silent choice of semantics, so this one stays None.",
+            id="single-char-bracket-range",
+        ),
+    ],
+)
+def test_diagnostics_without_a_single_rewrite_suggest_nothing(
+    reg: FieldRegistry, query: str, note: str
+) -> None:
+    """``suggestion`` is ``None`` wherever no single concrete rewrite exists.
+
+    A host branches on ``suggestion is not None`` to decide whether it can
+    offer a fix, so a wrong non-None here would have it propose a rewrite
+    that does not work.
+    """
+
+    res = dparse(query, reg)
+    assert res.diagnostics, f"expected {query!r} to diagnose at all"
+    for diag in res.diagnostics:
+        assert diag.suggestion is None, note

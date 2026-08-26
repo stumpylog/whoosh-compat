@@ -1325,13 +1325,23 @@ class DateParserPlugin(Plugin):
         Deliberately ``BAD_DATE`` rather than a new kind: ``kind`` is the
         machine-stable half of the contract a host branches on, and a host
         that already routes BAD_DATE to an invalid-date response needs no
-        change to route this. The distinction lives in the message.
+        change to route this.
+
+        The distinction a host *can* act on is ``suggestion``, the quoted
+        spelling as a replacement for this record's own span. It is the
+        only diagnostic in the library that carries one today, because it
+        is the only one where a single rewrite of the query text is known
+        to work: the value already parses when quoted, which is what
+        ``_fully_parses`` established before this error was built. A
+        malformed date reaching the sibling error path has no such spelling
+        and correctly leaves ``suggestion`` at ``None``.
         """
 
+        quoted = f'"{text}"'
         diagnostic = Diagnostic(
             message=(
                 f"{text!r} is a date value written without quotes; "
-                f'quote it as {spec.name}:"{text}"'
+                f"quote it as {spec.name}:{quoted}"
             ),
             kind=DiagnosticKind.BAD_DATE,
             cause=cause_for(DiagnosticKind.BAD_DATE),
@@ -1340,6 +1350,7 @@ class DateParserPlugin(Plugin):
             field=FieldRef(spec.name),
             field_kind=spec.kind,
             raw_value=text,
+            suggestion=quoted,
         )
         node = DateErrorNode(diagnostic)
         node.startchar = startchar

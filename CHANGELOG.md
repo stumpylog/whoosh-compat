@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [0.2.0]
 
+### Added
+
+- `Diagnostic.suggestion`: the replacement text for a diagnostic's own `startchar`/`endchar` span, for the cases where a single concrete rewrite of the query text would work. A host applies it as `q[:startchar] + suggestion + q[endchar:]` instead of re-deriving the rule. It is `None` wherever no such rewrite exists, which is most of the time: a malformed date or number has no working spelling, a pattern on a numeric or boolean-exists field cannot be written any other way, and a shape with two fixes that mean different things (`title:200[1-9]`, which can be quoted as literal text or extended with a wildcard) deliberately suggests nothing rather than choosing semantics for the user. Branch on `suggestion is not None`, never on `kind`: the same `kind` carries a suggestion for one query and not another, since `BAD_DATE` covers both `created:december 2019` (quotable) and `created:20231340` (not). The unquoted multi-word date value is the only case that carries one today. Additive: existing fields and every `kind` branch are unchanged.
+
 ### Changed
 
 - **Behavior break:** an unquoted multi-word date value (`created:december 2019`, `created:2020 to 2021`) is now rejected with a `BAD_DATE` diagnostic naming the whole value, instead of silently truncating to its first token and reinterpreting the remainder as free-text search terms. The truncating behavior returned wrong documents with no error at all: `created:december 2019` matched December of the current year. Quoted and bracketed spellings (`created:"december 2019"`, `created:[2020 TO 2021]`) were always correct and are unchanged, and remain the way to write these values. Hosts need no code change, since the diagnostic reuses the existing `BAD_DATE` kind. An unquoted multi-word date keyword (`created:previous month`) still parses on its own, but is affected once more words follow it: `created:previous month to now` is rejected the same way, and `created:"previous month to now"` is the spelling that works. See DIVERGENCES.md entry 61.

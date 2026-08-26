@@ -165,8 +165,11 @@ genuine defect in this library is never hidden behind a 400.
 same string) carries no stability guarantee and may reword without notice.
 Everything a host needs to act on is on the record's own fields instead: a
 `DIVERGENCES.md` entry number on `divergence`, the field and its kind on
-`field`/`field_kind`, the offending literal on `raw_value`, and the span in
-the query string on `startchar`/`endchar`.
+`field`/`field_kind`, the offending literal on `raw_value`, the span in
+the query string on `startchar`/`endchar`, and, where a single concrete
+rewrite of the query text would work, that rewrite on `suggestion` (see
+"Adopting the library" below for how to apply it, and why it is a separate
+field rather than a new `DiagnosticKind`).
 Treat the message as developer/log output: a host showing errors to end
 users should build its own copy from `kind`/`cause`, not display or parse
 `message`; the paperless-ngx integration does exactly this.
@@ -271,19 +274,19 @@ rather than discovering it in production.
 Parse every stored query and look at what comes back. Three outcomes matter:
 
 1. **No diagnostics, `emit()` succeeds.** Nothing to do.
-2. **A diagnostic with a mechanical fix.** The unquoted multi-word date
-   family is the common one. Every such diagnostic spans exactly the
-   offending value on `startchar`/`endchar`, so the fix is an insert of two
-   quote characters. Apply one query's diagnostics in descending
-   `startchar` order, so rewriting one value does not shift the spans
-   before it:
+2. **A diagnostic carrying a `suggestion`.** The unquoted multi-word date
+   family is the case that has one today. `suggestion` is the replacement
+   text for that diagnostic's own `startchar`/`endchar` span, so the host
+   splices rather than re-deriving the rule. Apply one query's diagnostics
+   in descending `startchar` order, so rewriting one value does not shift
+   the spans before it:
 
    ```python
    result = whoosh_compat.parse(q, registry=..., default_fields=..., tz=..., basedate=...)
    out = q
-   for d in sorted(result.diagnostics, key=lambda d: -d.startchar):
-       if d.kind is DiagnosticKind.BAD_DATE and d.startchar is not None:
-           out = f'{out[: d.startchar]}"{out[d.startchar : d.endchar]}"{out[d.endchar :]}'
+   for d in sorted(result.diagnostics, key=lambda d: -(d.startchar or 0)):
+       if d.suggestion is not None:
+           out = out[: d.startchar] + d.suggestion + out[d.endchar :]
    ```
 
    | stored query | rewritten |
@@ -293,20 +296,23 @@ Parse every stored query and look at what comes back. Three outcomes matter:
    | `created:previous month to now` | `created:"previous month to now"` |
    | `created:december 2019 OR added:2020 august 4` | `created:"december 2019" OR added:"2020 august 4"` |
 
-3. **A diagnostic with no mechanical fix.** A malformed date
-   (`created:20231340`), a pattern on a numeric or BOOLEAN_EXISTS field
-   (`type_id:1*`), a single-character bracket range. These need a human, or
-   a decision to drop the clause.
+3. **A diagnostic with `suggestion is None`.** No single rewrite of the
+   query text would work: a malformed date (`created:20231340`), a value
+   the date grammar does not recognise at all (`created:last week`, where
+   quoting does not help either), a pattern on a numeric or BOOLEAN_EXISTS
+   field (`type_id:1*`), or a shape with two possible fixes that mean
+   different things (`title:200[1-9]`). These need a human, or a decision
+   to drop the clause.
 
-**Re-parse the rewritten query and keep the rewrite only if it comes back
-with no diagnostics.** Case 2 and case 3 are not distinguishable ahead of
-time: `BAD_DATE` covers both, and there is currently no stable field that
-separates them (see issue #68). Quoting `created:last week` produces
-`created:"last" week`, which is still `BAD_DATE`, since Whoosh's date
-grammar has no `last` keyword and the diagnostic spans only that word. A
-rewrite that does not come back clean is a case-3 query wearing a case-2
-costume; leave it alone and report it.
+Branch on `suggestion is not None`, not on `kind`. The same `kind` carries a
+suggestion for one query and not for another: `BAD_DATE` covers both
+`created:december 2019`, which has a working quoted spelling, and
+`created:20231340`, which has none. That is why the signal is a separate
+field rather than a new `DiagnosticKind`, which would also have broken every
+host already branching on `BAD_DATE`.
 
+Re-parsing the rewritten query before storing it is still worth doing as a
+belt-and-braces check, but it is no longer what tells the two cases apart.
 
 ## Supported query syntax
 

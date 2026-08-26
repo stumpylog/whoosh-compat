@@ -146,6 +146,29 @@ class Diagnostic:
 
     ``divergence`` is the ``DIVERGENCES.md`` entry number when one applies,
     so a host can cross-reference without reading prose.
+
+    ``suggestion`` is the replacement text for this record's own
+    ``startchar``/``endchar`` span, for the cases where a single concrete
+    rewrite of the query text would work. A host splices it in rather than
+    re-deriving the rule::
+
+        if diag.suggestion is not None:
+            fixed = q[: diag.startchar] + diag.suggestion + q[diag.endchar :]
+
+    It is ``None`` whenever no such rewrite exists, which is most of the
+    time: a malformed number or date has no working spelling, a pattern on
+    a numeric or boolean-exists field cannot be written any other way, and
+    a missing schema field is fixed in the index rather than in the query.
+    It is also ``None`` where more than one rewrite exists and they mean
+    different things, since a suggestion is a spelling fix and must never
+    silently choose semantics on the user's behalf.
+
+    ``suggestion is not None`` is therefore the signal a host branches on
+    to decide whether it can offer a fix. It deliberately does not
+    partition ``kind``: the same ``kind`` can carry a suggestion for one
+    query and not for another (``BAD_DATE`` does), which is exactly why a
+    new ``DiagnosticKind`` could not express this without breaking hosts
+    already branching on the existing member.
     """
 
     kind: DiagnosticKind
@@ -157,6 +180,7 @@ class Diagnostic:
     field_kind: FieldKind | None = None
     raw_value: str | None = None
     divergence: int | None = None
+    suggestion: str | None = None
 
 
 class WhooshCompatError(Exception):
