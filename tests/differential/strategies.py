@@ -556,6 +556,39 @@ def _dash_negated_atom(draw: st.DrawFn) -> str:
     return f"-{draw(_DASH_NEGATED_POOL)}"
 
 
+# Punctuation characters that can lead a bare term without turning it into
+# some other construct. Excludes the two quote characters (they start a
+# phrase/quoted value and are deliberately left unclaimed by entry 15's
+# allowlist regex, see DIVERGENCES.md entry 15) and the two wildcard
+# characters "?" and "*" (WildcardPlugin routes them into a pattern node,
+# a different shape entirely). "." is included here but the atom below is
+# bare-values-only, which keeps it away from ".title:ab-cd": a leading dot
+# before a REGISTERED field name is entry 14's dot-inclusive fieldname
+# tagger, still unclaimed, and generating it would be a CI failure rather
+# than a finding.
+_LEADING_PUNCTUATION = "-+><!@#$%&=|~;./"
+
+
+@st.composite
+def _leading_punct_atom(draw: st.DrawFn) -> str:
+    """A bare value behind a leading punctuation character (``-ab-cd``,
+    ``>ab-cd``), the shape entry 15's allowlist regex used to require
+    start-of-string, whitespace or "(" in front of.
+
+    The punctuation is not part of any token the analyzer emits, so a
+    multi-token value here diverges exactly as its bare spelling does and
+    is claimed by the same entry; a single-token value agrees on both
+    sides. Deliberately UNFIELDED: the fielded row is not uniformly safe,
+    since a leading "." before a registered field name is entry 14's
+    mechanism and stays unclaimed. Measured clean (0 unclaimed
+    divergences) over a 6000-draw sweep restricted to this leaf.
+    """
+
+    punct = draw(st.sampled_from(_LEADING_PUNCTUATION))
+    text = draw(st.one_of(plain_word, _multi_dash_word))
+    return f"{punct}{text}"
+
+
 # --------------------------------------------------------------------------
 # Additional leaves, added to close vocabulary gaps a full-library review
 # found: shapes that were reachable *in principle* by the grammar but had no
@@ -820,6 +853,7 @@ def _leaves() -> st.SearchStrategy[str]:
         _comma_clause_atom(),
         _dash_negated_atom(),
         _dash_chain_atom(),
+        _leading_punct_atom(),
     ]
     if NUM_FIELDS:
         strategies.append(_numeric_atom())
