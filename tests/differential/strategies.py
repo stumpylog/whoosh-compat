@@ -878,7 +878,19 @@ def _extend(children: st.SearchStrategy[str]) -> st.SearchStrategy[str]:
         lambda t: f"({t[0]}) {t[1]} ({t[2]})"
     )
     implicit_and = st.tuples(children, children).map(lambda t: f"{t[0]} {t[1]}")
-    return st.one_of(group, negated, bare_negated, boosted, binary, implicit_and)
+    # The same five operators with UNPARENTHESISED operands, so precedence
+    # and associativity are decided by the parser instead of pre-resolved
+    # here. Its parenthesised sibling above settles every regrouping
+    # decision before the parser sees it, which also seals each awkward leaf
+    # (zero-token term, empty group, comma clause) inside its own group so
+    # it never has to survive a regrouping. Only implicit AND ("a b")
+    # reached unparenthesised composition before this. Measured clean over a
+    # 6000-draw AST sweep against the oracle and a 3000-example result-level
+    # sweep against live whoosh and tantivy indexes.
+    unparen_binary = st.tuples(children, st.sampled_from(_BINARY_OPS), children).map(
+        lambda t: f"{t[0]} {t[1]} {t[2]}"
+    )
+    return st.one_of(group, negated, bare_negated, boosted, binary, implicit_and, unparen_binary)
 
 
 def query_text(max_leaves: int = 8) -> st.SearchStrategy[str]:
