@@ -160,4 +160,6 @@ exclude = [
 #   ot            - a local variable (`ot = self.OpTagger`), not a word
 #   runn          - the Porter-stemmed form of "running" used as test data
 #   fo            - the stem in the example wildcard pattern `notes:fo*`
-ignore-words-list = "unparseable,nd,thur,febuary,priorized,ot,runn,fo"
+#   talbe         - a deliberate adjacent-character transposition of "table", used as fuzzy-match test data
+#   disjointness  - the set-theory term (two sets sharing no member), not a misspelling of "disjointedness"
+ignore-words-list = "unparseable,nd,thur,febuary,priorized,ot,runn,fo,talbe,disjointness"
