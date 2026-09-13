@@ -230,6 +230,31 @@ class ErrorLeaf(Node):
     diagnostic: Diagnostic
 
 
+@dataclass(frozen=True, slots=True)
+class Fuzzy(Node):
+    """Fuzzy (edit-distance) term query.
+
+    Emit-only: never produced by parse() (no fuzzy syntax is registered in
+    this library's parser plugin set), always hand-built by a caller and
+    passed to emit(). Unlike Term/Phrase/Prefix/Wildcard, `field` is
+    required, not optional: there is no defined "expand across default
+    search fields" behavior for a fuzzy leaf. A caller wanting fuzzy
+    matching across several fields builds an Or of several explicitly
+    fielded Fuzzy nodes.
+
+    `distance` and `prefix` map directly onto
+    `tantivy.Query.fuzzy_term_query`'s `distance`/`prefix` parameters.
+    `transposition_cost_one` is not exposed here: it is hardcoded `True`
+    at the emitter (tantivy's own default, and the more typo-forgiving
+    behavior), see emitters/tantivy_.py's `visit_fuzzy`.
+    """
+
+    field: FieldRef
+    text: str
+    distance: int = 1
+    prefix: bool = False
+
+
 def _dedupe_key_children(node: Node) -> tuple[Node, ...]:
     """Returns the ``Node`` values among ``node``'s own ``compare=True``
     dataclass fields, in field-declaration order: exactly the fields the
