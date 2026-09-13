@@ -93,6 +93,16 @@ def drifted(ereg: FieldRegistry) -> FieldRegistry:
             ),
             id="date-range",
         ),
+        pytest.param(
+            ast.Fuzzy(field=FieldRef("ghost"), text="alice", distance=1),
+            id="fuzzy",
+        ),
+        # ghost_nonfast has no pattern_normalizer, so the raw text goes
+        # straight to tantivy instead of through the normalizer's forms.
+        pytest.param(
+            ast.Fuzzy(field=FieldRef("ghost_nonfast"), text="alice", distance=1),
+            id="fuzzy-no-normalizer",
+        ),
     ],
 )
 def test_every_leaf_on_a_drifted_field_reports_the_misconfiguration(

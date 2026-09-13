@@ -255,6 +255,95 @@ nesting-depth cap bounds recursion, not CPU time, so a host accepting
 untrusted query strings should enforce its own length limit (a few KB
 comfortably covers any human-written query) before calling `parse()`.
 
+### Hand-building a `Fuzzy` node for a caller-side companion clause
+
+`whoosh_compat.ast.Fuzzy` is a leaf node this library never produces
+itself: there is no `~` grammar registered in this library's parser
+plugin set (real Whoosh has one; it is deliberately not carried over, see
+"Not carried over from Whoosh" below), so a fuzzy (edit-distance) match is
+only ever hand-built and passed straight to `emit()`, the same way a
+caller may already hand-build a tree containing `ast.Nothing()`/
+`ast.Every()`.
+
+```python
+from whoosh_compat import ast
+from whoosh_compat.fields import FieldRef
+
+fuzzy_leaf = ast.Fuzzy(field=FieldRef("content"), text="tokyo", distance=1)
+```
+
+Unlike `Term`/`Phrase`/`Prefix`/`Wildcard`, `field` is required, not
+optional: there is no "expand across default search fields" behavior for
+a fuzzy leaf. A caller wanting fuzzy matching on several fields builds an
+`Or` of several explicitly fielded `Fuzzy` nodes. Give `FieldRef` the
+field's canonical name, not an alias: `FieldRegistry.resolve()` does
+accept an alias here (it currently has no way to tell a hand-built
+`FieldRef` from a parser-produced one), but the AST's own invariant is
+that a `FieldRef` already carries the canonical name, and
+`FieldRegistry.make_ref` is where a parser-typed alias is meant to be
+canonicalized to it.
+
+`text` is matched via `FieldSpec.pattern_normalizer` (the same
+fragment-level, non-tokenizing normalization seam `Wildcard`/`Prefix`
+already use, see "The analyzer / pattern_normalizer seam" below), never
+the full `analyzer`: a `Fuzzy` leaf never goes through `ast.analyze()`, so
+if a field's normalizer offers several candidate forms, every form is
+tried and OR-combined. A field with no `pattern_normalizer` configured
+uses `text` exactly as given. A host whose field lowercases at index time
+should configure a `pattern_normalizer`, or a case difference alone
+consumes the edit-distance budget with nothing left for the typo it was
+meant to tolerate: at `distance=1`, `Fuzzy(text="Tokyo", distance=1)`
+against an indexed `tokyo` spends its whole budget matching the case
+difference and has none left for an actual misspelling, and at
+`distance=0` it matches nothing at all.
+
+A blank (empty or whitespace-only) `text` matches nothing, and so does a
+`text` the `pattern_normalizer` reduces to blank (say, punctuation
+only): blank forms are dropped from the alternatives, and a node left
+with none matches nothing. It is not an error, since `parse()` itself
+produces empty terms from ordinary input like `''`, and a host mirroring
+a parsed `Term` into a `Fuzzy` should not have to filter them out.
+Passed through to tantivy, a blank term would match every one-character
+term at `distance=1` and every term in the field with `prefix=True`.
+
+Short words need the host's own care with `prefix=True`, though: any
+`text` no longer than `distance` matches every term in the field, since
+the empty start of every term is within `distance` edits of it.
+`Fuzzy(text="x", distance=1, prefix=True)` matches everything. A host
+building a companion clause from the user's words should skip words that
+short, rather than rely on this library to reject them, since they are
+legitimate input.
+
+Only `TEXT` and `KEYWORD` fields are supported. Every other `FieldKind`,
+including a JSON field, subpath or bare, fails at `emit()` time with
+`AST_KIND_NOT_IMPLEMENTED`: tantivy-py's fuzzy query API (as of 0.26.0)
+has no way to scope a match to one JSON subpath, and a bare JSON field
+wants a JSON value argument, not a term string, so neither shape is
+supported. The limit is in tantivy-py's binding; tantivy's own fuzzy
+query can match within a JSON path.
+
+`distance` (default `1`) and `prefix` (default `False`) map directly onto
+`tantivy.Query.fuzzy_term_query`'s own parameters. `distance` must be
+the integer `0`, `1` or `2`, the only distances tantivy can run a fuzzy
+search with; any other value, including a `bool`, `float` or `str`,
+fails at `emit()` time with `AST_BAD_NUMBER`. Without that check,
+tantivy-py would accept any distance up to `255` when building the query
+and only reject it once `searcher.search()` runs, as a bare `ValueError`
+the host would have to catch itself.
+
+A `text` that is not a `str`, or a `prefix` that is not a `bool`, fails
+with `AST_INVALID_SHAPE`.
+
+`prefix=True` matches every indexed term that *starts with* something
+within `distance` edits of `text`: `Fuzzy(text="tok", distance=0,
+prefix=True)` matches `tok`, `tokyo` and `tokio`. It widens the match.
+Whoosh's `FuzzyTerm` has a similarly named `prefixlength` that does the
+opposite, narrowing the match by requiring the first N characters to
+match exactly; `Fuzzy` has no equivalent of it.
+
+`transposition_cost_one` is not exposed as a field on `Fuzzy`; it is
+always `True` (tantivy's own default).
+
 ### Adopting the library: sweep stored queries first
 
 A host switching to this library from real Whoosh usually carries a body of
@@ -342,7 +431,10 @@ behavior intentionally differs from real Whoosh.
 
 Not carried over from Whoosh (not currently implemented, kept cheap to add
 via the forked plugin architecture): `asn:>100` (`GtLtPlugin`), `term~2`
-fuzzy matching, `r"regex"` literal regex queries, `SequencePlugin`,
+fuzzy matching (no parser syntax exists for it, but a caller can still get
+fuzzy matching by hand-building an `ast.Fuzzy` node and passing it to
+`emit()`, see "Hand-building a `Fuzzy` node for a caller-side companion
+clause" above), `r"regex"` literal regex queries, `SequencePlugin`,
 `-foo`/`+foo` as negation/requirement shorthand (in the whoosh grammar this
 library targets, `-foo` was plain text whose analyzer typically dropped the
 dash: `NOT` was the only negation operator), and free-date mode (implicit
@@ -376,7 +468,8 @@ Two separate callables on `FieldSpec`, deliberately not unified into one:
 - **`pattern_normalizer`** (`PatternNormalizer`, i.e.
   `Callable[[str], str | Sequence[str]]`): a *narrower*, fragment-level
   transform applied to each literal segment of a `Wildcard`/`Prefix`
-  pattern. It never tokenizes and never drops a fragment; beyond that it is
+  pattern, and, as a third consumer of the same seam, to a `Fuzzy` leaf's
+  `text`. It never tokenizes and never drops a fragment; beyond that it is
   usually lowercase + ASCII-fold, and on a stemmed field it also offers the
   segment's stem. It may return **one** form of the segment (a bare `str`)
   or **several alternatives** (a sequence); the emitter matches a term

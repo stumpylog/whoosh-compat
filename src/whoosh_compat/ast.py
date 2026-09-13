@@ -244,6 +244,10 @@ class Fuzzy(Node):
 
     `distance` and `prefix` map directly onto
     `tantivy.Query.fuzzy_term_query`'s `distance`/`prefix` parameters.
+    `prefix=True` matches every indexed term that *starts with* something
+    within `distance` edits of `text` ("tok" matches "tokyo"), so it
+    widens the match. It is not whoosh's `FuzzyTerm.prefixlength`, which
+    narrows it by requiring the first N characters to match exactly.
     `transposition_cost_one` is not exposed here: it is hardcoded `True`
     at the emitter (tantivy's own default, and the more typo-forgiving
     behavior), see emitters/tantivy_.py's `visit_fuzzy`.
@@ -1075,9 +1079,9 @@ def _analyze_combine(
     by the time a parent is combined, any child subtree that fully emptied
     out (however deeply nested) has already collapsed to a literal
     ``Nothing()``. A leaf with no children of its own (``Every``,
-    ``Nothing``, ``ErrorLeaf``, the range types, ``Wildcard``, ``Prefix``)
-    falls through unchanged, since analysis never has anything to do for
-    those kinds.
+    ``Nothing``, ``ErrorLeaf``, the range types, ``Wildcard``, ``Prefix``,
+    ``Fuzzy``) falls through unchanged, since analysis never has anything to
+    do for those kinds.
     """
     if isinstance(node, Term):
         return _analyze_term(node, registry, ctx)
@@ -1376,7 +1380,9 @@ def free_text_tokens(
     * ``Boosted`` is transparent; ``And``/``Or`` recurse.
     * Pattern leaves (``Prefix``/``Wildcard``) contribute nothing even on a
       requested field: a pattern is not a word, and analysis never ran on
-      it (the analyzer/pattern_normalizer seam).
+      it (the analyzer/pattern_normalizer seam). A ``Fuzzy`` leaf is the
+      same case: its text is a match specification, not a word, so it
+      contributes nothing either.
     * Range/``Every``/``Nothing``/``ErrorLeaf`` leaves and JSON-subpath
       terms contribute nothing.
     * A word the multifield expansion copied onto several default fields
@@ -1528,6 +1534,6 @@ def free_text_tokens(
                 # A non-str text (a numeric or boolean term value) is never
                 # free text, whatever field it sits on.
                 add(current.text)
-        # Not, Prefix/Wildcard, ranges, Every, Nothing, ErrorLeaf:
+        # Not, Prefix/Wildcard, Fuzzy, ranges, Every, Nothing, ErrorLeaf:
         # contribute nothing, deliberately (see the docstring's rules).
     return tuple(out)

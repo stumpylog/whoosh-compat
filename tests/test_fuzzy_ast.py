@@ -1,9 +1,9 @@
 """ast.Fuzzy: a leaf node never produced by parse(), always hand-built by
 a caller.
 
-These tests pin, directly, that normalize()/analyze() require zero changes
-to support this new leaf type: both already fall through generically for
-any node type they don't special-case. If a future edit to either
+These tests pin, directly, that normalize()/analyze() pass this leaf
+through untouched: both fall through generically for any node type they
+don't special-case. If a future edit to either
 function's dispatch narrows that generic fallthrough, these tests catch
 it.
 """

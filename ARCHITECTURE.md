@@ -167,13 +167,18 @@ forked from in turn. Within the forked pipeline:
 
 **`ast.py`**: frozen dataclasses (`Term`, `And`, `Or`, `Not`, `AndNot`,
 `AndMaybe`, `Require`, `Phrase`, `Prefix`, `Wildcard`, `TermRange`,
-`NumericRange`, `DateRange`, `Every`, `Nothing`, `Boosted`, `ErrorLeaf`), a
-`Visitor[T]` base class that dispatches `visit_<lowercase-classname>`, a
-module-level `normalize()` that flattens nested same-type groups, propagates
-`Nothing`/`Every` through boolean combinators, dedupes siblings, and merges
-boost multipliers, and a module-level `analyze()` (§1) that resolves
-per-field token analysis into the tree's own structure. `normalize()` is
-safe to run at any pipeline stage, before or after `analyze()`: its one
+`NumericRange`, `DateRange`, `Every`, `Nothing`, `Boosted`, `ErrorLeaf`,
+`Fuzzy`), a `Visitor[T]` base class that dispatches
+`visit_<lowercase-classname>`, a module-level `normalize()` that flattens
+nested same-type groups, propagates `Nothing`/`Every` through boolean
+combinators, dedupes siblings, and merges boost multipliers, and a
+module-level `analyze()` (§1) that resolves per-field token analysis into
+the tree's own structure. Unlike every other member of that dataclass
+list, `Fuzzy` is never produced by `parse()`: it is emit-only, always
+hand-built by a caller and passed directly to `emit()` (see README's
+"Hand-building a `Fuzzy` node for a caller-side companion clause").
+`normalize()` is safe to run at any pipeline stage, before or after
+`analyze()`: its one
 rule whose soundness depends on analysis having already happened, dropping
 an unfielded `Every` from an `And` as the identity element, is held back
 while any surviving sibling still holds a fielded, not-yet-analyzed
@@ -264,10 +269,11 @@ collision would permanently shadow it under `make_ref`'s exact-match-first
 rule) are all rejected at construction, regardless of registration order.
 
 Every AST leaf that carries a field (`Term`, `Phrase`, `Prefix`, `Wildcard`,
-`TermRange`, `NumericRange`, `DateRange`, `Every`) holds a `FieldRef`, not a
-raw field-name string. `FieldRegistry.make_ref(raw: str) -> FieldRef | None`
-is the single place a dotted parser-level fieldname (`"notes.user"`) is
-interpreted: it resolves an alias to its canonical name and decides, once,
+`TermRange`, `NumericRange`, `DateRange`, `Every`, `Fuzzy`) holds a
+`FieldRef`, not a raw field-name string. `FieldRegistry.make_ref(raw: str) ->
+FieldRef | None` is the single place a dotted parser-level fieldname
+(`"notes.user"`) is interpreted: it resolves an alias to its canonical
+name and decides, once,
 whether the name addresses a plain field or a registered JSON field's
 subpath, returning `None` for a name that resolves as neither, and also for
 a bare JSON field name addressed without a subpath *and declaring no default

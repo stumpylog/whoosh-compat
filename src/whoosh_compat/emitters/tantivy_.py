@@ -48,6 +48,19 @@ from whoosh_compat.fields import ResolvedField
 _FALSY_TEXT = ("f", "false", "no", "0")
 _U64_MAX = 2**64 - 1
 
+# The largest fuzzy distance a search can actually run. Two limits apply,
+# at different times. tantivy-py binds fuzzy_term_query's distance to a
+# Rust u8, so anything outside 0-255 raises OverflowError while the query
+# is built. Inside that range the constructor stores the value unchecked,
+# and tantivy only enforces the real limit when the searcher compiles the
+# query: FuzzyTermQuery::specialized_weight looks up a Levenshtein
+# automaton builder in a fixed table with rows for distances 0-2 only, and
+# returns InvalidArgument for anything larger. That surfaces as a bare
+# ValueError from searcher.search(), after emit() has already returned, so
+# emit() has to enforce this ceiling itself. Verified against the pinned
+# 0.26.0.
+_FUZZY_MAX_DISTANCE = 2
+
 # _json_paths_supported()'s probe result, cached per FieldRegistry rather
 # than per TantivyEmitter instance: emit() (the module-level function)
 # builds a fresh TantivyEmitter for every single call, so a cache living on
@@ -1147,6 +1160,50 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             return tantivy.Query.empty_query()
         return self._regex_query(resolved, regex, node)
 
+    def visit_fuzzy(self, node: ast.Fuzzy) -> tantivy.Query:
+        resolved = self._resolve(node.field)
+        self._reject_fuzzy_incompatible_kind(resolved, node)
+        self._validate_fuzzy_values(resolved, node)
+        spec = resolved.spec
+        forms = (
+            _alternatives(spec.pattern_normalizer, node.text)
+            if spec.pattern_normalizer is not None
+            else (node.text,)
+        )
+        # A blank (empty or whitespace-only) form never reaches tantivy: it
+        # would match every one-character term at distance 1, and every term
+        # in the field with prefix=True. Blank text is not an error either,
+        # whether the caller passed it or the normalizer produced it:
+        # parse() itself turns user input like `''` into an empty Term, and
+        # a host mirroring that Term into a Fuzzy companion must not get an
+        # INTERNAL-cause failure for it.
+        forms = tuple(form for form in forms if form.strip())
+        if not forms:
+            # No usable form for this text: the same "provably matches
+            # nothing" answer visit_prefix gives when the normalizer offers
+            # no form.
+            return tantivy.Query.empty_query()
+        with self._reporting_schema_drift(resolved, node):
+            queries = [
+                tantivy.Query.fuzzy_term_query(
+                    self.schema,
+                    spec.name,
+                    form,
+                    distance=node.distance,
+                    prefix=node.prefix,
+                    # ast.Fuzzy does not expose this parameter (see its
+                    # docstring): hardcoded here, explicitly, rather than
+                    # left to tantivy-py's own default, so a future
+                    # tantivy-py release changing that default cannot
+                    # silently change this behavior.
+                    transposition_cost_one=True,
+                )
+                for form in forms
+            ]
+        if len(queries) == 1:
+            return queries[0]
+        return _boolean_query([(tantivy.Occur.Should, q) for q in queries])
+
     def _regex_query(self, resolved: ResolvedField, regex: str, node: ast.Node) -> tantivy.Query:
         """Build a regex query from a user-derived pattern.
 
@@ -1349,6 +1406,77 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 DiagnosticKind.AST_PATTERN_ON_KIND,
                 message=f"pattern emission for field kind {spec.kind.name} is not implemented",
                 resolved=resolved,
+            )
+
+    def _reject_fuzzy_incompatible_kind(self, resolved: ResolvedField, node: ast.Fuzzy) -> None:
+        """Closed kind dispatch for Fuzzy, structurally like
+        _reject_pattern_incompatible_kind but with its own messages: fuzzy
+        queries are not pattern queries (no DIVERGENCES.md entry 29/30
+        connection), and unlike Term, Fuzzy does not support JSON subpaths
+        at all (verified against tantivy-py 0.26.0: its fuzzy_term_query
+        rejects a dotted "field.subpath" name as an unknown field, and a
+        bare JSON field wants a JSON value argument, not a term string).
+        The limit is tantivy-py's binding, not tantivy's: tantivy's own
+        FuzzyTermQuery accepts a JSON path term, so this cell becomes
+        supportable if tantivy-py starts accepting a dotted name here.
+        Until then, both the subpath and bare-JSON cases collapse into the
+        same AST_KIND_NOT_IMPLEMENTED cell as every other unsupported kind,
+        rather than the more specific AST_JSON_NEEDS_SUBPATH Term uses
+        (which would wrongly imply that adding a subpath fixes it).
+        """
+        spec = resolved.spec
+        if resolved.is_subpath or spec.kind not in (FieldKind.TEXT, FieldKind.KEYWORD):
+            self._fail(
+                DiagnosticKind.AST_KIND_NOT_IMPLEMENTED,
+                message=f"fuzzy emission for field kind {spec.kind.name} is not implemented",
+                resolved=resolved,
+            )
+
+    def _validate_fuzzy_values(self, resolved: ResolvedField, node: ast.Fuzzy) -> None:
+        """Check a caller-built Fuzzy's text, prefix and distance values.
+
+        node.text must be a str and node.prefix a bool, as
+        AST_INVALID_SHAPE: otherwise the wrong type reaches the normalizer
+        or tantivy-py and comes back as a BACKEND_REJECTED that blames the
+        backend for a caller-built value.
+
+        node.distance must be an int from 0 to _FUZZY_MAX_DISTANCE, as
+        AST_BAD_NUMBER; that constant's comment explains why tantivy-py
+        cannot be left to enforce the range itself.
+
+        Blank node.text is deliberately not rejected here: visit_fuzzy
+        turns it into a query that matches nothing.
+        """
+        if not isinstance(node.text, str):
+            self._fail(
+                DiagnosticKind.AST_INVALID_SHAPE,
+                message=f"fuzzy text must be a str, got {type(node.text).__name__}",
+                node=node,
+                resolved=resolved,
+            )
+        if not isinstance(node.prefix, bool):
+            self._fail(
+                DiagnosticKind.AST_INVALID_SHAPE,
+                message=f"fuzzy prefix must be a bool, got {type(node.prefix).__name__}",
+                node=node,
+                resolved=resolved,
+            )
+        # bool is excluded explicitly: it is an int subclass, so True would
+        # otherwise pass as distance 1.
+        if (
+            not isinstance(node.distance, int)
+            or isinstance(node.distance, bool)
+            or not (0 <= node.distance <= _FUZZY_MAX_DISTANCE)
+        ):
+            self._fail(
+                DiagnosticKind.AST_BAD_NUMBER,
+                message=(
+                    f"fuzzy distance must be an integer between 0 and {_FUZZY_MAX_DISTANCE}, "
+                    f"got {node.distance!r}"
+                ),
+                node=node,
+                resolved=resolved,
+                raw_value=str(node.distance),
             )
 
     def visit_termrange(self, node: ast.TermRange) -> tantivy.Query:
@@ -1588,10 +1716,13 @@ def emit(
             knows a field the index schema does not
             (``SCHEMA_FIELD_MISSING``), and the caller-built-AST backstops
             (an unresolvable field, a value that fails a field kind's
-            domain check). It also covers the
+            domain check, a ``Fuzzy`` distance outside the range tantivy can
+            search with). It also covers the
             two catch-all backstops: ``AST_INVALID_SHAPE`` for a hand-built
             tree with a ``None`` (or otherwise non-node) value standing in
-            for a required child, a node type no visitor handles, or a tree
+            for a required child, a ``Fuzzy`` node whose ``text`` is not a
+            ``str`` or whose ``prefix`` is not a ``bool``, a node type no
+            visitor handles, or a tree
             deep enough to exhaust the interpreter's recursion limit, and
             ``BACKEND_REJECTED`` for a bare ``ValueError``/``TypeError``
             from tantivy-py refusing a query this emitter built.
