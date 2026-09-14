@@ -410,6 +410,38 @@ class timespan:
         return result
 
 
+class CalendarPeriod(timespan):
+    """A ``timespan`` naming one whole calendar period that no single
+    ``adatetime`` unit can express (a week, a quarter), built directly by
+    the grammar element that recognizes it. ``unit`` names the period so a
+    diagnostic about it can say which. Not part of upstream whoosh.
+    """
+
+    def __init__(self, start: DateLike, end: DateLike, unit: str) -> None:
+        super().__init__(start, end)
+        self.unit = unit
+
+
+class TimeOnPeriod(timespan):
+    """What merging a time of day into a :class:`CalendarPeriod` produces,
+    in either order: the period's own bounds, marked as carrying a time that
+    names nothing, since a time of day needs a day to fall on.
+
+    The grammar reads such a value in full and it disambiguates like any
+    ``timespan``; only the date plugin's check on raw grammar results
+    rejects it (see DIVERGENCES.md entry 62). Not part of upstream whoosh.
+    """
+
+    def __init__(self, start: DateLike, end: DateLike, unit: str) -> None:
+        super().__init__(start, end)
+        self.unit = unit
+
+    @classmethod
+    def of(cls, span: timespan) -> TimeOnPeriod:
+        unit = span.unit if isinstance(span, (CalendarPeriod, TimeOnPeriod)) else "period"
+        return cls(span.start, span.end, unit)
+
+
 # Functions for working with datetime/adatetime objects
 
 def floor(at: DateLike) -> datetime:
@@ -424,8 +456,8 @@ def ceil(at: DateLike) -> datetime:
     return at.ceil()
 
 
-def fill_in(at: DateLike, basedate: datetime,
-            units: frozenset[str] = adatetime.units) -> DateLike:
+def fill_in(at: DateLike | timespan, basedate: DateLike | timespan,
+            units: frozenset[str] = adatetime.units) -> DateLike | timespan:
     """Returns a copy of ``at`` with any unspecified (None) units filled in
     with values from ``basedate``.
 
@@ -440,30 +472,28 @@ def fill_in(at: DateLike, basedate: datetime,
     per-unit attributes.
 
     Merging anything else INTO such a span, or merging it into an ``at``
-    that already carries units of its own, raises ``TimeError`` (which the
-    grammar turns into a ``BAD_DATE`` diagnostic; see
-    ``parser.dateparse.DateParserPlugin``). That combination only arises
-    from a period keyword written together with a time of day
-    ("previous week 3pm", "3pm previous week"): a period names a span, so a
-    time of day on it names nothing. Real whoosh has nothing to diverge
-    from here -- it has no ``previous week``/``previous quarter`` at all,
-    and returns ``None`` for both word orders -- so rejecting them
-    constrains only whoosh-compat's own extension, which previously
-    crashed on one order and silently discarded the time on the other
-    (see DIVERGENCES.md entry 52).
+    that already carries units of its own, returns a :class:`TimeOnPeriod`
+    carrying the span's bounds. That combination only arises from a period
+    keyword written together with a time of day ("previous week 3pm",
+    "3pm previous week"): a period names a span, so a time of day on it
+    names nothing. The grammar reads such a value in full, and the date
+    plugin rejects it afterwards, the same way it rejects a time of day on
+    a month or a year (see DIVERGENCES.md entry 62). Real whoosh has
+    nothing to diverge from here: it has no ``previous week`` or
+    ``previous quarter`` at all.
     """
 
     if isinstance(at, datetime):
         return at
     if isinstance(at, timespan):
-        # A resolved span with something merged in after it, e.g. the
+        # A resolved period with something merged in after it, e.g. the
         # "previous week" + "3pm" word order.
-        raise TimeError(f"can't merge {basedate!r} into the period {at!r}")
+        return TimeOnPeriod.of(at)
     if isinstance(basedate, timespan):
         if any(getattr(at, unit) is not None for unit in units):
-            # A resolved span merged into units already collected, e.g. the
-            # "3pm" + "previous week" word order.
-            raise TimeError(f"can't merge the period {basedate!r} into {at!r}")
+            # A resolved period merged into units already collected, e.g.
+            # the "3pm" + "previous week" word order.
+            return TimeOnPeriod.of(basedate)
         return basedate
 
     args: dict[str, Any] = {}

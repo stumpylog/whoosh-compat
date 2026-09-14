@@ -773,9 +773,9 @@ parse-then-emit pipeline).
     The separator is `-`, `.` or `/`, not a space. A space used to be in
     the allowlist entry's separator class, which turned "a bare
     separated-ISO date" into "a four-digit run followed by anything" and
-    swept in shapes this entry's reason is false for: `added:'2020 5pm'`
-    and `created:0125 0` (a year and an unrelated bare term) both compare
-    EQUAL, and `added:'2020 12:30'` diverges for entry 21's
+    swept in shapes this entry's reason is false for: `created:0125 0`
+    (a year and an unrelated bare term) compares EQUAL, and
+    `added:'2020 12:30'` diverges for entry 21's
     month:day-versus-time-of-day mechanism, not for this one. Entry 21 now
     carries its own allowlist entry for that shape.
 
@@ -830,16 +830,15 @@ parse-then-emit pipeline).
     ```
     added:previous month          -> clean
     added:previous month to now   -> BAD_DATE('previous month to now')
-    added:previous month 3 pm     -> BAD_DATE('previous month 3 pm')
     added:"previous month to now" -> clean
     ```
 
     So this entry's promise, that the unquoted spelling reaches the grammar
     as the quoted spelling would, holds for a phrase alone and for a phrase
-    plus a trailing time of day *as the grammar reads it* (see the two
-    outcomes below), but not once the joined value is only the start of a
-    longer date expression: `added:"previous month 3 pm"` parses while
-    `added:previous month 3 pm` is rejected. That asymmetry is entry 61's
+    plus a trailing time of day (a value entry 62 then rejects), but not
+    once the joined value is only the start of a longer date expression:
+    `added:"previous month to now"` parses while `added:previous month to
+    now` is rejected. That asymmetry is entry 61's
     rule doing exactly what it exists to do, and it lands here too: an
     unquoted run that reads as one date value in full is the silent-wrong
     class, and quoting is the repair. It is recorded here rather than only
@@ -854,34 +853,27 @@ parse-then-emit pipeline).
 
     A time of day *trailing* one of the six is joined on, so that the
     unquoted spelling reaches the grammar as the value the quoted spelling
-    would. What the grammar then does with that value depends on the
-    keyword, and rejection is only one of the two outcomes. `previous week`
-    and `previous quarter` resolve to a span, so entry 52 rejects the
-    combination: `created:previous week 3pm` is a BAD_DATE, exactly as
-    `created:"previous week 3pm"` is. The other four (`previous month`,
-    `previous year`, `this month`, `this year`) resolve to a calendar unit
-    and *accept* the time, which narrows the range to that time of day on
-    the period's first and last day: parsed in Europe/Berlin,
-    `added:previous month noon` is
-    `2026-07-01T10:00Z .. 2026-07-31T10:00:00.000001Z` (noon local, which
-    is 10:00Z at that zone's UTC+2 summer offset), not the whole month.
-    Both outcomes are a change from paperless-ngx v2, whose rewrite
-    matched the phrase alone: there, `added:previous month noon` was the
-    full-month range **plus a free-text `noon` term**, and that free-text
-    term is now gone. This is the same class of v2 divergence as the
-    rejecting branch, accepted for the same reason (the unquoted spelling
-    must mean what the quoted one means), and it is recorded here so the
-    accepting half is not a surprise.
+    would. That value pairs a time of day with a whole period, which entry
+    62 rejects for all six keywords: `created:previous month 3pm` is a
+    BAD_DATE, exactly as `created:"previous month 3pm"` is. (The four
+    calendar-unit keywords used to accept the time and resolve to a range
+    pinned to it on the period's first and last day; entry 52 rejected
+    only the two span-valued ones.) This is a change from paperless-ngx
+    v2, whose rewrite matched the phrase alone: there,
+    `added:previous month noon` was the full-month range **plus a
+    free-text `noon` term**. The join is what keeps the unquoted spelling
+    from degrading to that, and the diagnostic is what replaces it.
 
-    A time *leading* the phrase is not joined, and
-    the asymmetry is deliberate: a field prefix binds the next date
-    expression, and in `created:3pm previous week` it finds `3pm`, a
-    complete value, and stops. The phrase after it was never combined with
-    the time, so there is no incoherent combination for entry 52 to
-    reject; it stays free text, which is also what released paperless-ngx
-    v2 did with that spelling (its quoting shim only fired on a phrase
-    directly following a date-field prefix). Quoting is what forces the
-    two into one value, so only `created:"3pm previous week"` is rejected.
+    A time *leading* the phrase is not joined, and the join itself stays
+    asymmetric on purpose: a field prefix binds the next date expression,
+    and in `created:3pm previous week` that is `3pm`. The outcome is
+    symmetric anyway, because entry 61 then reads `3pm previous week` as
+    a run the grammar consumes in full and rejects it under entry 62,
+    exactly as it already rejected `created:3pm previous month`. Released
+    paperless-ngx v2 read the leading spelling as an instant plus free
+    text (its quoting shim only fired on a phrase directly following a
+    date-field prefix); that reading is gone for the same reason as the
+    trailing one.
 
     One spelling inconsistency this leaves, noted rather than fixed:
     `added:("previous month")` joins but `added:(previous month)` does
@@ -896,8 +888,8 @@ parse-then-emit pipeline).
     Test references: `tests/test_parser_date_phrases.py` (the whole file);
     `tests/test_parser_period_keywords.py`'s
     `test_period_keyword_with_a_time_is_a_bad_date`,
-    `test_unquoted_leading_time_does_not_reach_the_phrase` and
-    `test_calendar_unit_keyword_still_takes_a_time` (unquoted cases);
+    `test_unquoted_leading_time_on_a_period_is_rejected` and
+    `test_calendar_unit_keyword_rejects_a_time` (unquoted cases);
     `tests/emitter/test_acceptance_e2e.py`'s
     `test_created_previous_month_unquoted_needs_no_app_level_rewrite`;
     `README.md`'s date syntax row.
@@ -1056,20 +1048,12 @@ parse-then-emit pipeline).
     alternative accepts `:` among its separators, so the same text reads
     as 30 December 2020.
 
-    Only this shape is affected: a year plus a time that carries an
-    explicit meridiem or an unambiguous marker (`added:'2020 5pm'`) still
-    reads as a time on both sides, because the separated-date alternative
-    cannot match it. Forms with no time component are unaffected.
-
-    The `12:30` spelling is not the whole shape. Measured cell by cell
-    over every `HH:MM` pair, the divergence is exactly "the pair can be
-    read as a calendar month and a valid day of that month": a left half
-    of `01`..`12` and a right half that is a real day number for that
-    month. `added:'2020 23:59'` (no month 23), `added:'2020 12:00'` (no
-    day 0), `added:'2020 04:31'` (April has 30 days) and
-    `added:'2021 02:29'` (2021 is not a leap year) all compare EQUAL,
-    because no calendar reading is available and both sides fall back to
-    the time of day.
+    A year plus a time that has no calendar reading (`added:'2020 5pm'`,
+    `added:'2020 23:59'`, `added:'2020 12:00'`) is not this entry's
+    shape: it pairs a time of day with a whole year, which entry 62
+    rejects. Only the pairs that read as a calendar month and a valid day
+    of that month (a left half of `01`..`12`, a right half that is a real
+    day of that month) still take this entry's reading.
 
     Test references: `tests/test_parser_dates.py`'s year-plus-time case;
     `tests/differential/allowlist.py`'s year-plus-`month:day` entry. That
@@ -2978,36 +2962,28 @@ parse-then-emit pipeline).
     the semantic ground that a period names a *span*, and a time of day on a
     span names nothing.
 
-    This is deliberately narrow and does not touch time handling elsewhere
-    in the grammar. Ordinary date keywords combine with a time correctly in
-    either order and still do: `added:"3pm yesterday"` and
-    `added:"yesterday 3pm"` both give 15:00-16:00. So do the
-    `adatetime`-valued members of the "previous ..." family
-    (`added:"previous month 3pm"`, `added:"previous year 3pm"`), which are
-    month- and year-precision `adatetime`s rather than spans and merge with
-    a time the ordinary way. A bare period keyword (`added:"previous week"`)
-    is entirely unaffected. Real whoosh has no equivalent behavior to
-    diverge from here -- it has no `previous week` or `previous quarter` at
-    all (entry 19) -- so this constrains only whoosh-compat's own
-    extension. The rejection is on the *value*, so it does not depend on
-    quoting: entry 19 accepts the phrases unquoted, and a time trailing one
-    is bound into the same value, so `added:previous week 3pm` is diagnosed
-    exactly like `added:"previous week 3pm"` (before entry 19 it was
-    rejected too, but for the unrelated reason that a bare `previous` is
-    not a date). That cuts both ways, and the unquoted spelling inherits
-    the *acceptance* above just as faithfully: `added:previous month 3pm`
-    is the same narrowed range as `added:"previous month 3pm"`, since only
-    the span-valued keywords reject at all. The *leading*-time spelling is the one place quoting
-    matters, and not as an exception to this rule: unquoted,
-    `added:3pm previous week` never combines the two at all (`added:` binds
-    `3pm` and stops, leaving "previous week" free text, as released
-    paperless-ngx v2 did), so there is no combination here to reject. See
-    entry 19 for why that binding rule, rather than word-order symmetry, is
-    the one being followed.
+    Entry 62 has since generalized this rule from the two span-valued
+    keywords to every date value that pairs a time of day with a whole
+    period, month and year included, and these rejections now carry its
+    message (`'previous week 3pm' pairs a time of day with a whole week;
+    name a day, or drop the time`). The month and year keywords used to
+    take the time and resolve to a range pinned to it on the period's
+    first and last day; that is the shape entry 62 rejects. The rejection
+    is on the *value*, so it depends on neither quoting nor word order:
+    entry 19 accepts the phrases unquoted, a trailing time is bound into
+    the same value, and a leading one reaches it through entry 61's run
+    rule, so `added:previous week 3pm` and `added:3pm previous week` are
+    both diagnosed exactly like `added:"previous week 3pm"`. The leading
+    spelling used to be the exception, an instant plus the free text
+    `previous week`, but only because the grammar failed on a time merged
+    into a week, so entry 61 never saw a complete value; the same run
+    with `previous month` was already rejected. A week or quarter merged
+    with a time is now a marked span the date plugin rejects, not a
+    grammar error (entry 62).
 
     Test references: `tests/test_parser_period_keywords.py` (whole file);
     `tests/test_times.py`'s
-    `test_fill_in_rejects_merging_a_timespan_with_other_units` and
+    `test_fill_in_marks_a_time_merged_into_a_period` and
     `test_fill_in_timespan_basedate_passthrough`.
 
 53. **A reversed relative date range (`added:[now+1h TO now-1h]`) swaps its
@@ -3183,7 +3159,10 @@ parse-then-emit pipeline).
     `simple` for their leading year alone and, because `Choice` takes the
     first alternative that matches anything at all and never backtracks,
     never reach the alternative that can read them (both are pinned by
-    existing tests, which is how this was caught). A value with a
+    existing tests, which is how this was caught: `created:'2020 august 4'`
+    reads as that day, and a year plus a meridiem time reaches the named-
+    date grammar, the only place it can be recognized as a time of day on
+    a whole year and rejected, entry 62). A value with a
     *leading* space (`added:' 2005-01-01'`) was already rejected before
     this entry existed; the trailing-space asymmetry is whoosh's and is
     left alone. Spellings with no dangling separator are untouched:
@@ -3827,15 +3806,26 @@ parse-then-emit pipeline).
     legitimate head for this rule, which then extends the run over
     whatever plain words follow it. Measured, basedate 2026-08-04 10:30
     Europe/Berlin: `added:previous month` is clean, while
-    `added:previous month to now` and `added:previous month 3 pm` are both
-    rejected here, naming the whole run. Quoting repairs both
-    (`added:"previous month to now"` and `added:"previous month 3 pm"`
-    parse), which is the asymmetry this entry accepts everywhere else: the
+    `added:previous month to now` is rejected here, naming the whole run,
+    and quoting repairs it (`added:"previous month to now"` parses),
+    which is the asymmetry this entry accepts everywhere else: the
     unquoted spelling of a complete multi-word date value is rejected, the
     quoted one is the way to write it. Pinned by the
     `joined-keyword-phrase-then-more-words` row of
     `test_unquoted_date_rejection_cell_matrix` and by
     `corpus_realworld.txt`'s `created:previous month to now` line.
+
+    **A run that pairs a time of day with a whole period.** The run this
+    rule selects can be a complete value the grammar reads in full that is
+    still not a date anyone can search: `added:august 2026 15:00`,
+    `added:3pm previous week`, `created:december 2019 10:30`,
+    `added:previous month 3 pm`. Such a run is still rejected whole, which
+    is what keeps the time from being left behind as a search term, but
+    with entry 62's diagnostic instead of this rule's: quoting does not
+    repair it, so no quoted spelling is suggested and `suggestion` stays
+    `None`. The full-consumption test therefore keeps the raw grammar
+    result, from before disambiguation, since that is what entry 62's
+    check reads.
 
     **The boundary against entry 54, and what enforces it.** Two word
     nodes can be adjacent with no whitespace between them, because a plain
@@ -3907,3 +3897,121 @@ parse-then-emit pipeline).
     `created:2020 august`, is the accepted regression's own boundary case
     named above and is pinned precisely because it does not diagnose and
     still compares equal to the oracle.
+
+62. **A date value that pairs a time of day with a whole period
+    (`added:"this month 15:00"`, `added:'august 2026 3pm'`,
+    `added:'2026 23:59'`, `added:"previous week noon"`) is diagnosed as a
+    BAD_DATE, in every spelling and word order (whoosh-bug, not
+    reproduced).** A time of day needs a day to fall on, and a month or a
+    year with no day, or a week or quarter span, gives it none. Real
+    whoosh resolves the value anyway: its grammar merges the time into a
+    month- or year-precision `adatetime`, and `floor()`/`ceil()` fill the
+    missing day with the period's first and last day, so the time pins
+    both ends of a period-wide range. Measured with whoosh's own grammar
+    (`whoosh.qparser.dateparse.English().date_from`, basedate 2026-09-14
+    12:00):
+
+    ```
+    this month 15:00  -> 2026-09-01 15:00 .. 2026-09-30 15:00:59.999999
+    15:00 this month  -> 2026-09-01 15:00 .. 2026-09-30 15:00:59.999999
+    august 3pm        -> 2026-08-01 15:00 .. 2026-08-31 15:59:59.999999
+    2026 23:59        -> 2026-01-01 23:59 .. 2026-12-31 23:59:59.999999
+    ```
+
+    The pinned oracle reaches the same shape for the single-quoted
+    spellings (`added:'august 2026 15:00'`, `added:'2026 23:59'`), and
+    whoosh-compat produced it too, for these and for its own
+    `previous month` and `previous year` keywords. That range means
+    neither "all of the period" nor "that time on every day of the
+    period", and it arrives with no diagnostic: the silent wrong answer
+    entry 53 treats as a defect rather than a convention to match.
+
+    The rule is on the value, not on how it is written:
+
+    - **Every date spelling:** the six keywords (`this month`,
+      `previous month`, `this year`, `previous year`, `previous week`,
+      `previous quarter`), a month name alone or with a year (`august`,
+      `august 2026`), and a bare year (`2026`).
+    - **Every time spelling:** `3pm`, `3 pm`, `15:00`, `15:00:00`,
+      `noon`, `midnight`, before or after the date.
+    - **Every quoting:** double, single, and unquoted. Unquoted, a
+      trailing time reaches the value through entry 19's join or entry
+      61's run, and a leading one through entry 61's run. Either way the
+      diagnostic names the whole run.
+    - **Both date field kinds.** On a `date_only` field the time used to
+      be dropped at day granularity, silently widening the value to the
+      whole period; it is rejected there too.
+    - **Every position:** a single value, either bracket bound
+      (`added:[august 3pm TO now]`), and either end of a `to` range for a
+      month or a year (`added:"august 3pm to now"`). A week or quarter
+      cannot end a `to` range at all, with or without a time, since it
+      is already a span; `added:"previous week 3pm to now"` stays a
+      BAD_DATE with the generic message, like `added:"previous week to
+      now"`.
+
+    A time on a specific day (`added:"yesterday 15:00"`,
+    `added:"august 10 15:00"`, `added:"2026-08-10 15:00"`), a bare time
+    (`added:"15:00"`) and a bare period (`added:"this month"`) are
+    unchanged.
+
+    The diagnostic keeps `kind=BAD_DATE`, for the reason entry 61 gives,
+    and its message names the period: `'this month 15:00' pairs a time of
+    day with a whole month; name a day, or drop the time` (the unit word
+    is `month`, `year`, `week` or `quarter`). It carries no `suggestion`:
+    quoting does not repair the value, and naming a day or dropping the
+    time are different queries, so there is no single rewrite to offer.
+    That holds on the unquoted path too, where entry 61 would otherwise
+    offer its quoted spelling.
+
+    This generalizes entry 52, which rejected the combination only for
+    `previous week` and `previous quarter` and drew the line by
+    representation: those two resolve to a `timespan`, while a month or a
+    year is an `adatetime` that merges with a time without complaint. The
+    check now runs on the raw grammar result, before disambiguation fills
+    in the missing day, and the grammar itself still reads such a value in
+    full. That second half matters: it is what lets entry 61 treat an
+    unquoted run like `added:august 2026 15:00` as one value and reject
+    it whole, instead of rejecting a shorter prefix and leaving the time
+    behind as a search term. For the same reason a week or quarter merged
+    with a time is no longer a grammar error but a marked span the check
+    rejects, so `added:3pm previous week` is now a run entry 61 reads in
+    full and rejects, where before it fell apart into an instant plus the
+    free text `previous week` (the same run with `previous month` was
+    already rejected).
+
+    One grammar fix lets the month-name spellings reach the rule. The
+    English grammar's day number had no guard against a following colon,
+    so `august 15:00` read as "August 15th" and then failed on the
+    leftover `:00`: quoted, a BAD_DATE with the generic message;
+    unquoted, all of August AND the search term `15:00`, silently. A day
+    number now never precedes a colon, so the value reads as a month plus
+    a time. This restores what whoosh's own base-class day pattern
+    intends (its `(?!=:)` is a typo for `(?!:)`), which the English
+    grammar's override had dropped. Real whoosh reads
+    `added:'august 15:00'` as `Nothing` and `added:august 15:00` as all
+    of August AND the term.
+
+    One neighboring spelling reads differently, and is left as the
+    grammar reads it: `august 3 pm` is a day number followed by a spaced
+    meridiem, so it is August 3rd with a stray `pm`. Quoted it is a
+    BAD_DATE with the generic message; unquoted, entry 61 names
+    `august 3` and suggests quoting it.
+
+    The new corpus lines below all diagnose, so they take the entry 6
+    diagnostic skip before any allowlist entry is consulted. As with
+    entry 61, no `allowlist.py` entry is needed for them, only the corpus
+    lines and the updated count in
+    `test_diagnostic_skip_count_matches_corpus`.
+
+    Test references: `tests/test_parser_time_on_period.py` (whole file);
+    `tests/emitter/test_emit_time_on_period.py`'s
+    `test_a_time_on_a_period_fails_at_emit`;
+    `tests/test_parser_period_keywords.py`'s
+    `test_period_keyword_with_a_time_is_a_bad_date`,
+    `test_unquoted_leading_time_on_a_period_is_rejected` and
+    `test_calendar_unit_keyword_rejects_a_time`;
+    `tests/test_parser_dates.py`'s `test_unquoted_date_rejection_cell_matrix`
+    rows marked `TIME_ON_PERIOD`; `tests/test_times.py`'s
+    `test_fill_in_marks_a_time_merged_into_a_period`;
+    `tests/differential/corpus_paperless.txt`'s `added:'this month 15:00'`,
+    `added:'august 2026 15:00'` and `added:'2026 23:59'` lines.

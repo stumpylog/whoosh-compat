@@ -181,9 +181,16 @@ def test_diagnostic_skip_count_matches_corpus() -> None:
     # NOT among these four: a bare year followed by a bare month name does
     # not parse as a complete date value in this grammar (measured), so it
     # neither diagnoses nor diverges, and is not counted here.
-    assert count == 20, (
+    #
+    # Rose from 20 to 23 with DIVERGENCES.md entry 62: three new
+    # corpus_paperless.txt lines (`added:'this month 15:00'`,
+    # `added:'august 2026 15:00'`, `added:'2026 23:59'`) pair a time of day
+    # with a whole period, which whoosh resolves to a range pinned to that
+    # time on the period's first and last day and whoosh-compat diagnoses
+    # BAD_DATE. No existing line changed classification.
+    assert count == 23, (
         f"{count} corpus queries now take the DIVERGENCES.md entry 6 diagnostic skip,"
-        " expected 20; if this is an intentional parser change (diagnosing a new"
+        " expected 23; if this is an intentional parser change (diagnosing a new"
         " shape, or fixing one that used to diagnose), update this pinned count and"
         " say so in the commit message, don't just silently adjust the number"
     )

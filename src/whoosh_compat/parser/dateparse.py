@@ -74,6 +74,11 @@ a successful parse:
   UTC, no shift" on its own), restoring paperless-ngx's PR #13010
   backward-compatibility behavior for ``created:[2020-01-01T00:00:00Z TO
   ...]``-style bounds.
+* A date value that pairs a time of day with a whole month, year, week or
+  quarter is rejected after the grammar has read it in full (the grammar
+  itself marks a week or quarter merged with a time as a
+  :class:`~whoosh_compat.parser.times.TimeOnPeriod` rather than failing),
+  and a day number never precedes a colon, see DIVERGENCES.md entry 62.
 * Unparseable date text/bounds report a ``Diagnostic(kind=BAD_DATE)`` and
   become an :class:`whoosh_compat.ast.ErrorLeaf`, instead of whoosh's
   ``ErrorNode``/callback mechanism.
@@ -107,7 +112,9 @@ from whoosh_compat.parser import syntax
 from whoosh_compat.parser.common import attach
 from whoosh_compat.parser.plugins import Plugin
 from whoosh_compat.parser.text import rcompile
+from whoosh_compat.parser.times import CalendarPeriod
 from whoosh_compat.parser.times import TimeError
+from whoosh_compat.parser.times import TimeOnPeriod
 from whoosh_compat.parser.times import adatetime
 from whoosh_compat.parser.times import fill_in
 from whoosh_compat.parser.times import is_ambiguous
@@ -225,7 +232,7 @@ class Sequence(MultiBase):
         self.progressive = progressive
 
     def parse(self, text: str, dt: datetime, pos: int = 0, debug: int = -9999) -> Any:
-        d: datetime | adatetime = adatetime()
+        d: datetime | adatetime | timespan = adatetime()
         first = True
         foundall = False
         failed = False
@@ -413,7 +420,7 @@ class Bag(MultiBase):
 
     def parse(self, text: str, dt: datetime, pos: int = 0, debug: int = -9999) -> Any:
         first = True
-        d: datetime | adatetime = adatetime()
+        d: datetime | adatetime | timespan = adatetime()
         seen = [False] * len(self.elements)
 
         while True:
@@ -757,7 +764,11 @@ class DateParser:
 
 
 class English(DateParser):
-    day = Regex(r"(?P<day>([123][0-9])|[1-9])(st|nd|rd|th)?(?=(\W|$))",
+    # "(?!:)": a day number never precedes a colon, so "august 15:00" is a
+    # month plus a time of day rather than August 15th and a dangling ":00".
+    # DateParser.day above means the same guard but spells it "(?!=:)"; this
+    # override had dropped it entirely. See DIVERGENCES.md entry 62.
+    day = Regex(r"(?P<day>([123][0-9])|[1-9])(st|nd|rd|th)?(?=(\W|$))(?!:)",
                 lambda p, dt: adatetime(day=p.day))
 
     def setup(self) -> None:
@@ -813,7 +824,7 @@ class English(DateParser):
             return adatetime(year=prev_first.year, month=prev_first.month)
         previous_month = Regex("previous month", previous_month_to_date)
 
-        def previous_week_to_date(p: Props, dt: datetime) -> timespan:
+        def previous_week_to_date(p: Props, dt: datetime) -> CalendarPeriod:
             # A calendar week doesn't align with any single adatetime unit
             # (it can span a month/year boundary), so this builds an exact
             # timespan directly rather than relying on floor()/ceil(). The
@@ -823,15 +834,15 @@ class English(DateParser):
             this_monday = dt.date() - timedelta(days=dt.weekday())
             start = datetime.combine(this_monday - timedelta(weeks=1), time.min)
             end_excl = datetime.combine(this_monday, time.min)
-            return timespan(start, end_excl - timedelta(microseconds=1))
+            return CalendarPeriod(start, end_excl - timedelta(microseconds=1), "week")
         previous_week = Regex("previous week", previous_week_to_date)
 
-        def previous_quarter_to_date(p: Props, dt: datetime) -> timespan:
+        def previous_quarter_to_date(p: Props, dt: datetime) -> CalendarPeriod:
             quarter_start = date(dt.year, ((dt.month - 1) // 3) * 3 + 1, 1)
             prev_quarter_start = quarter_start - relativedelta(months=3)
             start = datetime.combine(prev_quarter_start, time.min)
             end_excl = datetime.combine(quarter_start, time.min)
-            return timespan(start, end_excl - timedelta(microseconds=1))
+            return CalendarPeriod(start, end_excl - timedelta(microseconds=1), "quarter")
         previous_quarter = Regex("previous quarter", previous_quarter_to_date)
 
         self.month = Month("january|jan", "february|febuary|feb", "march|mar",
@@ -879,6 +890,32 @@ class English(DateParser):
 
 
 # QueryParser plugin
+
+def _time_on_period(raw: object) -> str | None:
+    """The period a raw (not yet disambiguated) date value pairs a time of
+    day with, or ``None`` if it does not.
+
+    A time of day needs a day to fall on, so on a whole month, year, week or
+    quarter it names nothing; resolved anyway, it pins a range to that time
+    on the period's first and last day. Checked on the raw grammar result
+    because disambiguation fills in the missing day and erases the gap. A
+    bare time (no year, month or day) is not a gap. See DIVERGENCES.md
+    entry 62.
+    """
+
+    if isinstance(raw, TimeOnPeriod):
+        return raw.unit
+    if isinstance(raw, timespan):
+        return _time_on_period(raw.start) or _time_on_period(raw.end)
+    if isinstance(raw, adatetime) and raw.day is None and any(
+        v is not None for v in (raw.hour, raw.minute, raw.second, raw.microsecond)
+    ):
+        if raw.month is not None:
+            return "month"
+        if raw.year is not None:
+            return "year"
+    return None
+
 
 class DateParserPlugin(Plugin):
     """Adds parsing of DATE/DATETIME fields against the :class:`English`
@@ -1195,21 +1232,19 @@ class DateParserPlugin(Plugin):
         day *trailing* it (``previous week 3pm``) if one is there. The
         trailing time is part of the run so that the unquoted spelling
         reaches the grammar as the same value the quoted spelling would; the
-        grammar, not this join, then decides what that value means (for the
-        span-valued keywords: that a time on a period is an unusable date,
-        see DIVERGENCES.md entry 52).
+        date plugin, not this join, then decides what that value means (for
+        all six keywords: that a time of day on a whole period names
+        nothing, see DIVERGENCES.md entry 62).
 
-        A time *leading* the phrase is deliberately NOT part of the run,
-        even though `added:"3pm previous week"` is rejected. The rule is
-        that a field prefix binds the next date expression: in
-        ``added:3pm previous week`` it finds "3pm", a complete date value,
-        and is satisfied, so "previous week" was never combined with the
-        time in the first place and stays ordinary free text (which is what
-        paperless v2 did with it, and what this fork must keep doing).
-        Quoting is what forces the two into one expression, and only then
-        is there an incoherent combination to reject. Do not "fix" this
-        into symmetry with the trailing case: the two spellings differ
-        because they bind differently, not by oversight.
+        A time *leading* the phrase is deliberately NOT part of the run: a
+        field prefix binds the next date expression, and in
+        ``added:3pm previous week`` that is "3pm". The words after it stay
+        plain words that :meth:`do_unquoted_date_values` extends its run
+        over, and since the grammar reads "3pm previous week" in full, that
+        rule rejects it, as a time of day on a period (see DIVERGENCES.md
+        entry 62). Do not "fix" the join into symmetry with the trailing
+        case: the outcome is already the same, and the join exists only to
+        keep a keyword phrase together.
         """
 
         # Three words is the longest run that can exist: the two-word phrase
@@ -1281,26 +1316,32 @@ class DateParserPlugin(Plugin):
 
         return group
 
-    def _fully_parses(self, text: str) -> bool:
-        """Whether the date grammar consumes *all* of ``text``.
+    def _raw_full_parse(self, text: str) -> Any:
+        """The raw (not yet disambiguated) result of the date grammar
+        consuming *all* of ``text``, or ``None`` if it does not.
 
-        Uses the non-``ToEnd`` prefix match and compares the stop position
-        against the length, which is equivalent to ``ToEnd`` succeeding:
-        ``ToEnd.parse`` tests ``d and newpos == len(text)``, and no value the
-        grammar returns is falsy without being None (neither ``adatetime``
-        nor ``timespan`` defines ``__bool__``/``__len__``, and ``datetime``
-        is always truthy). Spelled ``is not None`` here anyway.
+        The value must also survive disambiguation, as a full parse always
+        had to, but what comes back is the raw form: :func:`_time_on_period`
+        needs it, and disambiguation erases the missing day it looks for.
 
         Guarded like :meth:`_is_time_of_day`: the grammar reports bad input
         through diagnostics and must never raise out of the parse pipeline,
         so a value that blows up simply is not a date.
         """
 
+        now = self._local_now()
         try:
-            parsed, pos = self.dateparser.parse(text, self._local_now())
+            raw = ToEnd(self.dateparser.get_parser()).date_from(text, now)
+            if isinstance(raw, (adatetime, timespan)):
+                raw.disambiguated(now)
         except (ValueError, OverflowError, TimeError):
-            return False
-        return parsed is not None and pos == len(text)
+            return None
+        return raw
+
+    def _fully_parses(self, text: str) -> bool:
+        """Whether the date grammar consumes *all* of ``text``."""
+
+        return self._raw_full_parse(text) is not None
 
     @staticmethod
     def _whitespace_separated(group: syntax.GroupNode, idxs: list[int]) -> list[int]:
@@ -1351,6 +1392,36 @@ class DateParserPlugin(Plugin):
             field_kind=spec.kind,
             raw_value=text,
             suggestion=quoted,
+        )
+        node = DateErrorNode(diagnostic)
+        node.startchar = startchar
+        node.endchar = endchar
+        return node
+
+    def _time_on_period_error(
+        self, text: str, spec: FieldSpec, unit: str, startchar: int | None, endchar: int | None
+    ) -> DateErrorNode:
+        """The diagnostic for a date value that pairs a time of day with a
+        whole period (see :func:`_time_on_period`).
+
+        Still ``BAD_DATE``, for the reason :meth:`_unquoted_error` gives.
+        No ``suggestion``: quoting does not repair the value, and naming a
+        day or dropping the time are different queries, so there is no
+        single rewrite to offer.
+        """
+
+        diagnostic = Diagnostic(
+            message=(
+                f"{text!r} pairs a time of day with a whole {unit}; "
+                "name a day, or drop the time"
+            ),
+            kind=DiagnosticKind.BAD_DATE,
+            cause=cause_for(DiagnosticKind.BAD_DATE),
+            startchar=startchar,
+            endchar=endchar,
+            field=FieldRef(spec.name),
+            field_kind=spec.kind,
+            raw_value=text,
         )
         node = DateErrorNode(diagnostic)
         node.startchar = startchar
@@ -1416,12 +1487,20 @@ class DateParserPlugin(Plugin):
 
             for k in range(len(words), 1, -1):
                 joined = " ".join(words[:k])
-                if not self._fully_parses(joined):
+                raw = self._raw_full_parse(joined)
+                if raw is None:
                     continue
                 last = group[idxs[k - 1]]
-                error = self._unquoted_error(
-                    joined, spec, head.startchar, last.endchar
-                )
+                unit = _time_on_period(raw)
+                if unit is None:
+                    error = self._unquoted_error(joined, spec, head.startchar, last.endchar)
+                else:
+                    # A complete run that still names nothing: rejected whole,
+                    # so the time is not left behind as a search term, but
+                    # without the quote suggestion, which would not repair it.
+                    error = self._time_on_period_error(
+                        joined, spec, unit, head.startchar, last.endchar
+                    )
                 group[i:idxs[k - 1] + 1] = [error]
                 break
             i += 1
@@ -1601,6 +1680,9 @@ class DateParserPlugin(Plugin):
         raw = ToEnd(self.dateparser.get_parser()).date_from(parse_text, local_now)
         if raw is None:
             return self._error(node, text, spec)
+        unit = _time_on_period(raw)
+        if unit is not None:
+            return self._time_on_period_error(text, spec, unit, node.startchar, node.endchar)
         start_tz = UTC if start_force_utc else self.tz
         end_tz = UTC if end_force_utc else self.tz
 
@@ -1610,8 +1692,8 @@ class DateParserPlugin(Plugin):
         # instead of the half-open exclusive-ceiling adjustment meant for
         # an ambiguous period end. Computed from the RAW end/start
         # components (raw.end/raw.start for a two-sided span like "-1 year
-        # to now", raw itself for a single value like "previous month
-        # noon", whose raw form is a bare ambiguous adatetime, not yet a
+        # to now", raw itself for a single value like "previous month",
+        # whose raw form is a bare ambiguous adatetime, not yet a
         # timespan at all).
         #
         # One more wrinkle a plain type check can't resolve alone: a
@@ -1752,6 +1834,11 @@ class DateParserPlugin(Plugin):
                 return self._error(node, node.start, spec)
             if raw_start is None:
                 return self._error(node, node.start, spec)
+            unit = _time_on_period(raw_start)
+            if unit is not None:
+                return self._time_on_period_error(
+                    node.start, spec, unit, node.startchar, node.endchar
+                )
         if node.end:
             end_text, end_utc = self._split_rfc3339_utc(node.end)
             if end_utc:
@@ -1762,6 +1849,11 @@ class DateParserPlugin(Plugin):
                 return self._error(node, node.end, spec)
             if raw_end is None:
                 return self._error(node, node.end, spec)
+            unit = _time_on_period(raw_end)
+            if unit is not None:
+                return self._time_on_period_error(
+                    node.end, spec, unit, node.startchar, node.endchar
+                )
 
         # "Exact" means the bound needs no disambiguation at all (a
         # concrete datetime from the grammar, e.g. "now", or a

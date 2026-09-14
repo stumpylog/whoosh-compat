@@ -14,15 +14,14 @@ the grammar then does with it, and for why a *leading* time is not joined).
 Nothing else about date-field parsing becomes whitespace-greedy.
 """
 
-from datetime import UTC
 from datetime import datetime
-from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 
 import whoosh_compat as wc
 from whoosh_compat import ast
+from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.fields import FieldKind
 from whoosh_compat.fields import FieldRef
 from whoosh_compat.fields import FieldRegistry
@@ -177,47 +176,23 @@ def test_quoted_phrase_inside_a_text_phrase_is_untouched(registry: FieldRegistry
 
 
 @pytest.mark.parametrize("phrase", ["previous month", "previous year", "this month", "this year"])
-def test_trailing_time_narrows_the_calendar_unit_phrases(
+def test_trailing_time_on_a_calendar_unit_phrase_is_rejected(
     registry: FieldRegistry, phrase: str
 ) -> None:
-    """The *accepting* half of the trailing-time join, which is easy to miss
-    because the rejecting half (``previous week``/``quarter``, see
-    ``test_parser_period_keywords.py``) is the one that produced a crash.
-
-    These four resolve to a calendar unit rather than a span, so the joined
-    time narrows the range instead of making it unusable. That is a change
-    from paperless v2, whose phrase-only rewrite left the time behind as a
-    free-text term next to a full-period range; the value now matches the
-    quoted spelling, which is the whole point of the join.
+    """The trailing-time join still makes the unquoted spelling reach the
+    grammar as the value the quoted spelling would. That value pairs a time
+    of day with a whole month or year, which names nothing, so both
+    spellings are the same rejection (DIVERGENCES.md entry 62). The join is
+    what keeps the unquoted spelling from degrading to a full-period range
+    plus a free-text "noon" term, which is how paperless v2 read it.
     """
     quoted = dparse(f'added:"{phrase} noon"', registry)
     bare = dparse(f"added:{phrase} noon", registry)
 
-    assert not bare.diagnostics
-    assert bare.ast == quoted.ast
-    # A single DateRange, not a DateRange AND a leftover "noon" term.
-    assert isinstance(bare.ast, ast.DateRange)
-    assert bare.ast.lo is not None
-    # Asserted in the query's own zone: noon Berlin is 10:00Z at the UTC+2
-    # summer offset, so reading the UTC hour here would pin the offset
-    # rather than the time of day the user asked for.
-    assert bare.ast.lo.astimezone(BERLIN).hour == 12
-
-
-def test_trailing_time_pins_one_concrete_narrowed_range(registry: FieldRegistry) -> None:
-    """One fully spelled-out expectation, so the equality above cannot be
-    satisfied by both spellings breaking together.
-    """
-    r = dparse("added:previous month noon", registry).ast
-    assert isinstance(r, ast.DateRange)
-    # BASE is 2026-08-05 Europe/Berlin, so "previous month" is July 2026.
-    # Converted rather than hardcoded in UTC, but for the record the values
-    # are 2026-07-01T10:00Z and 2026-07-31T10:00:00.000001Z (Berlin is
-    # UTC+2 in July), which is what DIVERGENCES.md entry 19 quotes.
-    assert r.lo == datetime(2026, 7, 1, 12, 0, tzinfo=BERLIN).astimezone(UTC)
-    assert r.hi == datetime(2026, 7, 31, 12, 0, tzinfo=BERLIN).astimezone(UTC) + timedelta(
-        microseconds=1
-    )
+    assert [d.kind for d in bare.diagnostics] == [DiagnosticKind.BAD_DATE]
+    assert bare.diagnostics[0].raw_value == f"{phrase} noon"
+    assert bare.diagnostics[0].message == quoted.diagnostics[0].message
+    assert bare.diagnostics[0].suggestion is None
 
 
 def test_boost_after_an_unquoted_phrase_applies_to_the_joined_value(

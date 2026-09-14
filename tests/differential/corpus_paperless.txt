@@ -175,6 +175,12 @@ created:2026T10
 added:2026T10:30
 added:'2026T10'
 added:"2026T10"
+# DIVERGENCES.md entry 62: a time of day on a whole period. whoosh pins the
+# time to the period's first and last day; whoosh-compat diagnoses
+# BAD_DATE, so these lines take the entry-6 diagnostic skip.
+added:'this month 15:00'
+added:'august 2026 15:00'
+added:'2026 23:59'
 # DIVERGENCES.md entry 45: the double-quoted sibling. whoosh's ErrorNode
 # fallback wraps a PhraseNode here, yielding a Phrase that crashes at
 # search time; whoosh-compat parses the correct day-period DateRange.

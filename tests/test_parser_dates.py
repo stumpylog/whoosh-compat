@@ -474,82 +474,88 @@ def test_whitespace_separated_value_is_rejected_as_a_whole(
     assert any(isinstance(n, ast.Term) and n.text == "invoice" for n in _nodes(res.ast))
 
 
+# Outcomes for test_unquoted_date_rejection_cell_matrix.
+QUOTE = "rejected-with-quote-suggestion"
+TIME_ON_PERIOD = "rejected-as-time-on-a-period"
+DECLINES = "declines"
+
+
 @pytest.mark.parametrize(
-    ("query", "fires", "residual", "note"),
+    ("query", "outcome", "residual", "note"),
     [
         pytest.param(
             "added:december 2019",
-            True,
+            QUOTE,
             None,
             "DATETIME fires like DATE date_only",
             id="datetime-field",
         ),
         pytest.param(
             "title:december 2019",
-            False,
+            DECLINES,
             None,
             "non-date field is never a candidate",
             id="non-date-field",
         ),
         pytest.param(
             "december 2019",
-            False,
+            DECLINES,
             None,
             "no explicit field, deliberately excluded",
             id="default-field-multifield",
         ),
         pytest.param(
             "created:2020,2021",
-            False,
+            DECLINES,
             None,
             "single token, no run to join",
             id="comma-no-space",
         ),
         pytest.param(
             "created:2020, 2021",
-            False,
+            DECLINES,
             None,
             "candidate with a comma does not parse",
             id="comma-with-space",
         ),
         pytest.param(
             "created:december title:2019",
-            False,
+            DECLINES,
             None,
             "next sibling carries its own field",
             id="next-sibling-fielded",
         ),
         pytest.param(
             "created:december AND 2019",
-            False,
+            DECLINES,
             None,
             "an operator ends the run",
             id="operator-between",
         ),
         pytest.param(
             "created:december 20*",
-            False,
+            DECLINES,
             None,
             "a prefix node is not a plain word",
             id="wildcard-next",
         ),
         pytest.param(
             "(created:december 2019)",
-            True,
+            QUOTE,
             None,
             "recursion reaches nested groups",
             id="inside-group",
         ),
         pytest.param(
             "created:december 2019^2",
-            True,
+            QUOTE,
             None,
             "boost ends the run after its word",
             id="boosted",
         ),
         pytest.param(
             "added:2026-08-04T10:30:00",
-            False,
+            DECLINES,
             "2026-08-04T10:30:00",
             "colon-split fragments abut, so the run is truncated and the rule declines,"
             " leaving the value to the entries 54/58 rejection it already had",
@@ -557,7 +563,7 @@ def test_whitespace_separated_value_is_rejected_as_a_whole(
         ),
         pytest.param(
             "added:previous month to now",
-            True,
+            QUOTE,
             None,
             "a joined keyword phrase is a HEAD like any other word, so words"
             " following it are still a run this rule can claim",
@@ -565,7 +571,7 @@ def test_whitespace_separated_value_is_rejected_as_a_whole(
         ),
         pytest.param(
             "added:2026-08-04 T10:30:00",
-            True,
+            QUOTE,
             None,
             "whitespace before the T fragment, so the two nodes do not abut and"
             " the run survives _whitespace_separated",
@@ -573,7 +579,7 @@ def test_whitespace_separated_value_is_rejected_as_a_whole(
         ),
         pytest.param(
             "created:december 2019 10:30",
-            True,
+            TIME_ON_PERIOD,
             None,
             "a clock time trailing a month-and-year run; its colons live inside a"
             " single node, so they never break the run",
@@ -581,35 +587,69 @@ def test_whitespace_separated_value_is_rejected_as_a_whole(
         ),
         pytest.param(
             "added:10:30 december 2019",
-            True,
+            TIME_ON_PERIOD,
             None,
             "the same run with the clock time as the HEAD instead of the tail",
             id="clock-time-then-date",
         ),
+        pytest.param(
+            "added:august 2026 15:00",
+            TIME_ON_PERIOD,
+            None,
+            "a complete run that pairs a time of day with a whole month is still"
+            " rejected whole, but quoting would not repair it, so no suggestion",
+            id="month-and-year-then-clock-time",
+        ),
+        pytest.param(
+            "added:3pm previous week",
+            TIME_ON_PERIOD,
+            None,
+            "a leading time and a span keyword: the grammar reads the run in"
+            " full, so the rule claims it",
+            id="clock-time-then-span-keyword",
+        ),
+        pytest.param(
+            "added:august 15:00",
+            TIME_ON_PERIOD,
+            None,
+            "a day number never precedes a colon, so this is a month and a time,"
+            " not August 15th and a dangling ':00'",
+            id="month-name-then-clock-time",
+        ),
     ],
 )
 def test_unquoted_date_rejection_cell_matrix(
-    reg: FieldRegistry, query: str, fires: bool, residual: str | None, note: str
+    reg: FieldRegistry, query: str, outcome: str, residual: str | None, note: str
 ) -> None:
     """Every (node type, field kind, value spelling) cell the rule can reach,
     each ending in exactly one outcome. Extend this, never carve exceptions
     out of it: a rule scoped by node type or field kind that lands in one
     cell and misses its siblings is this codebase's dominant defect class.
 
-    ``fires`` is read off ``suggestion``, which this rule is the only
+    ``outcome`` is one of three. QUOTE: the rule fires and suggests the
+    quoted spelling, read off ``suggestion``, which this rule is the only
     producer of: it is populated exactly when the value parses once quoted,
-    which is this rule's own precondition. That is an exact signal rather
-    than the spaced-``raw_value`` proxy this test used before ``suggestion``
-    existed. ``residual`` is the other half of the outcome: where a row
-    declines *and* another rule is meant to reject the same value, it names
-    that value, so "did not fire" cannot quietly become "nothing diagnosed
-    it at all".
+    which is this rule's own precondition. TIME_ON_PERIOD: the rule fires on
+    a run the grammar reads in full, but the run pairs a time of day with a
+    whole period, so it carries that diagnostic instead, with no suggestion
+    (DIVERGENCES.md entry 62). DECLINES: neither. ``residual`` is the other
+    half of the outcome: where a row declines *and* another rule is meant to
+    reject the same value, it names that value, so "did not fire" cannot
+    quietly become "nothing diagnosed it at all".
     """
     res = dparse(query, reg)
-    unquoted = [
-        d for d in res.diagnostics if d.kind is DiagnosticKind.BAD_DATE and d.suggestion is not None
-    ]
-    assert bool(unquoted) is fires, note
+    bad_dates = [d for d in res.diagnostics if d.kind is DiagnosticKind.BAD_DATE]
+    quoted = [d for d in bad_dates if d.suggestion is not None]
+    on_period = [d for d in bad_dates if " pairs a time of day with a whole " in d.message]
+    if outcome == QUOTE:
+        assert quoted, note
+    elif outcome == TIME_ON_PERIOD:
+        assert on_period, note
+        assert not quoted, note
+    else:
+        assert outcome == DECLINES, outcome
+        assert not quoted, note
+        assert not on_period, note
     if residual is not None:
         surviving = [
             d
@@ -1283,29 +1323,19 @@ def test_rfc3339_range_bounds_with_z(reg: FieldRegistry) -> None:
             datetime(2028, 1, 1, tzinfo=BERLIN).astimezone(UTC),
             id="year-only-start-different-year-genuine-swap",
         ),
-        # A year+time local start ("2027 10pm": explicit year, NO month or
-        # day, explicit hour) is the one date-missing shape whose
-        # equal-years fill takes the basedate branch (its floor time
-        # exceeds the Z end's ceil time), which can land the filled date
-        # after the Z bound and trigger a genuine swap. The tzs must
-        # follow that swap even though the start bound was mutated first.
+        # A bare time-of-day start ("10pm": no year, month or day) takes the
+        # equal-years fill's basedate branch (its floor time exceeds the Z
+        # end's ceil time) and borrows the Z end's year, landing in order;
+        # the tzs must still land on the right values. A year-plus-time start
+        # used to reach the same branch with an explicit year and force a
+        # genuine swap, but a time of day on a bare year is now rejected
+        # (DIVERGENCES.md entry 62), so no spelling reaches that swap; those
+        # bounds are pinned as rejections in test_parser_time_on_period.py.
         pytest.param(
-            "added:[2027 10pm TO 2027-06-01T00:00:00Z]",
-            datetime(2027, 6, 1, tzinfo=UTC),
-            datetime(2027, 8, 4, 23, 0, tzinfo=BERLIN).astimezone(UTC),
-            id="year-time-start-basedate-filled-genuine-swap",
-        ),
-        pytest.param(
-            "added:[2027 10pm TO 2027-09-15T00:00:00Z]",
+            "added:[10pm TO 2027-09-15T00:00:00Z]",
             datetime(2027, 8, 4, 22, 0, tzinfo=BERLIN).astimezone(UTC),
             datetime(2027, 9, 15, 0, 0, 1, tzinfo=UTC),
-            id="year-time-start-basedate-filled-in-order",
-        ),
-        pytest.param(
-            "added:[2027-09-15T00:00:00Z TO 2027 10pm]",
-            datetime(2027, 8, 4, 22, 0, tzinfo=BERLIN).astimezone(UTC),
-            datetime(2027, 9, 15, 0, 0, 1, tzinfo=UTC),
-            id="year-time-end-basedate-filled-genuine-swap",
+            id="time-only-start-basedate-filled-in-order",
         ),
     ],
 )
@@ -1665,26 +1695,12 @@ def test_range_both_sides_are_periods_cannot_combine(reg: FieldRegistry) -> None
             datetime(2020, 12, 30, 23, 0),
             id="year-plus-time-is-a-date",
         ),
-        # A time the separated-date alternative cannot match still reads as a
-        # time on every day of the year, matching whoosh.
-        pytest.param(
-            "added:'2020 5pm'",
-            datetime(2020, 1, 1, 16, 0),
-            datetime(2020, 12, 31, 17, 0),
-            id="year-plus-meridiem-is-a-time",
-        ),
     ],
 )
 def test_year_followed_by_time(
     reg: FieldRegistry, query: str, expected_lo: datetime, expected_hi: datetime
 ) -> None:
-    # The upper bound is what tells the two readings apart, so it is pinned
-    # per param rather than left to the lower bound alone: the date reading
-    # is one calendar day wide, while the time reading spans the whole year
-    # with its edges on the 5pm hour (measured: 2020-01-01 16:00Z through
-    # 2020-12-31 17:00Z, i.e. 5pm local on the year's first day to 6pm local
-    # on its last). A lower bound alone is equally consistent with an
-    # instant, which is neither reading.
+    # One calendar day wide: the month-and-day reading, not an instant.
     r = dparse(query, reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == expected_lo.replace(tzinfo=UTC)

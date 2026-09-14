@@ -142,7 +142,9 @@ forked from in turn. Within the forked pipeline:
 - **`parser/dateparse.py` + `parser/times.py`**: the natural-language date
   grammar (`Sequence`/`Combo`/`Choice`/`Bag`/`Regex` parser-combinator
   elements feeding `adatetime`/`timespan`) ported structurally unchanged.
-  What's downstream of a successful date parse is new (see §4). Two filters
+  Among this fork's own grammar edits: a day number never precedes a colon
+  (`DIVERGENCES.md` entry 62). What's downstream of a successful date parse
+  is new (see §4). Two filters
   *upstream* of it are new too, and they run in this order, just after
   fieldname assignment and both confined to an explicitly named date field:
   - `DateParserPlugin.do_date_phrases` (priority 101) joins an unquoted
@@ -157,8 +159,10 @@ forked from in turn. Within the forked pipeline:
     rule truncate it. It joins the words following a date-fielded word
     longest-first and, if the grammar consumes a candidate *in full*,
     replaces the whole run with a `BAD_DATE` diagnostic naming the value
-    and the quoted spelling that works. Full consumption is the whole
-    stopping rule: `added:-1 week invoice` keeps `invoice` as a term
+    and, when quoting would repair it, the quoted spelling that works (a
+    run that pairs a time of day with a whole period gets `DIVERGENCES.md`
+    entry 62's diagnostic instead, with no suggestion). Full consumption is
+    the whole stopping rule: `added:-1 week invoice` keeps `invoice` as a term
     because `-1 week invoice` does not parse. Running second is what lets a
     joined keyword phrase stand as a value on its own while still serving
     as the head of a longer run (`added:previous month to now` is

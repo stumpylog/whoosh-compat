@@ -1,24 +1,25 @@
-"""A time-of-day combined with a period keyword ("previous week", "previous
-quarter") is rejected as a bad date, in both word orders.
+"""A time-of-day combined with a period keyword is rejected as a bad date,
+in both word orders.
 
 A period keyword denotes a *span*, so a time-of-day on it names nothing.
 Before this was rejected the two word orders disagreed: "previous week 3pm"
 raised ``AttributeError`` out of ``parse()`` (the grammar's merging pass got a
 ``timespan`` where it expected a datetime-like object), while
 "3pm previous week" silently dropped the time and returned the whole week.
+The calendar-unit keywords ("previous month", "this year", ...) are rejected
+the same way; they used to take the time and pin it to the period's first
+and last day (DIVERGENCES.md entry 62).
 
-Ordinary date keywords ("yesterday", "today", ...) do combine with a time
-coherently, and must keep doing so in either order. So does a range with a
-bare time-of-day lower bound and a concrete upper bound ("noon to now"),
-which names a perfectly answerable span; whoosh crashes on that one, and this
-fork resolves it instead (DIVERGENCES.md entry 51).
+Ordinary date keywords ("yesterday", "today", ...) name a day, so they
+combine with a time coherently, and must keep doing so in either order. So
+does a range with a bare time-of-day lower bound and a concrete upper bound
+("noon to now"), which names a perfectly answerable span; whoosh crashes on
+that one, and this fork resolves it instead (DIVERGENCES.md entry 51).
 
-"Both word orders" is about a keyword and a time bound into a single date
-value, which is what quoting does. The unquoted spellings inherit that rule
-only where the words are actually bound together: a trailing time is
-(``added:previous week 3pm``), a leading one is not (``added:3pm previous
-week`` is an instant plus free text, see
-test_unquoted_leading_time_does_not_reach_the_phrase).
+"Both word orders" holds unquoted too. A trailing time is joined onto the
+phrase (``added:previous week 3pm``); a leading one is not joined, but the
+unquoted-run rule reads ``added:3pm previous week`` as one value and rejects
+it all the same (test_unquoted_leading_time_on_a_period_is_rejected).
 """
 
 from datetime import UTC
@@ -33,7 +34,6 @@ from whoosh_compat import ParseResult
 from whoosh_compat import ast
 from whoosh_compat import parse
 from whoosh_compat.errors import DiagnosticKind
-from whoosh_compat.fields import FieldRef
 
 
 @pytest.fixture
@@ -85,8 +85,8 @@ PREDAWN = datetime(2026, 8, 19, 1, 41, tzinfo=UTC)
         # not a semantic: with the phrase and the time bound into one value
         # either way, the rejection cannot depend on the quotes, or the
         # unquoted spelling would silently answer a question the quoted one
-        # refuses. The *leading*-time spelling is the exception and has its
-        # own test below: there the two are never bound together at all.
+        # refuses. The unquoted *leading*-time spelling has its own test
+        # below: the phrase join does not bind it, the unquoted-run rule does.
         "added:previous week 3pm",
         "added:previous quarter noon",
     ],
@@ -99,55 +99,53 @@ def test_period_keyword_with_a_time_is_a_bad_date(registry: FieldRegistry, q: st
     """
     result = _parse(registry, q)
     assert [d.kind for d in result.diagnostics] == [DiagnosticKind.BAD_DATE]
+    assert " pairs a time of day with a whole " in result.diagnostics[0].message
+    assert result.diagnostics[0].suggestion is None
 
 
-def test_unquoted_leading_time_does_not_reach_the_phrase(registry: FieldRegistry) -> None:
-    """``added:3pm previous week`` is NOT a bad date, even though the quoted
-    ``added:"3pm previous week"`` is. The asymmetry is not an oversight.
+def test_unquoted_leading_time_on_a_period_is_rejected(registry: FieldRegistry) -> None:
+    """``added:3pm previous week`` is the same rejection as the quoted
+    ``added:"3pm previous week"``.
 
-    A field prefix binds the next date expression. Unquoted, ``added:``
-    finds "3pm" -- a complete date value -- and is satisfied; "previous
-    week" is then ordinary free text that was never combined with the time,
-    so there is no incoherent combination to diagnose. Quoting is what
-    forces the two into a single value, and only then does entry 52's rule
-    (a time of day on a span names nothing) have anything to apply to.
-
-    This is also the released paperless v2 behavior: its auto-quoting shim
-    only ever quoted a phrase directly following a date-field prefix, so it
-    never fired on this spelling and the query parsed as an instant plus two
-    free-text terms. Making it symmetric with the quoted form would be a
-    parity regression, not a consistency fix.
+    The phrase join does not bind a leading time: a field prefix binds the
+    next date expression, and here that is "3pm". The unquoted-run rule then
+    extends a run over the words after it, and the grammar reads
+    "3pm previous week" in full, so the rule rejects the run as a time of
+    day on a period (DIVERGENCES.md entry 62), exactly as it already
+    rejected ``added:3pm previous month``. Released paperless v2 read this
+    spelling as an instant plus two free-text terms, an answer to a question
+    nobody asked.
     """
     result = _parse(registry, "added:3pm previous week", basedate=AFTERNOON)
-    assert not result.diagnostics
-    assert isinstance(result.ast, ast.And)
-    date_child, *terms = result.ast.children
-    assert isinstance(date_child, ast.DateRange)
-    # The instant "3pm" names on the basedate's day, not a week-wide span.
-    assert date_child.lo == datetime(2026, 8, 19, 15, 0, tzinfo=UTC)
-    assert terms == [
-        ast.Term(field=FieldRef("content"), text="previous"),
-        ast.Term(field=FieldRef("content"), text="week"),
-    ]
+    assert len(result.diagnostics) == 1
+    diag = result.diagnostics[0]
+    assert diag.kind is DiagnosticKind.BAD_DATE
+    assert diag.raw_value == "3pm previous week"
+    assert diag.message == (
+        "'3pm previous week' pairs a time of day with a whole week; name a day, or drop the time"
+    )
+    assert diag.suggestion is None
 
 
-def test_calendar_unit_keyword_still_takes_a_time(registry: FieldRegistry) -> None:
-    """The counterweight to the rejection above: only the keywords resolving
-    to a span refuse a time. "previous month" resolves to a calendar unit (an
-    adatetime), which a time of day narrows coherently. The unquoted spelling
-    must land on the same side of that line as the quoted one.
-
-    The resolved bounds (the 15:00-16:00 hour of the first and last day of
-    the previous month) are the inherited floor()/ceil() behavior of a
-    month-precision adatetime with an hour filled in, pinned here only so
-    that "unquoted matches quoted" cannot be satisfied by both spellings
-    breaking together.
+@pytest.mark.parametrize(
+    "q",
+    [
+        pytest.param('added:"previous month 3pm"', id="quoted"),
+        pytest.param("added:previous month 3pm", id="unquoted"),
+    ],
+)
+def test_calendar_unit_keyword_rejects_a_time(registry: FieldRegistry, q: str) -> None:
+    """``previous month`` resolves to a calendar unit rather than a span, but
+    a time of day on a whole month names nothing either, so it is rejected
+    like the span-valued keywords (DIVERGENCES.md entry 62). It used to be
+    accepted and pinned to the 15:00-16:00 hour of the month's first and
+    last day. The unquoted spelling lands on the same side as the quoted one.
     """
-    quoted = _date_range(registry, 'added:"previous month 3pm"', basedate=AFTERNOON)
-    unquoted = _date_range(registry, "added:previous month 3pm", basedate=AFTERNOON)
-    assert unquoted == quoted
-    assert quoted.lo == datetime(2026, 7, 1, 15, 0, tzinfo=UTC)
-    assert quoted.hi == datetime(2026, 7, 31, 16, 0, tzinfo=UTC)
+    result = _parse(registry, q, basedate=AFTERNOON)
+    assert [d.kind for d in result.diagnostics] == [DiagnosticKind.BAD_DATE]
+    assert result.diagnostics[0].message == (
+        "'previous month 3pm' pairs a time of day with a whole month; name a day, or drop the time"
+    )
 
 
 @pytest.mark.parametrize(
@@ -254,8 +252,8 @@ def test_ordinary_date_keywords_still_take_a_time_in_either_order(
     registry: FieldRegistry, q: str
 ) -> None:
     """The guard on this whole change: an ordinary date keyword combines with
-    a time coherently in BOTH word orders, and must keep doing so. Only the
-    period keywords (which resolve to a span) are rejected.
+    a time coherently in BOTH word orders, and must keep doing so. Only a
+    time on a whole period (a month, year, week or quarter) is rejected.
 
     Asserts the full resolved datetimes against a pinned "now", not just the
     hour: rejecting a time on a period keyword must not shift the DATE that

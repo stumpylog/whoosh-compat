@@ -3,8 +3,10 @@ from typing import Any
 
 import pytest
 
+from whoosh_compat.parser.times import CalendarPeriod
 from whoosh_compat.parser.times import DateLike
 from whoosh_compat.parser.times import TimeError
+from whoosh_compat.parser.times import TimeOnPeriod
 from whoosh_compat.parser.times import adatetime
 from whoosh_compat.parser.times import ceil
 from whoosh_compat.parser.times import fill_in
@@ -310,22 +312,27 @@ def test_fill_in_timespan_basedate_passthrough() -> None:
     # Nothing has been collected yet (the merging pass starts from an empty
     # adatetime), so the span passes straight through.
     ts = timespan(datetime(2020, 1, 1), datetime(2020, 1, 7))
-    # fill_in's own implementation explicitly special-cases a timespan
-    # basedate (see its docstring), even though its declared basedate type
-    # is the narrower `datetime` (a pre-existing, unrelated looseness in
-    # that signature, out of scope here).
-    assert fill_in(adatetime(), ts) is ts  # type: ignore[arg-type]
+    assert fill_in(adatetime(), ts) is ts
 
 
-def test_fill_in_rejects_merging_a_timespan_with_other_units() -> None:
+@pytest.mark.parametrize(
+    "time_first",
+    [
+        pytest.param(True, id="time-then-period"),
+        pytest.param(False, id="period-then-time"),
+    ],
+)
+def test_fill_in_marks_a_time_merged_into_a_period(time_first: bool) -> None:
     # A period keyword written together with a time of day ("3pm previous
-    # week" / "previous week 3pm"): a period names a span, so there is
-    # nothing coherent to merge, in either direction.
-    ts = timespan(datetime(2020, 1, 1), datetime(2020, 1, 7))
-    with pytest.raises(TimeError):
-        fill_in(adatetime(hour=15), ts)  # type: ignore[arg-type]
-    with pytest.raises(TimeError):
-        fill_in(ts, adatetime(hour=15))  # type: ignore[arg-type]
+    # week" / "previous week 3pm"): a period names a span, so a time of day
+    # on it names nothing. The merge keeps the period's bounds and marks the
+    # result in either order; the date plugin rejects it (DIVERGENCES.md
+    # entry 62).
+    week = CalendarPeriod(datetime(2020, 1, 6), datetime(2020, 1, 12, 23, 59, 59, 999999), "week")
+    time = adatetime(hour=15)
+    merged = fill_in(time, week) if time_first else fill_in(week, time)
+    assert isinstance(merged, TimeOnPeriod)
+    assert (merged.start, merged.end, merged.unit) == (week.start, week.end, "week")
 
 
 def test_fill_in_fills_missing_units_from_basedate() -> None:
