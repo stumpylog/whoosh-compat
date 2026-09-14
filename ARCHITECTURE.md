@@ -56,6 +56,13 @@ resolution, the `default_mode` parameter, idempotence, and how DIVERGENCES.md
 entry 23's "NOT of a zero-token term" divergence falls out of this pipeline's
 ordering rather than being special-cased).
 
+A host that rewrites leaves before emitting, for instance wrapping a word
+as `Or(leaf, companion)` so a companion field is searched too, does it
+inside this stage through `analyze()`'s `rewrite_leaf` hook, and hands the
+result to `emit()`, whose own normalize-then-analyze pass is then a no-op.
+There is deliberately no public structural walker for that job; §4's
+"Leaf rewrites run inside `analyze()`'s own walk" says why.
+
 A `FieldRegistry` (`whoosh_compat.fields`) is threaded through the parser,
 `analyze()`, and the emitter: it's the seam where the host application tells
 this library what fields exist, what kind of data each one holds, and how to
@@ -180,8 +187,10 @@ combinators, dedupes siblings, and merges boost multipliers, and a
 module-level `analyze()` (§1) that resolves per-field token analysis into
 the tree's own structure. Unlike every other member of that dataclass
 list, `Fuzzy` is never produced by `parse()`: it is emit-only, always
-hand-built by a caller and passed directly to `emit()` (see README's
-"Hand-building a `Fuzzy` node for a caller-side companion clause").
+hand-built by a caller, either in a tree passed to `emit()` or placed
+around a parsed leaf through `analyze()`'s `rewrite_leaf` hook (see
+README's "Hand-building a `Fuzzy` node for a caller-side companion clause"
+and "Rewriting leaves before emit").
 `normalize()` is safe to run at any pipeline stage, before or after
 `analyze()`: its one
 rule whose soundness depends on analysis having already happened, dropping
@@ -452,6 +461,30 @@ having already happened where no later walk can see it.
 rather than guarding on it: an analyzed tree is structurally
 indistinguishable from any other valid tree, and the `analyzed` flags it
 carries are `compare=False` provenance, not an input contract.
+
+**Leaf rewrites run inside `analyze()`'s own walk.** Two rules a host
+rewrite depends on only hold inside that walk:
+
+- A `Multitoken.DEFAULT` term's combination comes from its enclosing
+  group in the *normalized* tree (DIVERGENCES.md entry 15). That is not
+  always the tree a host holds, since normalization can unwrap a group
+  around the leaf.
+- A leaf that analyzes to zero tokens drops out of its group only when
+  the emptiness is discovered during the pass (entry 23). A leaf analyzed
+  ahead of time and put back into the tree is a pre-existing `Nothing()`,
+  which empties an `And` instead (entry 27).
+
+So `rewrite_leaf` is a hook on the one walk that already owns both rules
+(`_analyze_walk`). A second walker would have to mirror those rules and
+every future container type. A replacement is analyzed by a nested,
+hook-free run of the same walk, in which the original leaf object resolves
+to the analysis the outer walk already gave it. The leading normalize is
+the plain one, so a hooked `analyze()` gives the same result whether or not
+its input was normalized first, just as an unhooked one does. A consequence
+for hand-built trees only: a hook that removes an already-analyzed or
+unfielded leaf beside an unfielded `Every` in an `And` leaves `Nothing()`,
+since normalization dropped that `Every` as the AND identity before the hook
+ran. `parse()` produces neither kind of leaf.
 
 **The analyzer contract carries no positions.** `FieldSpec.analyzer` is typed
 `Callable[[str], list[str]] | None`: it returns tokens in order, with no
@@ -847,6 +880,11 @@ cannot drift into different answers to the same question. Extending what
 the library can express for a field means adding a
 new `FieldSpec` attribute and teaching the parser/emitter to read it, no
 plugin-architecture changes required for field-level behavior.
+
+**Leaf rewrites.** `analyze(..., rewrite_leaf=...)` is the supported way
+for a host to replace `Term`/`Phrase` leaves before emitting, for example
+to add a companion clause on an internal field. See README's "Rewriting
+leaves before emit" for the host contract.
 
 **The JSON `parse_query` carve-out.** `TantivyEmitter._json_paths_supported()`
 probes whether the installed `tantivy-py`'s `Query.term_query` can resolve a

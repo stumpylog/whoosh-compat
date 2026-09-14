@@ -60,6 +60,7 @@ documented (DIVERGENCES.md entry 22), not a bug awaiting a fix.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable
 
 import pytest
 import tantivy
@@ -78,6 +79,7 @@ from whoosh_compat.fields import FieldSpec
 from whoosh_compat.fields import Multitoken
 
 from .conftest import TIndex
+from .conftest import search_ids
 
 # ---------------------------------------------------------------------------
 # Outcome descriptors
@@ -126,34 +128,46 @@ class Search:
     ids: list[int]
 
 
-def _contains_errorleaf(node: ast.Node) -> bool:
-    """Whether ``node`` or any of its descendants is an ErrorLeaf.
+def _contains(node: ast.Node, types: type[ast.Node] | tuple[type[ast.Node], ...]) -> bool:
+    """Whether ``node`` or any of its descendants is an instance of ``types``.
 
     Generic over every AST node shape (no per-node-type special casing)
     using dataclasses.fields, so it doesn't need updating when a new node
     type is added.
     """
-    if isinstance(node, ast.ErrorLeaf):
+    if isinstance(node, types):
         return True
     for f in dataclasses.fields(node):
         value = getattr(node, f.name)
-        if isinstance(value, ast.Node) and _contains_errorleaf(value):
+        values = value if isinstance(value, tuple) else (value,)
+        if any(isinstance(v, ast.Node) and _contains(v, types) for v in values):
             return True
-        if isinstance(value, tuple):
-            for item in value:
-                if isinstance(item, ast.Node) and _contains_errorleaf(item):
-                    return True
     return False
 
 
-def _run(qs: str, ereg: FieldRegistry, tindex: TIndex, outcome: object) -> None:
+def _run(
+    qs: str,
+    ereg: FieldRegistry,
+    tindex: TIndex,
+    outcome: object,
+    *,
+    rewrite_leaf: Callable[[ast.Term | ast.Phrase], ast.Node] | None = None,
+    extra_ids: frozenset[int] = frozenset(),
+) -> None:
+    """Check ``qs`` against ``outcome``.
+
+    With ``rewrite_leaf``, the parsed tree is emitted after
+    ``ast.analyze(..., rewrite_leaf=rewrite_leaf)``, and a Search outcome
+    expects ``extra_ids`` on top of its own ids.
+    """
     r = _parse(qs, registry=ereg, default_fields=["content"])
+    tree = r.ast if rewrite_leaf is None else ast.analyze(r.ast, ereg, rewrite_leaf=rewrite_leaf)
 
     if isinstance(outcome, Diag):
         assert r.diagnostics, f"expected a parse-time diagnostic for {qs!r}, got none"
-        assert _contains_errorleaf(r.ast), f"expected an ErrorLeaf in the tree for {qs!r}"
+        assert _contains(r.ast, ast.ErrorLeaf), f"expected an ErrorLeaf in the tree for {qs!r}"
         with pytest.raises(QueryError):
-            emit_(r.ast, index=tindex[0], registry=ereg)
+            emit_(tree, index=tindex[0], registry=ereg)
         return
 
     if isinstance(outcome, Raises):
@@ -162,7 +176,7 @@ def _run(qs: str, ereg: FieldRegistry, tindex: TIndex, outcome: object) -> None:
             f"got {r.diagnostics!r}"
         )
         with pytest.raises(QueryError) as exc:
-            emit_(r.ast, index=tindex[0], registry=ereg)
+            emit_(tree, index=tindex[0], registry=ereg)
         d = exc.value.diagnostic
         assert d.kind is outcome.kind, f"{qs!r}: expected {outcome.kind}, got {d.kind}"
         assert d.cause is outcome.cause, f"{qs!r}: expected {outcome.cause}, got {d.cause}"
@@ -176,10 +190,9 @@ def _run(qs: str, ereg: FieldRegistry, tindex: TIndex, outcome: object) -> None:
 
     if isinstance(outcome, Search):
         assert not r.diagnostics, f"expected a clean parse for {qs!r}, got {r.diagnostics!r}"
-        q = emit_(r.ast, index=tindex[0], registry=ereg)
-        s = tindex[0].searcher()
-        ids = sorted(s.doc(addr)["id"][0] for _, addr in s.search(q, 10).hits)
-        assert ids == outcome.ids, f"{qs!r} matched {ids}, expected {outcome.ids}"
+        expected = sorted(set(outcome.ids) | extra_ids)
+        ids = search_ids(tindex[0], emit_(tree, index=tindex[0], registry=ereg))
+        assert ids == expected, f"{qs!r} matched {ids}, expected {expected}"
         return
 
     raise AssertionError(f"unreachable: unknown outcome type {outcome!r}")
@@ -886,3 +899,108 @@ def test_field_absent_from_schema_is_a_misconfiguration(
     """
     broken = FieldRegistry([*ereg, FieldSpec("ghost", FieldKind.TEXT)])
     _run(qs, broken, tindex, outcome)
+
+
+# Doc 3 is the only document whose title is "Wärrantyplan", and it matches
+# no cell's own query unless that cell's recorded set already includes it.
+_COMPANION = ast.Term(field=FieldRef("title"), text="wärrantyplan")
+_COMPANION_IDS = frozenset({3})
+
+
+class _CompanionHook:
+    """A ``rewrite_leaf`` hook that widens each leaf as
+    ``Or(leaf, _COMPANION)`` and records the leaves it was called with.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[ast.Term | ast.Phrase] = []
+
+    def __call__(self, leaf: ast.Term | ast.Phrase) -> ast.Node:
+        self.calls.append(leaf)
+        return ast.Or(children=(leaf, _COMPANION))
+
+
+@pytest.mark.parametrize(("qs", "outcome"), CELLS)
+def test_kind_matrix_cell_under_a_companion_hook(
+    qs: str, outcome: object, ereg: FieldRegistry, tindex: TIndex
+) -> None:
+    """Every cell keeps its outcome when a host widens each ``Term``/``Phrase``
+    leaf with ``Or(leaf, title:wärrantyplan)`` through ``analyze()``'s
+    ``rewrite_leaf`` hook: a Search cell whose tree has such a leaf gains
+    exactly the companion's document, a Search cell with none (patterns,
+    ranges, ``field:*``) is unchanged, and a Raises or Diag cell still fails
+    the same way. No cell negates its leaf, so every hooked Search cell
+    gains the companion's document rather than excluding it.
+    """
+    hook = _CompanionHook()
+    # Term and Phrase are the only leaves the rewrite_leaf hook is called with.
+    tree = _parse(qs, registry=ereg, default_fields=["content"]).ast
+    hooked = _contains(tree, (ast.Term, ast.Phrase))
+    _run(
+        qs,
+        ereg,
+        tindex,
+        outcome,
+        rewrite_leaf=hook,
+        extra_ids=_COMPANION_IDS if hooked else frozenset(),
+    )
+    assert bool(hook.calls) == hooked, f"{qs!r}: hook calls {hook.calls!r}"
+
+
+@pytest.mark.parametrize(
+    ("leaf", "kind"),
+    [
+        pytest.param(
+            ast.Term(field=FieldRef("created"), text="2020-03-15"),
+            DiagnosticKind.AST_KIND_NOT_IMPLEMENTED,
+            id="date-term",
+        ),
+        pytest.param(
+            ast.Phrase(field=FieldRef("created"), text="2020-03-15"),
+            DiagnosticKind.AST_KIND_NOT_IMPLEMENTED,
+            id="date-phrase",
+        ),
+        pytest.param(
+            ast.Term(field=FieldRef("added"), text="2020-03-15"),
+            DiagnosticKind.AST_KIND_NOT_IMPLEMENTED,
+            id="datetime-term",
+        ),
+        pytest.param(
+            ast.Phrase(field=FieldRef("added"), text="2020-03-15"),
+            DiagnosticKind.AST_KIND_NOT_IMPLEMENTED,
+            id="datetime-phrase",
+        ),
+        pytest.param(
+            ast.Term(field=None, text="invoice"),
+            DiagnosticKind.AST_UNFIELDED_TERM,
+            id="unfielded-term",
+        ),
+        pytest.param(
+            ast.Phrase(field=None, text="invoice"),
+            DiagnosticKind.AST_UNFIELDED_TERM,
+            id="unfielded-phrase",
+        ),
+        pytest.param(
+            ast.Term(field=FieldRef("nope"), text="invoice"),
+            DiagnosticKind.AST_UNKNOWN_FIELD,
+            id="unknown-field-term",
+        ),
+        pytest.param(
+            ast.Phrase(field=FieldRef("nope"), text="invoice"),
+            DiagnosticKind.AST_UNKNOWN_FIELD,
+            id="unknown-field-phrase",
+        ),
+    ],
+)
+def test_hand_built_only_cells_under_a_companion_hook(
+    leaf: ast.Term | ast.Phrase, kind: DiagnosticKind, ereg: FieldRegistry, tindex: TIndex
+) -> None:
+    """The cells ``parse()`` cannot produce keep their documented raise when
+    the hook wraps them with a companion.
+    """
+    hook = _CompanionHook()
+    tree = ast.analyze(leaf, ereg, rewrite_leaf=hook)
+    assert hook.calls == [leaf]
+    with pytest.raises(QueryError) as exc:
+        emit_(tree, index=tindex[0], registry=ereg)
+    assert exc.value.diagnostic.kind is kind

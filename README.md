@@ -261,9 +261,16 @@ comfortably covers any human-written query) before calling `parse()`.
 itself: there is no `~` grammar registered in this library's parser
 plugin set (real Whoosh has one; it is deliberately not carried over, see
 "Not carried over from Whoosh" below), so a fuzzy (edit-distance) match is
-only ever hand-built and passed straight to `emit()`, the same way a
-caller may already hand-build a tree containing `ast.Nothing()`/
-`ast.Every()`.
+only ever hand-built, the same way a caller may already hand-build a tree
+containing `ast.Nothing()`/`ast.Every()`. A tree containing one can go
+straight to `emit()`. For a companion clause around each word of a parsed
+query, place it with `analyze()`'s `rewrite_leaf` hook instead, returning
+`Or(leaf, ast.Fuzzy(...))`, which keeps the word's own analysis exactly
+as it was (see "Rewriting leaves before emit" below). The hook sees
+`leaf.text` as the raw, unanalyzed query text, though: `Fuzzy(text=str(leaf.text))`
+on `alpha-beta` is one fragment through `pattern_normalizer`, not two
+tokens, and will not match a tokenized index. Split the text the way the
+field's analyzer would first, and build one `Fuzzy` per token.
 
 ```python
 from whoosh_compat import ast
@@ -286,9 +293,10 @@ canonicalized to it.
 `text` is matched via `FieldSpec.pattern_normalizer` (the same
 fragment-level, non-tokenizing normalization seam `Wildcard`/`Prefix`
 already use, see "The analyzer / pattern_normalizer seam" below), never
-the full `analyzer`: a `Fuzzy` leaf never goes through `ast.analyze()`, so
-if a field's normalizer offers several candidate forms, every form is
-tried and OR-combined. A field with no `pattern_normalizer` configured
+the full `analyzer`: analysis never rewrites a `Fuzzy` leaf, even when one
+passes through `ast.analyze()` inside a `rewrite_leaf` replacement, so if
+a field's normalizer offers several candidate forms, every form is tried
+and OR-combined. A field with no `pattern_normalizer` configured
 uses `text` exactly as given. A host whose field lowercases at index time
 should configure a `pattern_normalizer`, or a case difference alone
 consumes the edit-distance budget with nothing left for the typo it was
@@ -343,6 +351,100 @@ match exactly; `Fuzzy` has no equivalent of it.
 
 `transposition_cost_one` is not exposed as a field on `Fuzzy`; it is
 always `True` (tantivy's own default).
+
+### Rewriting leaves before emit
+
+A host that widens a parsed query, for example searching an internal
+companion field alongside each `Term` or `Phrase` word in it, does it
+through `analyze()`'s `rewrite_leaf` hook instead of walking the tree
+itself. Pattern leaves are not passed to the hook, so a wildcard or prefix
+word such as `invoi*` gets no companion:
+
+```python
+import whoosh_compat as wc
+from whoosh_compat import ast
+from whoosh_compat.emitters.tantivy_ import emit
+
+
+# emit_registry is registry plus the companion field, declared with
+# multitoken=wc.Multitoken.AND so all of its tokens must match:
+#     wc.FieldSpec("content_grams", wc.FieldKind.TEXT, analyzer=...,
+#                  multitoken=wc.Multitoken.AND)
+
+
+def widen(leaf: ast.Term | ast.Phrase) -> ast.Node:
+    if leaf.field is None or leaf.field.name != "content":
+        return leaf
+    companion = ast.Term(field=wc.FieldRef("content_grams"), text=str(leaf.text))
+    return ast.Or(children=(leaf, companion))
+
+
+result = wc.parse(q, registry=registry, default_fields=["content"])
+tree = wc.analyze(result.ast, emit_registry, rewrite_leaf=widen)
+query = emit(tree, index=index, registry=emit_registry)
+```
+
+A walk of your own gets two things wrong that the hook gets right,
+because the hook runs inside `analyze()`'s own pass:
+
+- **Multi-token context.** Wrapping a leaf in a new `Or` changes its
+  enclosing group, and a `Multitoken.DEFAULT` term that the analyzer
+  splits into several tokens is combined according to that group
+  (DIVERGENCES.md entry 15). So `content:alpha-beta AND report` would
+  loosen from requiring both tokens to accepting either.
+- **Zero-token drops.** Analyzing the leaf yourself and putting the result
+  back does not fix that: a leaf that analyzes to zero tokens then becomes
+  a pre-existing empty operand, which empties an `AND` (entry 27), instead
+  of dropping out of it (entry 23).
+
+What the hook sees and what its answer means:
+
+- It is called with every `Term` and `Phrase` in the normalized tree, of any
+  field kind, never with any other node type, and never with a node inside a
+  replacement it returned. It is called once per leaf object and AND/OR
+  context: one leaf object placed at two positions under the same context
+  gets one call and one result. Call order is unspecified.
+- It is called for a leaf under a negation too: `NOT x`, or the negative
+  side of an `AndNot`. A companion placed there widens what the negation
+  excludes rather than what it matches, since negating `Or(leaf, companion)`
+  excludes anything either side matches. With `Or(leaf, companion, fuzzy)`,
+  `NOT tokyo` would also exclude every document with a fuzzy match such as
+  `tokio`. For already-normalized input (every `parse()` result is), the
+  leaf each call receives is the input tree's own object, so a host that
+  wants to skip a negated leaf can pre-scan the tree it passes in for
+  leaves under a negation and compare by identity (`is`).
+- Returning the leaf itself changes nothing. Return `ast.Nothing()` to
+  remove the leaf: it drops out of its group exactly as a stopword would.
+- Anything else replaces the leaf and is analyzed in the leaf's position.
+  Put the leaf object itself into the replacement, not a copy. Wherever it
+  appears there, it stands for its own analysis in its original position,
+  so `Or(leaf, companion)` keeps `alpha-beta` requiring both tokens. A
+  copy is analyzed as a new leaf inside your `Or` and loosens.
+- A replacement that ends up empty, for example `Or(leaf, companion)`
+  where both sides analyze to nothing, drops out like a stopword.
+- Other leaves in the replacement, such as the companion, are analyzed as
+  new leaves. A companion on a `Multitoken.DEFAULT` field that the analyzer
+  splits into several tokens takes its combination from its own group in
+  the replacement, usually your `Or`, so any one of its tokens matches.
+  Declare the companion field with an explicit `multitoken` (for example
+  `Multitoken.AND`) when all of them must match.
+- Companion leaves are analyzed with the registry you pass to `analyze()`.
+  Parse with the registry users may address, and analyze and emit with one
+  that also carries the companion fields. `parse()` reads an unknown field
+  prefix as literal text, so an internal field stays unreachable from
+  query text.
+- The result is fully analyzed, and `emit()`'s own analysis of it changes
+  nothing. Combine several rewrites (say a companion field and a fuzzy
+  clause) into one hook that returns `Or(leaf, companion, fuzzy)`. Don't
+  run `analyze()` with a hook twice: the second pass would see the split
+  tokens and companions, not the words the user typed.
+
+Errors: an exception raised by the hook reaches you unchanged, and a return
+value that is not an `ast.Node` raises `TypeError`. Because you call
+`analyze()` yourself, a field analyzer that raises also surfaces there as
+its own exception, rather than as the `QueryError` `emit()` would have
+wrapped it in. Treat anything other than `QueryError` from these two calls
+as an internal error, the way `emit()`'s own `AST_INVALID_SHAPE` is one.
 
 ### Adopting the library: sweep stored queries first
 
@@ -435,9 +537,10 @@ behavior intentionally differs from real Whoosh.
 Not carried over from Whoosh (not currently implemented, kept cheap to add
 via the forked plugin architecture): `asn:>100` (`GtLtPlugin`), `term~2`
 fuzzy matching (no parser syntax exists for it, but a caller can still get
-fuzzy matching by hand-building an `ast.Fuzzy` node and passing it to
-`emit()`, see "Hand-building a `Fuzzy` node for a caller-side companion
-clause" above), `r"regex"` literal regex queries, `SequencePlugin`,
+fuzzy matching by hand-building an `ast.Fuzzy` node, either in a tree
+passed to `emit()` or placed around a parsed word with `analyze()`'s
+`rewrite_leaf` hook, see "Hand-building a `Fuzzy` node for a caller-side
+companion clause" above), `r"regex"` literal regex queries, `SequencePlugin`,
 `-foo`/`+foo` as negation/requirement shorthand (in the whoosh grammar this
 library targets, `-foo` was plain text whose analyzer typically dropped the
 dash: `NOT` was the only negation operator), and free-date mode (implicit

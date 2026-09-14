@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import itertools
 import math
+from collections.abc import Callable
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from dataclasses import fields as dataclass_fields
 from datetime import datetime
 from typing import Generic
+from typing import TypeAlias
 from typing import TypeVar
 
 from whoosh_compat.errors import Diagnostic
@@ -235,10 +237,11 @@ class Fuzzy(Node):
     """Fuzzy (edit-distance) term query.
 
     Emit-only: never produced by parse() (no fuzzy syntax is registered in
-    this library's parser plugin set), always hand-built by a caller and
-    passed to emit(). Unlike Term/Phrase/Prefix/Wildcard, `field` is
-    required, not optional: there is no defined "expand across default
-    search fields" behavior for a fuzzy leaf. A caller wanting fuzzy
+    this library's parser plugin set), always hand-built by a caller, either
+    in a tree passed to emit() or placed around a parsed leaf through
+    analyze()'s rewrite_leaf hook. Unlike Term/Phrase/Prefix/Wildcard,
+    `field` is required, not optional: there is no defined "expand across
+    default search fields" behavior for a fuzzy leaf. A caller wanting fuzzy
     matching across several fields builds an Or of several explicitly
     fielded Fuzzy nodes.
 
@@ -691,6 +694,13 @@ def _can_still_empty_during_analysis(node: Node) -> bool:
     an ``And`` node that stays spelled out rather than collapsing to its
     sibling.
 
+    :func:`analyze`'s ``rewrite_leaf`` hook can empty any ``Term``/``Phrase``,
+    and is deliberately not accounted for here: removing an already-analyzed
+    or unfielded leaf beside an unfielded ``Every`` in an ``And`` leaves
+    ``Nothing()``, the consequence :func:`analyze`'s docstring and
+    ARCHITECTURE.md document and
+    ``test_removing_a_leaf_beside_an_unfielded_every`` pins.
+
     Walked iteratively, like every other traversal in this module, so a
     pathologically deep tree costs heap rather than Python call frames.
     """
@@ -1123,8 +1133,113 @@ def _analyze_combine(
     return node
 
 
+# The type of analyze()'s rewrite_leaf hook, for the private helpers only:
+# analyze() spells it out so the alias never appears in its public signature.
+_RewriteLeaf: TypeAlias = Callable[[Term | Phrase], Node]
+
+
+def _analyze_walk(
+    node: Node,
+    registry: FieldRegistry,
+    default_mode: Multitoken,
+    rewrite_leaf: _RewriteLeaf | None,
+    pin: tuple[Term | Phrase, Node] | None,
+) -> Node:
+    """:func:`analyze`'s single bottom-up pass over an already-normalized
+    ``node``, returning its analyzed replacement ahead of the final
+    post-analysis normalize.
+
+    ``rewrite_leaf`` is the host hook :func:`analyze` documents, applied to
+    each ``Term``/``Phrase`` once that leaf's own analysis is known (see
+    :func:`_apply_rewrite`). ``pin`` is ``None`` at the top level. Inside a
+    replacement it is ``(leaf, analysis)``: wherever that same leaf object
+    appears, it resolves to ``analysis``, the result it already got in its
+    original position, instead of being analyzed again in the replacement's
+    context.
+    """
+
+    # Mirrors normalize()'s own memoized work-stack traversal, except the
+    # per-node combine step is _analyze_combine (leaf rewriting plus
+    # interleaved normalization) instead of _normalize_one alone. The
+    # Multitoken context (AND/OR) applicable to a DEFAULT-configured term's
+    # position travels WITH each work item rather than living in a separate
+    # id-keyed side table: a frozen node object legitimately aliased at two
+    # tree positions with different enclosing combinators (value semantics
+    # invite object reuse) then gets one analysis per (object, context) pair
+    # instead of whichever context a traversal recorded last. And/Or set
+    # their children's context to their own combinator; every other
+    # combinator (Not/AndNot/AndMaybe/Require/Boosted) passes its own
+    # context through unchanged, since none of them are themselves a
+    # combining group a term could inherit AND/OR-ness from.
+    memo: dict[tuple[int, Multitoken], Node] = {}
+    work: list[tuple[Node, Multitoken, bool]] = [(node, default_mode, False)]
+    while work:
+        current, ctx, children_ready = work.pop()
+        key = (id(current), ctx)
+        if key in memo:
+            # Already resolved at another position under the same context
+            # (one node object aliased in the tree). Resolving it again
+            # would give the same node and call rewrite_leaf a second time.
+            # A children-ready item never gets here: its key was absent when
+            # it was pushed, and only its own descendants, which cannot
+            # include itself, run before it pops again.
+            continue
+        if pin is not None and current is pin[0]:
+            memo[key] = pin[1]
+            continue
+        kids = _child_nodes(current)
+        if isinstance(current, And):
+            child_ctx = Multitoken.AND
+        elif isinstance(current, Or):
+            child_ctx = Multitoken.OR
+        else:
+            child_ctx = ctx
+        if children_ready or not kids:
+            analyzed_kids = tuple(memo[(id(k), child_ctx)] for k in kids)
+            result = _analyze_combine(current, analyzed_kids, registry, ctx)
+            if rewrite_leaf is not None and isinstance(current, (Term, Phrase)):
+                result = _apply_rewrite(current, result, registry, ctx, rewrite_leaf)
+            memo[key] = result
+        else:
+            work.append((current, ctx, True))
+            for k in kids:
+                work.append((k, child_ctx, False))
+    return memo[(id(node), default_mode)]
+
+
+def _apply_rewrite(
+    leaf: Term | Phrase,
+    analyzed: Node,
+    registry: FieldRegistry,
+    ctx: Multitoken,
+    rewrite_leaf: _RewriteLeaf,
+) -> Node:
+    """Call the host's ``rewrite_leaf`` hook for one leaf whose own analysis,
+    ``analyzed``, is already known, and return what takes the leaf's place.
+
+    Returning the leaf itself keeps ``analyzed``. Anything else is
+    normalized and then analyzed in the leaf's context ``ctx`` by a nested,
+    hook-free :func:`_analyze_walk` that pins the leaf to ``analyzed``. The
+    nested walk never calls the hook, so a replacement containing the leaf
+    cannot recurse, and it adds one Python call level however deep the
+    replacement is. The parent sees the replacement's outcome in the leaf's
+    place, so one that ends up ``Nothing()`` counts as newly dropped
+    (DIVERGENCES.md entry 23), exactly as a zero-token leaf does.
+    """
+    replacement = rewrite_leaf(leaf)
+    if replacement is leaf:
+        return analyzed
+    if not isinstance(replacement, Node):
+        raise TypeError(f"rewrite_leaf must return an ast.Node, got {type(replacement).__name__}")
+    return _analyze_walk(normalize(replacement), registry, ctx, None, (leaf, analyzed))
+
+
 def analyze(
-    node: Node, registry: FieldRegistry, *, default_mode: Multitoken = Multitoken.AND
+    node: Node,
+    registry: FieldRegistry,
+    *,
+    default_mode: Multitoken = Multitoken.AND,
+    rewrite_leaf: Callable[[Term | Phrase], Node] | None = None,
 ) -> Node:
     """Resolve every TEXT/KEYWORD ``Term``/``Phrase`` leaf's field analysis,
     turning a raw, unanalyzed tree into one an emitter can visit as a purely
@@ -1175,6 +1290,53 @@ def analyze(
     analyze(x, registry)`` for any ``x`` and ``registry``, since a node
     already marked analyzed is never re-tokenized or re-split.
 
+    ``rewrite_leaf`` lets a host replace ``Term``/``Phrase`` leaves from
+    inside this pass, typically wrapping one as ``Or(leaf, companion)`` to
+    search a companion field alongside it. It is called with every ``Term``
+    and ``Phrase`` in the normalized input, whatever its field kind and
+    whether or not it is already analyzed, after that leaf's own analysis
+    has run (so a raising field analyzer raises first). It is never called
+    with any other leaf type, nor with a node inside a replacement it
+    returned. It is called once per leaf object and enclosing context: a
+    leaf object aliased at two positions under the same context is called
+    once, and both positions get the same result. Call order is
+    unspecified. It is called for a leaf under a negation (``NOT``, or
+    ``AndNot``'s negative side) too. Normalization never builds a new
+    ``Term`` or ``Phrase``, so whether or not the input was normalized
+    first, the leaf every call receives is the input tree's own object (an
+    equal leaf that normalization dedupes away simply gets no call). A host
+    that wants to skip a negated leaf can therefore pre-scan the tree it
+    passes in for leaves under a negation and compare by identity (``is``).
+
+    Returning the leaf itself keeps ordinary analysis. Any other ``Node`` is
+    a replacement: it is normalized and then analyzed in the leaf's
+    position, against the same ``registry``. Wherever the same leaf object
+    appears inside it, that leaf stands for its own analysis in its original
+    context, so ``Or(leaf, companion)`` keeps a multi-token leaf combined the
+    way its enclosing group says, not the way the new ``Or`` would. An equal
+    copy of the leaf gets no such treatment, and one placed before the leaf
+    in the same group replaces it when normalization dedupes the pair. Every
+    other raw leaf in the replacement is analyzed normally, a
+    ``Multitoken.DEFAULT`` one taking its context from its nearest group in
+    the normalized replacement, or from the leaf's position when there is
+    none. A replacement that ends up empty, a bare ``Nothing()`` included,
+    drops out of its enclosing group exactly as a zero-token leaf does
+    (DIVERGENCES.md entry 23). The result is fully analyzed, so a later
+    plain :func:`analyze` of it, including the one ``emit()`` runs, changes
+    nothing. Running the hook a second time over its own output would see
+    split tokens and companions rather than the original leaves, so a host
+    with several rewrites combines them into one hook.
+
+    An exception raised by the hook propagates unchanged, and a return value
+    that is not a ``Node`` raises ``TypeError``. A host calls this function
+    itself, so a field analyzer that raises surfaces here as its own
+    exception, not as the ``QueryError`` ``emit()`` would have wrapped it
+    in. The hook does not change which leaves normalization treats as able
+    to empty: removing an already-analyzed or unfielded leaf beside an
+    unfielded ``Every`` in an ``And`` leaves ``Nothing()``, because
+    normalization has already dropped that ``Every`` as the AND identity,
+    and the result is the same whether or not the caller normalized first.
+
     Traverses iteratively, mirroring :func:`normalize`'s own explicit work
     stack, so a pathologically deep tree costs heap rather than Python
     call-stack frames, exactly like every other stage in this pipeline that
@@ -1200,10 +1362,17 @@ def analyze(
         default_mode: The ``Multitoken`` mode a ``Multitoken.DEFAULT``-
             configured field's term resolves to when it has no enclosing
             And/Or group to inherit from.
+        rewrite_leaf: Optional hook replacing ``Term``/``Phrase`` leaves
+            during this pass, as described above. ``None``, the default,
+            is plain analysis.
 
     Returns:
         A plain ``ast.Node`` tree, already normalized, with every
         TEXT/KEYWORD leaf's analysis fully resolved.
+
+    Raises:
+        TypeError: ``rewrite_leaf`` returned something that is not a
+            ``Node``.
     """
 
     # Normalize first: see the Args docstring above for why this is
@@ -1213,45 +1382,14 @@ def analyze(
     # on whether they did (see the Args docstring's insensitivity note).
     node = normalize(node)
 
-    # Single bottom-up pass, mirroring normalize()'s own memoized
-    # work-stack traversal, except the per-node combine step is
-    # _analyze_combine (leaf rewriting plus interleaved normalization)
-    # instead of _normalize_one alone. The Multitoken context (AND/OR)
-    # applicable to a DEFAULT-configured term's position travels WITH each
-    # work item rather than living in a separate id-keyed side table: a
-    # frozen node object legitimately aliased at two tree positions with
-    # different enclosing combinators (value semantics invite object
-    # reuse) then gets one analysis per (object, context) pair instead of
-    # whichever context a traversal recorded last. And/Or set their
-    # children's context to their own combinator; every other combinator
-    # (Not/AndNot/AndMaybe/Require/Boosted) passes its own context through
-    # unchanged, since none of them are themselves a combining group a
-    # term could inherit AND/OR-ness from.
-    memo: dict[tuple[int, Multitoken], Node] = {}
-    work: list[tuple[Node, Multitoken, bool]] = [(node, default_mode, False)]
-    while work:
-        current, ctx, children_ready = work.pop()
-        kids = _child_nodes(current)
-        if isinstance(current, And):
-            child_ctx = Multitoken.AND
-        elif isinstance(current, Or):
-            child_ctx = Multitoken.OR
-        else:
-            child_ctx = ctx
-        if children_ready or not kids:
-            analyzed_kids = tuple(memo[(id(k), child_ctx)] for k in kids)
-            memo[(id(current), ctx)] = _analyze_combine(current, analyzed_kids, registry, ctx)
-        else:
-            work.append((current, ctx, True))
-            for k in kids:
-                work.append((k, child_ctx, False))
+    walked = _analyze_walk(node, registry, default_mode, rewrite_leaf, None)
 
     # _post_analysis=True: every leaf's fate is settled by now, so the
     # unfielded-Every AND-identity drop normalize() holds back before
     # analysis (DIVERGENCES.md entry 23's match-all face) is finally
     # unconditional here, giving the canonical shape whoosh's own
     # And.normalize() produces.
-    return _normalize_impl(memo[(id(node), default_mode)], _post_analysis=True)
+    return _normalize_impl(walked, _post_analysis=True)
 
 
 class Visitor(Generic[T]):
