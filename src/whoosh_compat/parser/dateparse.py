@@ -79,6 +79,11 @@ a successful parse:
   itself marks a week or quarter merged with a time as a
   :class:`~whoosh_compat.parser.times.TimeOnPeriod` rather than failing),
   and a day number never precedes a colon, see DIVERGENCES.md entry 62.
+* In the numeric grammar a colon separates clock units only, and a fused
+  day-to-hour boundary is read only in a fully fused date; once a space has
+  separated two units, the hour follows only a space or a "T", and a dotted
+  day never follows a spaced year; a numeric year-month is also readable by
+  the named-date grammar, as a month. See DIVERGENCES.md entry 63.
 * Unparseable date text/bounds report a ``Diagnostic(kind=BAD_DATE)`` and
   become an :class:`whoosh_compat.ast.ErrorLeaf`, instead of whoosh's
   ``ErrorNode``/callback mechanism.
@@ -87,6 +92,7 @@ a successful parse:
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC
 from datetime import date
@@ -117,6 +123,7 @@ from whoosh_compat.parser.times import TimeError
 from whoosh_compat.parser.times import TimeOnPeriod
 from whoosh_compat.parser.times import adatetime
 from whoosh_compat.parser.times import fill_in
+from whoosh_compat.parser.times import has_no_time
 from whoosh_compat.parser.times import is_ambiguous
 from whoosh_compat.parser.times import is_void
 from whoosh_compat.parser.times import relative_days
@@ -211,7 +218,8 @@ class Sequence(MultiBase):
     """Merges the dates parsed by a sequence of sub-elements."""
 
     def __init__(self, elements: Any, sep: str | None = r"(\s+|\s*,\s*)",
-                 name: str | None = None, progressive: bool = False) -> None:
+                 name: str | None = None, progressive: bool = False,
+                 sep_ok: Callable[[int, str, list[str]], bool] | None = None) -> None:
         """
         :param elements: the sequence of sub-elements to parse.
         :param sep: a separator regular expression to match between elements,
@@ -220,6 +228,11 @@ class Sequence(MultiBase):
         :param progressive: if True, elements after the first do not need to
             match. That is, for elements (a, b, c) and progressive=True, the
             sequence matches like ``a[b[c]]``.
+        :param sep_ok: an optional ``sep_ok(index, sep_text, earlier)``
+            predicate over each separator found before element ``index``,
+            ``earlier`` being the separators already consumed. A separator
+            it refuses ends the sequence exactly as a missing one does. Not
+            part of upstream whoosh; see DIVERGENCES.md entry 63.
         """
 
         super().__init__(elements, name)
@@ -230,6 +243,7 @@ class Sequence(MultiBase):
         else:
             self.sep_expr = None
         self.progressive = progressive
+        self.sep_ok = sep_ok
 
     def parse(self, text: str, dt: datetime, pos: int = 0, debug: int = -9999) -> Any:
         d: datetime | adatetime | timespan = adatetime()
@@ -238,7 +252,8 @@ class Sequence(MultiBase):
         failed = False
 
         print_debug(debug, "Seq %s sep=%r text=%r", self.name, self.sep_pattern, text[pos:])
-        for e in self.elements:
+        seps: list[str] = []
+        for i, e in enumerate(self.elements):
             print_debug(debug, "Seq %s text=%r", self.name, text[pos:])
             # Diverges from whoosh, which advances pos past the separator
             # here: a progressive sequence that then fails on its element
@@ -251,7 +266,11 @@ class Sequence(MultiBase):
             if self.sep_expr and not first:
                 print_debug(debug, "Seq %s looking for sep", self.name)
                 m = self.sep_expr.match(text, pos)
+                if m and self.sep_ok is not None and not self.sep_ok(i, m.group(0), seps):
+                    print_debug(debug, "Seq %s refused sep %r", self.name, m.group(0))
+                    break
                 if m:
+                    seps.append(m.group(0))
                     elempos = m.end()
                     if not text[pos:elempos].strip():
                         pos = elempos
@@ -681,6 +700,51 @@ class Time12(Regex):
 
 # Top-level parser classes
 
+# Indexes into DateParser's "simple" sequence (year, month, day, hour,
+# minute, second, microsecond) that _simple_sep_ok names.
+_SIMPLE_DAY = 2
+_SIMPLE_HOUR = 3
+_SIMPLE_MINUTE = 4
+_SIMPLE_SECOND = 5
+
+
+def _simple_sep_ok(index: int, sep: str, earlier: list[str]) -> bool:
+    """Whether ``sep`` may stand before element ``index`` of the numeric
+    date grammar.
+
+    Four rules, all so that the digits of a clock time are never read as a
+    day and an hour ("2026-08 15:00" used to be 15 August at 00:00):
+
+    * a colon separates clock units only, so it may stand before the minute
+      or the second and nowhere else;
+    * a fused boundary (no separator) before the month, day or hour is
+      accepted only when every earlier boundary was fused too: a fully
+      fused "202608101500" still reads, and so does a separated date with a
+      fused clock ("2026-08-10 1500"), but "2026-08 1500" does not;
+    * once a space has separated two units, the hour must follow a space or
+      a "T": "2026-08-10 15.00" reads, but in "2026-08 15.00" the "15" and
+      "00" are a clock time, not a day and an hour. A value with no space
+      before its hour ("2026-08-10-15", "2026.08.15.10.30") is unaffected;
+    * a dot may not stand before the day when a space stood before the
+      month, since "2026 12.30" is as much a clock time as "2026 12:30".
+
+    See DIVERGENCES.md entry 63.
+    """
+
+    if ":" in sep:
+        return index in (_SIMPLE_MINUTE, _SIMPLE_SECOND)
+    if sep == "" and index <= _SIMPLE_HOUR:
+        return not any(earlier)
+    # The separator pattern admits no whitespace but a plain space. Before
+    # the day, the only earlier separator is the one before the month.
+    if any(" " in s for s in earlier):
+        if index == _SIMPLE_HOUR:
+            return " " in sep or sep in ("T", "t")
+        if index == _SIMPLE_DAY:
+            return "." not in sep
+    return True
+
+
 class DateParser:
     """Base class for locale-specific parser classes."""
 
@@ -724,7 +788,10 @@ class DateParser:
         # _split_rfc3339_utc), since this naive grammar has no tzinfo
         # concept of its own to represent "no shift, already UTC" (see the
         # module docstring's "Timezone handling is new" paragraph).
-        simple_seq = Sequence(tup, sep="[- .:/T]*", name="simple", progressive=True)
+        # _simple_sep_ok then restricts which separator may stand before
+        # which unit (DIVERGENCES.md entry 63).
+        simple_seq = Sequence(tup, sep="[- .:/T]*", name="simple", progressive=True,
+                              sep_ok=_simple_sep_ok)
         self.simple = Sequence((simple_seq, r"(?=(\s|$))"), sep="")
 
         self.setup()
@@ -845,6 +912,16 @@ class English(DateParser):
             return CalendarPeriod(start, end_excl - timedelta(microseconds=1), "quarter")
         previous_quarter = Regex("previous quarter", previous_quarter_to_date)
 
+        # A numeric year-month ("2026-08", "2026/08", "2026.08", "2026 08")
+        # read as a month by the named-date Bag below. "simple" is tried
+        # first and reads every value it can in full, so this only runs on
+        # text it declined, such as "2026-08 15:00", where _simple_sep_ok
+        # stops a clock time from being read as a day and an hour. Reading
+        # the value as a month plus a time is what lets it be diagnosed as
+        # that (DIVERGENCES.md entries 62 and 63) rather than as unreadable.
+        year_month = Regex(r"(?P<year>[0-9]{4})[-/. ](?P<month>[0-1][0-9])(?=(\s|$))",
+                           lambda p, dt: adatetime(year=p.year, month=p.month))
+
         self.month = Month("january|jan", "february|febuary|feb", "march|mar",
                            "april|apr", "may", "june|jun", "july|jul",
                            "august|aug", "september|sept|sep", "october|oct",
@@ -860,7 +937,7 @@ class English(DateParser):
                            Sequence((self.day, self.month), name="dm"),
                            Sequence((self.month, self.day), name="md"),
                            Sequence((self.month, self.year), name="my"),
-                           self.month, self.year, self.dayname, tomorrow,
+                           self.month, year_month, self.year, self.dayname, tomorrow,
                            yesterday, previous_week, previous_quarter,
                            previous_month, previous_year, thisyear, thismonth,
                            today, now,
@@ -907,9 +984,7 @@ def _time_on_period(raw: object) -> str | None:
         return raw.unit
     if isinstance(raw, timespan):
         return _time_on_period(raw.start) or _time_on_period(raw.end)
-    if isinstance(raw, adatetime) and raw.day is None and any(
-        v is not None for v in (raw.hour, raw.minute, raw.second, raw.microsecond)
-    ):
+    if isinstance(raw, adatetime) and raw.day is None and not has_no_time(raw):
         if raw.month is not None:
             return "month"
         if raw.year is not None:
@@ -1338,11 +1413,6 @@ class DateParserPlugin(Plugin):
             return None
         return raw
 
-    def _fully_parses(self, text: str) -> bool:
-        """Whether the date grammar consumes *all* of ``text``."""
-
-        return self._raw_full_parse(text) is not None
-
     @staticmethod
     def _whitespace_separated(group: syntax.GroupNode, idxs: list[int]) -> list[int]:
         """``idxs`` truncated at the first node that abuts its predecessor.
@@ -1373,30 +1443,17 @@ class DateParserPlugin(Plugin):
         only diagnostic in the library that carries one today, because it
         is the only one where a single rewrite of the query text is known
         to work: the value already parses when quoted, which is what
-        ``_fully_parses`` established before this error was built. A
+        ``_raw_full_parse`` established before this error was built. A
         malformed date reaching the sibling error path has no such spelling
         and correctly leaves ``suggestion`` at ``None``.
         """
 
         quoted = f'"{text}"'
-        diagnostic = Diagnostic(
-            message=(
-                f"{text!r} is a date value written without quotes; "
-                f"quote it as {spec.name}:{quoted}"
-            ),
-            kind=DiagnosticKind.BAD_DATE,
-            cause=cause_for(DiagnosticKind.BAD_DATE),
-            startchar=startchar,
-            endchar=endchar,
-            field=FieldRef(spec.name),
-            field_kind=spec.kind,
-            raw_value=text,
-            suggestion=quoted,
+        message = (
+            f"{text!r} is a date value written without quotes; "
+            f"quote it as {spec.name}:{quoted}"
         )
-        node = DateErrorNode(diagnostic)
-        node.startchar = startchar
-        node.endchar = endchar
-        return node
+        return self._bad_date_node(text, spec, message, startchar, endchar, suggestion=quoted)
 
     def _time_on_period_error(
         self, text: str, spec: FieldSpec, unit: str, startchar: int | None, endchar: int | None
@@ -1410,11 +1467,24 @@ class DateParserPlugin(Plugin):
         single rewrite to offer.
         """
 
+        message = f"{text!r} pairs a time of day with a whole {unit}; name a day, or drop the time"
+        return self._bad_date_node(text, spec, message, startchar, endchar)
+
+    @staticmethod
+    def _bad_date_node(
+        text: str,
+        spec: FieldSpec,
+        message: str,
+        startchar: int | None,
+        endchar: int | None,
+        suggestion: str | None = None,
+    ) -> DateErrorNode:
+        """A ``BAD_DATE`` error node for ``text`` on ``spec``, carrying
+        ``startchar``/``endchar`` both on the diagnostic and on the node.
+        """
+
         diagnostic = Diagnostic(
-            message=(
-                f"{text!r} pairs a time of day with a whole {unit}; "
-                "name a day, or drop the time"
-            ),
+            message=message,
             kind=DiagnosticKind.BAD_DATE,
             cause=cause_for(DiagnosticKind.BAD_DATE),
             startchar=startchar,
@@ -1422,6 +1492,7 @@ class DateParserPlugin(Plugin):
             field=FieldRef(spec.name),
             field_kind=spec.kind,
             raw_value=text,
+            suggestion=suggestion,
         )
         node = DateErrorNode(diagnostic)
         node.startchar = startchar

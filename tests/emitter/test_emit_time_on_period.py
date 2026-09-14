@@ -16,6 +16,17 @@ from .conftest import emit_ast
 from .conftest import search_ids
 
 
+def _assert_bad_date_at_emit(query: str, tindex: TIndex, ereg: FieldRegistry) -> None:
+    """``query`` diagnoses BAD_DATE at parse time, and emit() refuses it with
+    that same kind of diagnostic.
+    """
+    result = _parse(query, registry=ereg, default_fields=["content"])
+    assert [d.kind for d in result.diagnostics] == [DiagnosticKind.BAD_DATE]
+    with pytest.raises(QueryError) as exc:
+        emit_ast(result.ast, tindex, ereg)
+    assert exc.value.diagnostic.kind is DiagnosticKind.BAD_DATE
+
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -27,11 +38,7 @@ from .conftest import search_ids
     ],
 )
 def test_a_time_on_a_period_fails_at_emit(query: str, tindex: TIndex, ereg: FieldRegistry) -> None:
-    result = _parse(query, registry=ereg, default_fields=["content"])
-    assert [d.kind for d in result.diagnostics] == [DiagnosticKind.BAD_DATE]
-    with pytest.raises(QueryError) as exc:
-        emit_ast(result.ast, tindex, ereg)
-    assert exc.value.diagnostic.kind is DiagnosticKind.BAD_DATE
+    _assert_bad_date_at_emit(query, tindex, ereg)
 
 
 @pytest.mark.parametrize(
@@ -47,3 +54,39 @@ def test_a_time_on_a_named_day_still_finds_its_document(
     result = _parse(query, registry=ereg, default_fields=["content"])
     assert not result.diagnostics
     assert search_ids(tindex[0], emit_ast(result.ast, tindex, ereg)) == [1]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        # Used to search 10 March 2020 00:00-01:00: the clock read as a day
+        # and an hour.
+        pytest.param("added:'2020-03 10:00'", id="year-month-then-clock"),
+        # Used to search 15 March 2020 10:00 and find doc 1.
+        pytest.param("added:'2020-03-15:10:00'", id="colon-before-the-hour"),
+        # Used to search all of 15 March 2020 and find doc 1.
+        pytest.param("added:'2020:03:15'", id="colon-between-date-units"),
+    ],
+)
+def test_a_misread_numeric_value_fails_at_emit(
+    query: str, tindex: TIndex, ereg: FieldRegistry
+) -> None:
+    _assert_bad_date_at_emit(query, tindex, ereg)
+
+
+def test_an_unquoted_fused_clock_after_a_year_month_keeps_the_month_and_the_term(
+    tindex: TIndex, ereg: FieldRegistry
+) -> None:
+    """``added:2020-03 1000`` is March 2020 AND the term ``1000``: the date
+    half alone finds doc 1, and the leftover term is ANDed on, so a term the
+    document does not contain removes it while one it does contain keeps it.
+    """
+
+    def ids(query: str) -> list[int]:
+        result = _parse(query, registry=ereg, default_fields=["content"])
+        assert not result.diagnostics, result.diagnostics
+        return search_ids(tindex[0], emit_ast(result.ast, tindex, ereg))
+
+    assert ids("added:2020-03") == [1]
+    assert ids("added:2020-03 invoice") == [1]
+    assert ids("added:2020-03 1000") == []

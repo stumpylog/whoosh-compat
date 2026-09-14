@@ -775,9 +775,9 @@ parse-then-emit pipeline).
     separated-ISO date" into "a four-digit run followed by anything" and
     swept in shapes this entry's reason is false for: `created:0125 0`
     (a year and an unrelated bare term) compares EQUAL, and
-    `added:'2020 12:30'` diverges for entry 21's
-    month:day-versus-time-of-day mechanism, not for this one. Entry 21 now
-    carries its own allowlist entry for that shape.
+    `added:'2020 12:30'`, which used to diverge for entry 21's
+    month:day-versus-time-of-day mechanism, now diagnoses (entries 62 and
+    63).
 
     The "both sides agree on the value" part holds for zero-padded values,
     which is what the corpus covers. It does not extend to every string the
@@ -1038,29 +1038,29 @@ parse-then-emit pipeline).
     `tests/emitter/test_emit_default_subpath.py`'s
     `test_bare_star_existence_narrows_to_the_default_subpath`.
 
-21. **A year followed by a colon-separated time reads as a calendar date
-    (design).** Value text like `added:'2020 12:30'` is ambiguous: the
-    trailing digits can be read as a time of day, or as the month and day
-    of a separator-separated calendar date. Real whoosh reads it as a
-    time, producing "12:30 on every day of 2020". whoosh-compat's date
-    grammar tries its separated-date alternative first (the ordering that
-    makes `created:2020-01-01` parse at all, see entry 18), and that
-    alternative accepts `:` among its separators, so the same text reads
-    as 30 December 2020.
+21. **A year followed by a colon-separated time is diagnosed as a
+    BAD_DATE (whoosh-bug, not reproduced).** Value text like
+    `added:'2020 12:30'` used to read as a calendar date: the numeric
+    grammar is tried first (the ordering that makes `created:2020-01-01`
+    parse at all, see entry 18) and accepted `:` between any two units,
+    so `12:30` became the month and day, 30 December 2020. Real whoosh
+    reads the same text as a year plus a time of day and resolves it to
+    the first-day-to-last-day range entry 62 describes
+    (`2020-01-01 12:30 .. 2020-12-31 12:30:59.999999`, measured with its
+    own grammar), not to "12:30 on every day of 2020", which no single
+    range can express.
 
-    A year plus a time that has no calendar reading (`added:'2020 5pm'`,
-    `added:'2020 23:59'`, `added:'2020 12:00'`) is not this entry's
-    shape: it pairs a time of day with a whole year, which entry 62
-    rejects. Only the pairs that read as a calendar month and a valid day
-    of that month (a left half of `01`..`12`, a right half that is a real
-    day of that month) still take this entry's reading.
+    Neither reading survives. A colon now separates clock units only
+    (entry 63), so `12:30` can no longer be a month and a day, and the
+    remaining reading, a time of day on a whole year, is rejected by
+    entry 62. Every `HH:MM` pair now diagnoses the same way, including
+    the pairs that never had a calendar reading (`added:'2020 23:59'`,
+    `added:'2020 12:00'`), which used to compare equal to whoosh's
+    range, and so does a year plus a meridiem time (`added:'2020 5pm'`).
 
-    Test references: `tests/test_parser_dates.py`'s year-plus-time case;
-    `tests/differential/allowlist.py`'s year-plus-`month:day` entry. That
-    entry is new as of the pre-release staleness sweep: before it, entry
-    18's separator class included a space, so entry 18's entry claimed
-    this shape first and recorded its own "numerically correct on both
-    sides" reason for it, which is provably false here.
+    Test references: `tests/test_parser_dates.py`'s
+    `test_year_followed_by_a_clock_time_is_rejected`;
+    `tests/test_parser_time_on_period.py`'s bare-year cells.
 
 22. **JSON-subpath `index.parse_query` fallback: `AND`/`OR` now honor true
     combinator semantics for a `Term` value (fixed as a structural
@@ -2829,19 +2829,18 @@ parse-then-emit pipeline).
     `test_bare_rfc3339_value_is_a_result_level_divergence`.
 
 50. **A no-separator `T`-fused datetime value (`added:2026T10`, bare or
-    single-quoted, with or without a colon-split day token) parses to a
-    working `DateRange`; real whoosh parses it to `_NullQuery`, matching
-    nothing (whoosh-bug, not reproduced).** The dash-less corner of the
-    RFC3339 `T` extension, a divergence face that exists only because
-    whoosh-compat's grammar accepts `T` as a separator at all: whoosh's
-    grammar cannot read `2026T10` in any way (no `T`, and its field
-    self-parse also fails on the embedded letter), so its fallback chain
-    bottoms out in `_NullQuery` (measured for the bare, lowercase-`t`
-    and single-quoted spellings alike), while whoosh-compat reads
-    year-`T`-month and returns the month the user plausibly meant. For
-    the inner-colon spelling (`added:2026T10:30`) the tokenizer splits
-    at the colon and whoosh-compat's date parser joins the adjacent
-    tokens into a single day-precision `2026-10-30` reading, still
+    single-quoted) parses to a working `DateRange`; real whoosh parses it
+    to `_NullQuery`, matching nothing (whoosh-bug, not reproduced).** The
+    dash-less corner of the RFC3339 `T` extension, a divergence face that
+    exists only because whoosh-compat's grammar accepts `T` as a separator
+    at all: whoosh's grammar cannot read `2026T10` in any way (no `T`, and
+    its field self-parse also fails on the embedded letter), so its
+    fallback chain bottoms out in `_NullQuery` (measured for the bare,
+    lowercase-`t` and single-quoted spellings alike), while whoosh-compat
+    reads year-`T`-month and returns the month the user plausibly meant.
+    The inner-colon spelling (`added:2026T10:30`) used to read as a
+    day-precision `2026-10-30`, its colon introducing the day; a colon now
+    separates clock units only (entry 63), so it is a BAD_DATE, still
     against whoosh's `_NullQuery`. Unlike entry 49's dashed spellings,
     whoosh reads nothing at all here rather than a truncated period, so
     there is no half-consumed value for entry 54's rule to reject either
@@ -2857,8 +2856,11 @@ parse-then-emit pipeline).
     (`added:2026T10:30:00Z`, `created:9999T13`) becomes a parse-time
     BAD_DATE diagnostic, entry 6's uniform rule. The allowlist entries
     are ordered before the entry-15 unknown-field-demotion pattern,
-    which would otherwise mis-claim the inner-colon spelling by reading
-    `2026T10` as an unknown field named `2026T10` with value `30`.
+    which would otherwise read the colon-split spelling's `2026T10` as an
+    unknown field named `2026T10` with value `30`; that spelling now
+    diagnoses (entry 63), so the ordering only matters for it if it ever
+    stops.
+
     The colon-less spelling matters beyond theory: the differential
     fuzzer's word alphabet can generate it (`\w`-only, no colon
     needed), so before this entry it was an unclaimed divergence
@@ -3160,9 +3162,9 @@ parse-then-emit pipeline).
     first alternative that matches anything at all and never backtracks,
     never reach the alternative that can read them (both are pinned by
     existing tests, which is how this was caught: `created:'2020 august 4'`
-    reads as that day, and a year plus a meridiem time reaches the named-
-    date grammar, the only place it can be recognized as a time of day on
-    a whole year and rejected, entry 62). A value with a
+    reads as that day, and a year plus a meridiem time reaches the
+    named-date grammar, the only place it can be recognized as a time of
+    day on a whole year and rejected, entry 62). A value with a
     *leading* space (`added:' 2005-01-01'`) was already rejected before
     this entry existed; the trailing-space asymmetry is whoosh's and is
     left alone. Spellings with no dangling separator are untouched:
@@ -3874,7 +3876,10 @@ parse-then-emit pipeline).
     because the grammar does not accept a year followed by a bare month
     name as a complete value (measured), and so is `created:2020 invoice`
     (entry 54's boundary paragraph), where the remainder is not part of
-    any date.
+    any date. Entry 63 moves a few runs the other way: `added:2026-08 1500`
+    and `added:2026 1230` were rejected only because a misreading of the
+    whole run parsed, and now keep the date and the leftover term; see
+    that entry.
 
     Test references: `tests/test_parser_dates.py`'s
     `test_unquoted_date_rejection_cell_matrix` (the kind/spelling
@@ -3931,7 +3936,8 @@ parse-then-emit pipeline).
     - **Every date spelling:** the six keywords (`this month`,
       `previous month`, `this year`, `previous year`, `previous week`,
       `previous quarter`), a month name alone or with a year (`august`,
-      `august 2026`), and a bare year (`2026`).
+      `august 2026`), a bare year (`2026`) and, per entry 63, a numeric
+      year-month (`2026-08`, `2026/08`, `2026.08`, `2026 08`).
     - **Every time spelling:** `3pm`, `3 pm`, `15:00`, `15:00:00`,
       `noon`, `midnight`, before or after the date.
     - **Every quoting:** double, single, and unquoted. Unquoted, a
@@ -4015,3 +4021,139 @@ parse-then-emit pipeline).
     `test_fill_in_marks_a_time_merged_into_a_period`;
     `tests/differential/corpus_paperless.txt`'s `added:'this month 15:00'`,
     `added:'august 2026 15:00'` and `added:'2026 23:59'` lines.
+
+63. **In a numeric date value, a colon separates clock units only, and a
+    day and an hour written fused together are read that way only when
+    the whole date is fused (design).** The numeric date grammar (year,
+    month, day, hour, minute, second, microsecond) accepted `:` and the
+    empty string between any two of its units, so whatever digits
+    followed a year and month filled the day and then the hour:
+    `added:"2026-08 15:00"` was 15 August at 00:00, `added:'2026-08 1500'`
+    the same, and `added:'2020 12:30'` was 30 December (entry 21). Nobody
+    writing a clock time means a day and an hour, and nothing warned the
+    user. Four rules now constrain the separators, and nothing else about
+    the numeric grammar changes:
+
+    - `:` is accepted only before the minute and before the second.
+    - An empty separator before the month, the day or the hour is
+      accepted only if every separator before it was empty too. A fully
+      fused value (`202608101500`) and a separated date with a fused clock
+      (`2026-08-10 1500`, `2026-08-10T1500`, `20260810 1500`) still parse.
+    - Once a space has separated two units, the separator before the hour
+      must be a space or a `T`. `2026-08-10 15.00` and `2026 08 10T15`
+      still parse, but in `2026-08 15.00` the `15.00` is a clock time
+      written with a dot, and it can no longer be a day and an hour.
+    - A dot is not accepted before the day when a space stood before the
+      month: `2026 12.30` is as much a clock time as `2026 12:30`.
+
+    A value the rules stop is handed to the named-date grammar, which now
+    also reads a numeric year-month (`2026-08`, `2026/08`, `2026.08`,
+    `2026 08`) as a month, so `2026-08 15:00` and `2026 08 15:00` read as
+    what they say, a month plus a time of day, and entry 62 rejects them
+    with its own message. The new element only runs on text the numeric
+    grammar has already declined, so it cannot change a value that parsed
+    before: `2026 08` alone, `2026 08 10` and `2026 08 10 15:00` are still
+    read by the numeric grammar. Everything else the rules stop is a
+    BAD_DATE with the generic message.
+
+    Real whoosh is no reference point here in either direction: its
+    grammar reads none of these numeric spellings. Its `bundle` tries the
+    named-date grammar before the numeric one, and that stops after the
+    year (whoosh-compat reorders the two, see entry 18), so
+    `English().date_from` returns `None` for `2026-08-10 15:00`,
+    `2026-08 15:00`, `2026-08 1500`, `2026-08-10:15:00`, `2026:08:10`,
+    `2026-08 15.00` and `2026 12.30` alike. What the oracle does with a numeric date comes from the
+    DATETIME field's own fallback parse, which strips the separators and
+    reads the digits compactly. Measured against the pinned oracle,
+    basedate 2026-09-14 12:00 UTC, next to what whoosh-compat returned
+    before this entry:
+
+    ```
+    query                     oracle                          before
+    added:'2026-08-10:15:00'  Nothing                         15:00 on 10 Aug
+    added:2026-08-10:15:00    all of Aug AND text             BAD_DATE (entry 54)
+    added:'2026:08:10'        Nothing                         all of 10 Aug
+    added:2026:08:10          08:10 today                     all of 10 Aug
+    added:'2026-08 1500'      15 Aug 00:00 .. 00:59:59.999999 15 Aug 00:00 .. 01:00
+    added:'2026 1230'         all of 30 Dec 2026              all of 30 Dec 2026
+    added:'2026-08 15.00'     15 Aug 00:00 .. 00:59:59.999999 15 Aug 00:00 .. 01:00
+    added:'2026 12.30'        all of 30 Dec 2026              all of 30 Dec 2026
+    added:'2026 08 15:00'     Nothing                         BAD_DATE, generic message
+    added:2026 08 15:00       all of 2026 AND text            BAD_DATE naming "2026 08"
+    ```
+
+    Both colon spellings now diagnose; whoosh never produced their
+    intended reading, so rejecting them costs no parity. The
+    `'2026-08 1500'` row is the day-and-hour misreading itself, present
+    in whoosh's fallback too, and it now diagnoses. The `'2026 1230'` row
+    is the one cell where a reading both sides produced is declined: a
+    year followed by a fused month and day is the compact twin of entry
+    21's `2020 12:30`, and just as ambiguous with a fused clock time
+    `12:30`, so the grammar does not guess.
+
+    The two dotted rows are the same two misreadings with a dot in place
+    of the colon or the fused digits, and both now diagnose with the
+    generic message: `2026-08 15.00` (and `2026 08 15.00`,
+    `2026/08 15.00`, `2026.08 15.00`, alone or as a bracket bound) was
+    15 August at 00:00, `2026 12.30` was 30 December and `2026 08.15` was
+    15 August. Neither is a time on a month in entry 62's sense, since
+    the month-name grammar has no dotted clock time. The same rules also
+    stop mixed spellings that did name a day and an hour, a space earlier
+    in the value and a dash, dot or slash before the hour
+    (`2026-08 10-15`, `2026-08 10.15:00`), or a dotted day after a spaced
+    year (`2026 08.10 15:00`): each read as 10 August at 15:00 and is now
+    a BAD_DATE with the generic message, because once a space has
+    separated the date the grammar cannot tell a later dot that separates
+    date units from one inside a clock time. A value with no space before
+    its hour is untouched: `2026-08-10-15` is still 10 August 15:00 to
+    16:00, `2026.08.15.10.30` and `2026-08-10.15:00` still read as those
+    times, and `2026-08-15.00` is still 15 August at hour 00, as
+    `2026.08.15.10` is that day at hour 10.
+
+    Written without quotes, a value the rules stop is judged by entry
+    61's run rule like any other. When no longer run parses in full, the
+    date keeps its first word and the rest stays a search term:
+    `added:2026-08 1500` is all of August AND the term `1500` (what real
+    whoosh does with it too), `added:2026 1230` all of 2026 AND `1230`,
+    and `added:2026-08-10 15:00:00:123456` all of 10 August AND the
+    leftover. `added:2026-08 15.00` and `added:2026 12.30` go the same
+    way (all of August AND `15.00`, all of 2026 AND `12.30`, again what
+    real whoosh does with them). Each of these used to be rejected, but
+    only because a misreading of the whole run parsed. `1500` is not a time of day in
+    the grammar's vocabulary (a clock time needs a colon or a meridiem),
+    and teaching it one would collide with a four-digit year, so this is
+    the same outcome as `added:2026-08 invoice`. A time the grammar does
+    know is read with the run, spaced or not: `added:2026 08 15:00` is
+    entry 62's time on a whole month, rejected whole with no suggestion.
+    It used to be rejected naming only `2026 08`, with the suggestion
+    `"2026 08"`, and following that suggestion searched all of August
+    with `15:00` left behind as a search term.
+
+    `added:2026T10:30`, entry 50's colon-split spelling, now diagnoses: its
+    colon would have introduced the day. So does the quoted
+    `added:'2026-08T15:00'`, which read as 15 August at 00:00 by the same
+    misreading with `T` in place of a space; the numeric year-month
+    element needs whitespace after the month, so this one is a BAD_DATE
+    with the generic message rather than entry 62's. (Unquoted, entry 54
+    already rejected it.)
+
+    The new diagnosing corpus lines take the entry 6 diagnostic skip, so
+    as with entry 61 no `allowlist.py` entry is needed for them, only the
+    corpus lines and the updated count in
+    `test_diagnostic_skip_count_matches_corpus`. The non-diagnosing
+    `added:2026-08 1500` line pins the accepted truncation above; its
+    date half is entry 18's separated-ISO shape and is claimed there.
+
+    Test references: `tests/test_parser_numeric_separators.py` (whole
+    file); `tests/test_parser_time_on_period.py`'s numeric year-month
+    cells; `tests/test_parser_dates.py`'s
+    `test_year_followed_by_a_clock_time_is_rejected`;
+    `tests/emitter/test_emit_time_on_period.py`'s
+    `test_a_misread_numeric_value_fails_at_emit` and
+    `test_an_unquoted_fused_clock_after_a_year_month_keeps_the_month_and_the_term`;
+    `tests/test_date_value_properties.py`;
+    `tests/differential/corpus_paperless.txt`'s `added:'2026-08 15:00'`,
+    `added:'2026 08 15:00'`, `added:2026 08 15:00`,
+    `added:'2026-08 1500'`, `added:'2026-08-10:15:00'`,
+    `added:'2026:08:10'`, `added:'2026 1230'`, `added:'2026-08 15.00'`,
+    `added:'2026 12.30'` and `added:2026-08 1500` lines.

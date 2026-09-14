@@ -332,11 +332,12 @@ def test_result_entry23_regex_covers_every_whoosh_stopword(word: str) -> None:
         pytest.param("created:[TO]", None, id="e12-boundless-range-unclaimed"),
         pytest.param("added:[dec to feb]", 12, id="e12-month-name-bounds-claimed"),
         pytest.param("added:{now TO now}", 44, id="e44-exclusive-exact-bounds"),
-        # entries 18/21: the space separator belongs to entry 21's
-        # month:day reading, not to entry 18's separated-ISO shape.
+        # entry 18: a space is not a separated-ISO separator. A year, a
+        # space and a clock time is diagnosed instead (entries 62 and 63),
+        # so no entry claims it.
         pytest.param("created:2020-01-01", 18, id="e18-dashed-iso"),
         pytest.param("added:'2020 5pm'", None, id="e18-space-then-time-unclaimed"),
-        pytest.param("added:'2020 12:30'", 21, id="e21-month-day-pair"),
+        pytest.param("added:'2020 12:30'", None, id="e18-space-then-clock-unclaimed"),
         # entries 23/24: the zero-token proxy only applies to TEXT fields.
         pytest.param("NOT (id:0)", None, id="e23-numeric-field-unclaimed"),
         pytest.param("NOT has_tag:a", None, id="e23-boolean-field-unclaimed"),
@@ -407,33 +408,6 @@ def test_allowlist_regex_scoping(query: str, expected_entry: int | None) -> None
         assert int(m.group(1)) == expected_entry, (
             f"{query!r} claimed by the wrong entry: {reason!r}"
         )
-
-
-@pytest.mark.parametrize(
-    ("value", "claimed"),
-    [
-        # Entry 21 diverges exactly when the colon pair can be read as a
-        # calendar month and a valid day of that month; measured cell by
-        # cell over every HH:MM pair. These spellings cannot be pinned
-        # through allowed_reason(), because entry 15's unknown-field
-        # alternative independently claims any "<2+ chars>:<2+ chars>" run
-        # (it reads "23:59" as an unknown field), so the pattern itself is
-        # asserted instead.
-        pytest.param("12:30", True, id="december-30"),
-        pytest.param("02:29", True, id="february-29-leap-overclaim"),
-        pytest.param("11:30", True, id="november-30"),
-        pytest.param("23:59", False, id="no-month-23"),
-        pytest.param("00:00", False, id="no-month-0"),
-        pytest.param("12:00", False, id="no-day-0"),
-        pytest.param("04:31", False, id="april-has-30-days"),
-        pytest.param("02:30", False, id="february-has-at-most-29"),
-        pytest.param("12:60", False, id="no-day-60"),
-    ],
-)
-def test_entry21_claims_exactly_the_readable_month_day_pairs(value: str, claimed: bool) -> None:
-    pattern = next(p for p, reason, _kind in ALLOW if "DIVERGENCES.md entry 21" in reason)
-    query = f"added:'2020 {value}'"
-    assert bool(pattern.search(query)) is claimed, query
 
 
 def test_the_lowercase_expanding_character_set_is_exactly_i_dot() -> None:

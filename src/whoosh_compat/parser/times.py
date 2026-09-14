@@ -410,10 +410,8 @@ class timespan:
         return result
 
 
-class CalendarPeriod(timespan):
-    """A ``timespan`` naming one whole calendar period that no single
-    ``adatetime`` unit can express (a week, a quarter), built directly by
-    the grammar element that recognizes it. ``unit`` names the period so a
+class _UnitSpan(timespan):
+    """A ``timespan`` whose ``unit`` names the period it spans, so a
     diagnostic about it can say which. Not part of upstream whoosh.
     """
 
@@ -422,7 +420,15 @@ class CalendarPeriod(timespan):
         self.unit = unit
 
 
-class TimeOnPeriod(timespan):
+class CalendarPeriod(_UnitSpan):
+    """A ``timespan`` naming one whole calendar period that no single
+    ``adatetime`` unit can express (a week, a quarter), built directly by
+    the grammar element that recognizes it. ``unit`` names the period so a
+    diagnostic about it can say which. Not part of upstream whoosh.
+    """
+
+
+class TimeOnPeriod(_UnitSpan):
     """What merging a time of day into a :class:`CalendarPeriod` produces,
     in either order: the period's own bounds, marked as carrying a time that
     names nothing, since a time of day needs a day to fall on.
@@ -432,13 +438,9 @@ class TimeOnPeriod(timespan):
     rejects it (see DIVERGENCES.md entry 62). Not part of upstream whoosh.
     """
 
-    def __init__(self, start: DateLike, end: DateLike, unit: str) -> None:
-        super().__init__(start, end)
-        self.unit = unit
-
     @classmethod
     def of(cls, span: timespan) -> TimeOnPeriod:
-        unit = span.unit if isinstance(span, (CalendarPeriod, TimeOnPeriod)) else "period"
+        unit = span.unit if isinstance(span, _UnitSpan) else "period"
         return cls(span.start, span.end, unit)
 
 

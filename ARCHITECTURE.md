@@ -143,10 +143,11 @@ forked from in turn. Within the forked pipeline:
   grammar (`Sequence`/`Combo`/`Choice`/`Bag`/`Regex` parser-combinator
   elements feeding `adatetime`/`timespan`) ported structurally unchanged.
   Among this fork's own grammar edits: a day number never precedes a colon
-  (`DIVERGENCES.md` entry 62). What's downstream of a successful date parse
-  is new (see §4). Two filters
-  *upstream* of it are new too, and they run in this order, just after
-  fieldname assignment and both confined to an explicitly named date field:
+  (`DIVERGENCES.md` entry 62), and the numeric grammar's separator rules and
+  its numeric year-month element (entry 63). What's downstream of a
+  successful date parse is new (see §4). Two filters *upstream* of it are
+  new too, and they run in this order, just after fieldname assignment and
+  both confined to an explicitly named date field:
   - `DateParserPlugin.do_date_phrases` (priority 101) joins an unquoted
     multi-word date keyword (`added:previous month`) back into a single
     value node before the grammar sees it. In Whoosh a value always ends at

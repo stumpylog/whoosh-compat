@@ -188,9 +188,31 @@ def test_diagnostic_skip_count_matches_corpus() -> None:
     # with a whole period, which whoosh resolves to a range pinned to that
     # time on the period's first and last day and whoosh-compat diagnoses
     # BAD_DATE. No existing line changed classification.
-    assert count == 23, (
+    #
+    # Rose from 23 to 33 with DIVERGENCES.md entry 63, in three steps. To
+    # 29: a colon now separates clock units only and a fused boundary needs
+    # a fully fused date, so `added:2026T10:30`, whose colon used to
+    # introduce the day, now diagnoses BAD_DATE, and so do five new
+    # corpus_paperless.txt lines (`added:'2026-08 15:00'`,
+    # `added:'2026-08 1500'`, `added:'2026-08-10:15:00'`,
+    # `added:'2026:08:10'`, `added:'2026 1230'`); a sixth new line,
+    # `added:2026-08 1500`, does not diagnose and is not counted. To 31:
+    # once a space has separated two units of a numeric date, the hour must
+    # follow a space or a T, and a dotted day may not follow a spaced year,
+    # so a dotted clock time is no longer read as a day and an hour; two new
+    # lines (`added:'2026-08 15.00'`, `added:'2026 12.30'`) diagnose BAD_DATE
+    # where whoosh reads 15 August at hour 00 and all of 30 December. To 33:
+    # a space-separated year-month is now read as a month too, so a time
+    # after it is entry 62's time on a whole month; two new lines
+    # (`added:'2026 08 15:00'`, where whoosh matches nothing, and
+    # `added:2026 08 15:00`, where whoosh searches all of 2026 and leaves the
+    # rest as text) diagnose BAD_DATE. Those two diagnosed before too, with
+    # the generic message and a suggestion to quote "2026 08", but neither
+    # was in the corpus. No existing line changed classification in the
+    # last two steps.
+    assert count == 33, (
         f"{count} corpus queries now take the DIVERGENCES.md entry 6 diagnostic skip,"
-        " expected 23; if this is an intentional parser change (diagnosing a new"
+        " expected 33; if this is an intentional parser change (diagnosing a new"
         " shape, or fixing one that used to diagnose), update this pinned count and"
         " say so in the commit message, don't just silently adjust the number"
     )

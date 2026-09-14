@@ -27,6 +27,8 @@ from datetime import datetime
 
 import pytest
 
+from tests.date_messages import is_time_on_period
+from tests.date_messages import time_on_period_message
 from whoosh_compat import FieldKind
 from whoosh_compat import FieldRegistry
 from whoosh_compat import FieldSpec
@@ -99,7 +101,7 @@ def test_period_keyword_with_a_time_is_a_bad_date(registry: FieldRegistry, q: st
     """
     result = _parse(registry, q)
     assert [d.kind for d in result.diagnostics] == [DiagnosticKind.BAD_DATE]
-    assert " pairs a time of day with a whole " in result.diagnostics[0].message
+    assert is_time_on_period(result.diagnostics[0])
     assert result.diagnostics[0].suggestion is None
 
 
@@ -121,9 +123,7 @@ def test_unquoted_leading_time_on_a_period_is_rejected(registry: FieldRegistry) 
     diag = result.diagnostics[0]
     assert diag.kind is DiagnosticKind.BAD_DATE
     assert diag.raw_value == "3pm previous week"
-    assert diag.message == (
-        "'3pm previous week' pairs a time of day with a whole week; name a day, or drop the time"
-    )
+    assert diag.message == time_on_period_message("3pm previous week", "week")
     assert diag.suggestion is None
 
 
@@ -143,9 +143,7 @@ def test_calendar_unit_keyword_rejects_a_time(registry: FieldRegistry, q: str) -
     """
     result = _parse(registry, q, basedate=AFTERNOON)
     assert [d.kind for d in result.diagnostics] == [DiagnosticKind.BAD_DATE]
-    assert result.diagnostics[0].message == (
-        "'previous month 3pm' pairs a time of day with a whole month; name a day, or drop the time"
-    )
+    assert result.diagnostics[0].message == time_on_period_message("previous month 3pm", "month")
 
 
 @pytest.mark.parametrize(

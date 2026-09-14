@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 import pytest
 
 import whoosh_compat as wc
+from tests.date_messages import is_time_on_period
+from tests.date_messages import time_on_period_message
 from whoosh_compat import ast
 from whoosh_compat.errors import Cause
 from whoosh_compat.errors import Diagnostic
@@ -80,7 +82,7 @@ def test_grammar_never_exceeds_lookahead_cap(text: str) -> None:
     silently stop covering the grammar without this test noticing.
     """
     plugin = _plugin_for_cap_test()
-    assert plugin._fully_parses(text), "sample is not a full parse, fix the sample"
+    assert plugin._raw_full_parse(text) is not None, "sample is not a full parse, fix the sample"
     assert len(text.split()) <= plugin._UNQUOTED_LOOKAHEAD + 1
 
 
@@ -616,6 +618,29 @@ DECLINES = "declines"
             " not August 15th and a dangling ':00'",
             id="month-name-then-clock-time",
         ),
+        pytest.param(
+            "added:2026-08 15:00",
+            TIME_ON_PERIOD,
+            None,
+            "a numeric year-month is a month, so this is a month and a time",
+            id="numeric-year-month-then-clock-time",
+        ),
+        pytest.param(
+            "added:2026-08 1500",
+            DECLINES,
+            None,
+            "a fused four-digit time is not a clock time the grammar reads, and a"
+            " separated year-month cannot take a fused day, so no run parses in"
+            " full and the date keeps its first word",
+            id="numeric-year-month-then-fused-clock",
+        ),
+        pytest.param(
+            "added:2026 1230",
+            DECLINES,
+            None,
+            "a year followed by a fused month and day is not read, so no run parses in full",
+            id="year-then-fused-month-and-day",
+        ),
     ],
 )
 def test_unquoted_date_rejection_cell_matrix(
@@ -640,7 +665,7 @@ def test_unquoted_date_rejection_cell_matrix(
     res = dparse(query, reg)
     bad_dates = [d for d in res.diagnostics if d.kind is DiagnosticKind.BAD_DATE]
     quoted = [d for d in bad_dates if d.suggestion is not None]
-    on_period = [d for d in bad_dates if " pairs a time of day with a whole " in d.message]
+    on_period = [d for d in bad_dates if is_time_on_period(d)]
     if outcome == QUOTE:
         assert quoted, note
     elif outcome == TIME_ON_PERIOD:
@@ -1197,23 +1222,18 @@ def test_bare_unquoted_t_value_is_rejected_not_truncated(
             datetime(2026, 11, 1, tzinfo=BERLIN),
             id="quoted-year-t-month",
         ),
-        pytest.param(
-            "added:2026T10:30",
-            datetime(2026, 10, 30, tzinfo=BERLIN),
-            datetime(2026, 10, 31, tzinfo=BERLIN),
-            id="colon-split-day-joins-year-t-month",
-        ),
     ],
 )
 def test_no_separator_t_value_parses_as_year_t_month(
     reg: FieldRegistry, query: str, expected_lo: datetime, expected_hi: datetime
 ) -> None:
     # DIVERGENCES.md entry 50: with T in the separator class, a dash-less
-    # "2026T10" reads as year-T-month; a colon-split trailing token
-    # ("2026T10:30") is joined by the date parser into a day-precision
-    # reading. Real whoosh cannot read these at all (_NullQuery, matches
-    # nothing), so whoosh-compat's reading is the compat-favorable side
-    # of a documented divergence, not parity.
+    # "2026T10" reads as year-T-month. Real whoosh cannot read it at all
+    # (_NullQuery, matches nothing), so whoosh-compat's reading is the
+    # compat-favorable side of a documented divergence, not parity. The
+    # colon-split "2026T10:30" is a BAD_DATE instead, since a colon
+    # separates clock units only (DIVERGENCES.md entry 63; see
+    # test_parser_numeric_separators.py).
     r = dparse(query, reg).ast
     assert isinstance(r, ast.DateRange)
     assert r.lo == expected_lo.astimezone(UTC)
@@ -1682,31 +1702,23 @@ def test_range_both_sides_are_periods_cannot_combine(reg: FieldRegistry) -> None
 
 
 @pytest.mark.parametrize(
-    ("query", "expected_lo", "expected_hi"),
+    "value",
     [
-        # A year plus a colon-separated time is ambiguous. The separated-date
-        # grammar alternative accepts ":" as a separator and is tried first,
-        # so this reads as a calendar day, not a time of day. See
-        # DIVERGENCES.md entry 21.
-        # Berlin is UTC+1 in December, so the day starts at 23:00 the day before.
-        pytest.param(
-            "added:'2020 12:30'",
-            datetime(2020, 12, 29, 23, 0),
-            datetime(2020, 12, 30, 23, 0),
-            id="year-plus-time-is-a-date",
-        ),
+        pytest.param("2020 12:30", id="pair-readable-as-month-and-day"),
+        pytest.param("2020 23:59", id="pair-with-no-calendar-reading"),
+        pytest.param("2020 5pm", id="meridiem"),
     ],
 )
-def test_year_followed_by_time(
-    reg: FieldRegistry, query: str, expected_lo: datetime, expected_hi: datetime
-) -> None:
-    # One calendar day wide: the month-and-day reading, not an instant.
-    r = dparse(query, reg).ast
-    assert isinstance(r, ast.DateRange)
-    assert r.lo == expected_lo.replace(tzinfo=UTC)
-    assert r.hi == expected_hi.replace(tzinfo=UTC)
-    assert r.incl_lo
-    assert not r.incl_hi
+def test_year_followed_by_a_clock_time_is_rejected(reg: FieldRegistry, value: str) -> None:
+    # DIVERGENCES.md entry 21: "12:30" after a year used to read as the
+    # month and day (30 December). A colon now separates clock units only
+    # (entry 63), and a time of day on a whole year is rejected (entry 62),
+    # so every spelling of the shape is the same rejection.
+    result = dparse(f"added:'{value}'", reg)
+    assert len(result.diagnostics) == 1
+    diag = result.diagnostics[0]
+    assert diag.kind is DiagnosticKind.BAD_DATE
+    assert diag.message == time_on_period_message(value, "year")
 
 
 @pytest.mark.parametrize(

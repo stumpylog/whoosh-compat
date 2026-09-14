@@ -321,7 +321,8 @@ RESULT_ALLOW: list[tuple[re.Pattern[str], str]] = [
         ),
     ),
     # whoosh-bug (DIVERGENCES.md entry 50): a no-separator T-fused value
-    # ("2026T10", bare or single-quoted, optionally colon-extended).
+    # ("2026T10", bare or single-quoted; the colon-split spelling
+    # diagnoses instead, DIVERGENCES.md entry 63).
     # whoosh parses it to _NullQuery and returns nothing; whoosh-compat
     # reads year-T-month and returns every document in that window.
     # T directly after the year keeps this disjoint from entries 48/49;

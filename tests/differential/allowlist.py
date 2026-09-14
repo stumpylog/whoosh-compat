@@ -1045,16 +1045,17 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
         DivergenceKind.MISMATCH,
     ),
     # whoosh-bug (DIVERGENCES.md entry 50): a NO-separator T-fused value
-    # ("2026T10", bare or single-quoted, optionally with a colon-split
-    # day token as in "2026T10:30"). whoosh's grammar cannot read it at
-    # all and bottoms out in _NullQuery; whoosh-compat's T-separator
-    # grammar reads year-T-month (joining a colon-split trailing token
-    # into a day). T directly after the year keeps this disjoint from
+    # ("2026T10", bare or single-quoted). whoosh's grammar cannot read it
+    # at all and bottoms out in _NullQuery; whoosh-compat's T-separator
+    # grammar reads year-T-month. The colon-split "2026T10:30" diagnoses
+    # BAD_DATE instead (a colon separates clock units only, DIVERGENCES.md
+    # entry 63), so it takes the entry-6 skip before this entry is
+    # consulted. T directly after the year keeps this disjoint from
     # entries 48/49 (which require dashes); the double-quoted spelling
     # belongs to entry 45's crash cell. Ordered before the entry-15
-    # unknown-field-demotion pattern, which would otherwise mis-claim
-    # the inner-colon spelling by reading "2026T10" as an unknown FIELD
-    # named 2026T10 with value 30.
+    # unknown-field-demotion pattern, which would otherwise claim the
+    # colon-split spelling by reading "2026T10" as an unknown FIELD named
+    # 2026T10 with value 30.
     (
         re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):'?\d{{4}}[Tt]\d"),
         (
@@ -1087,11 +1088,10 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
     # NOT a separator here, even though the date grammar accepts one: a
     # four-digit run followed by a space is followed by *anything*, not by
     # an ISO date part, and the shapes that pulls in are either simply
-    # equal ("added:'2020 5pm'", "created:0125 0", both measured EQUAL) or
-    # divergent for an entirely different reason ("added:'2020 12:30'",
-    # which is entry 21's month:day-vs-time-of-day reading and now has its
-    # own entry directly below), for which this entry's "numerically
-    # correct on both sides" reason is provably false.
+    # equal ("created:0125 0", measured EQUAL) or diagnosed for an entirely
+    # different reason ("added:'2020 12:30'" and "added:'2020 5pm'", a time
+    # of day on a whole year, DIVERGENCES.md entries 62 and 63), for which
+    # this entry's "numerically correct on both sides" reason is false.
     (
         re.compile(rf"\b(?:{DATE_FIELDS_PATTERN}):'?\d{{4}}[-./]\d"),
         (
@@ -1099,41 +1099,6 @@ ALLOW: list[tuple[re.Pattern[str], str, DivergenceKind]] = [
             " correctly on both sides but via a different mechanism/AST"
             " shape (whoosh's ErrorNode-falls-back-to-field.parse_query vs"
             " whoosh-compat's single DateParserPlugin grammar path)"
-        ),
-        DivergenceKind.MISMATCH,
-    ),
-    # DIVERGENCES.md entry 21: a year, whitespace, then a colon-separated
-    # pair that can be read as a calendar month:day. whoosh-compat reads
-    # the pair as month and day of that year ("added:'2020 12:30'" ->
-    # 30 Dec 2020); real whoosh reads it as a time of day on EVERY day of
-    # the year (2020-01-01 11:30 .. 2020-12-31 11:30:59). Entry 21 had no
-    # entry of its own until this sweep: entry 18's space-separator
-    # alternative claimed the shape first and recorded its own (here
-    # false) "numerically correct on both sides" reason for it.
-    #
-    # Scoped by what the divergence actually needs, measured cell by cell
-    # over every hour x minute pair: a two-digit left half in 01..12 (a
-    # readable month) and a right half that is a valid day of THAT month.
-    # A left half of 00 or 13..23, or a right half of 00 or 32..59,
-    # compares EQUAL (no calendar reading is available, so both sides fall
-    # back to the time of day). The month-length arms below are exact for
-    # 30- and 31-day months; February admits 29 unconditionally rather
-    # than deriving leap years from the year digits, so "…'2021 02:29'"
-    # (EQUAL) is the one residual over-claim, a single spelling per
-    # non-leap year, kept because a leap-year-aware regex here would be
-    # far less legible than the divergence it guards.
-    (
-        re.compile(
-            rf"\b(?:{DATE_FIELDS_PATTERN}):'?\d{{4}}\s+"
-            r"(?:(?:0[13578]|1[02]):(?:0[1-9]|[12]\d|3[01])"
-            r"|(?:0[469]|11):(?:0[1-9]|[12]\d|30)"
-            r"|02:(?:0[1-9]|1\d|2\d))"
-            r"(?!\d)"
-        ),
-        (
-            "DIVERGENCES.md entry 21: a year followed by a colon-separated"
-            " month:day pair reads as a calendar date in whoosh-compat but as"
-            " a time of day on every day of that year in whoosh"
         ),
         DivergenceKind.MISMATCH,
     ),
