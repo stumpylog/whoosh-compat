@@ -192,10 +192,9 @@ class TestRule5Dedupe:
         # exactly the values that make float()-based canonicalization
         # lossy: two distinct ints above 2**53 can round to the same
         # double. A *nested* Term (inside an And, not a bare top-level
-        # sibling) is the reachable case, since only a childless leaf at
-        # the top of _dedupe's own dispatch takes _leaf_key's raw-value
-        # path; a Term one level down goes through _structural_key's
-        # atomic-value encoding instead. Real query text reaches this:
+        # sibling) is the case worth pinning: dedupe keys it as part of its
+        # parent's structure, so a lossy value encoding there would merge
+        # the two branches. Real query text reaches this:
         # `(asn:9007199254740993 AND x) OR (asn:9007199254740992 AND x)`
         # normalizes to an And per branch, each a sibling of the other in
         # the Or - collapsing them would silently drop a branch of a
@@ -285,8 +284,8 @@ class TestIterativeNormalizeDeepTree:
         # a pre-iterative recursive-postorder reimplementation of this same
         # shape was bisected and found to RecursionError at depth 500 and
         # survive at 400, so 1250 keeps a healthy 2.5x margin over that
-        # failure point while costing seconds rather than the ~50s 5000
-        # costs on this machine.
+        # failure point while costing about a second rather than the
+        # ~20s 5000 costs on this machine.
         depth = 1250
         tree: Node = T("z")
         for i in range(depth):
@@ -328,111 +327,33 @@ class TestIterativeNormalizeDeepTree:
 # normalize()/_dedupe() must also tolerate a node object referenced by more
 # than one parent (a DAG, not just a tree): normalize()/parse() never
 # produce one, but nothing stops a caller from building
-# And(children=(x, Not(child=x))) for the same `x` object. _structural_key's
-# own memo eviction (added to bound memory on a deep chain) is exactly the
-# kind of change that can break this without any of the *depth* tests above
-# noticing, since the failure here is about a node having two parents, not
-# about being deep or wide.
-#
-# _dedupe calls _structural_key once *per sibling*, each call starting a
-# fresh discovery/memo pass: sharing between two top-level siblings in the
-# same `nodes` tuple therefore never lands inside a single _structural_key
-# call at all, and cannot exercise the bug below. Both of the two ways
-# sharing can actually reach a single _structural_key call are covered
-# separately below: calling it directly with the shared node genuinely at
-# the top (TestStructuralKeyToleratesSharedNode - see its own docstring
-# for which of its cases actually pin the bug and which merely
-# characterize adjacent, non-triggering shapes), and going through the
-# public normalize() with the shared subtree nested inside one sibling,
-# itself composite (TestNormalizeToleratesSharedSubtreeInOneSibling - all
-# six shapes there were confirmed, directly against the previous commit,
-# to raise KeyError there and pass here).
-class TestStructuralKeyToleratesSharedNode:
-    """Two kinds of case live here, and they are not interchangeable as
-    regression coverage: some genuinely PIN the fix (they fail with
-    ``KeyError`` on the pre-fix commit and pass now); others are
-    CHARACTERIZATION, not a regression pin - they pass on *both* commits,
-    because the shape they build cannot reach the bug at all, or happens
-    to land on the non-triggering side of it. Both kinds are legitimate
-    behavior tests (a shared node must not raise, on any shape), but only
-    the PIN cases would catch a reintroduction of this specific bug; the
-    CHARACTERIZATION cases would stay green even if the fix were reverted.
-    Confirmed directly against the pre-fix commit (`48febd4`, via a
-    temporary `git worktree`) for every case below, not asserted from the
-    shape alone.
-    """
-
+# And(children=(x, Not(child=x))) for the same `x` object. Dedupe keys a
+# shared node once and every parent reads that key, in whichever order the
+# parents are reached. Each shape below sits beside another sibling so that
+# it is itself keyed as a whole.
+class TestNormalizeToleratesSharedNode:
     @pytest.mark.parametrize(
         "build",
         [
             pytest.param(lambda x: And(children=(Not(child=x), x)), id="wrapped-then-shared"),
             pytest.param(lambda x: AndNot(positive=Not(child=x), negative=x), id="andnot-shared"),
-        ],
-    )
-    def test_shared_node_does_not_raise_pin(self, build: Callable[[Node], Node]) -> None:
-        """PIN: both shapes raise ``KeyError`` on `48febd4` and pass here."""
-        from whoosh_compat.ast import _structural_key
-
-        shared = T("x")
-        tree = build(shared)
-        _structural_key(tree)  # must not raise KeyError (or anything else)
-
-    @pytest.mark.parametrize(
-        "build",
-        [
             pytest.param(lambda x: And(children=(x, x)), id="same-object-twice-direct"),
             pytest.param(lambda x: And(children=(x, Not(child=x))), id="shared-then-wrapped"),
         ],
     )
-    def test_shared_node_does_not_raise_characterize(self, build: Callable[[Node], Node]) -> None:
-        """CHARACTERIZATION, not a regression pin: both shapes pass on
-        `48febd4` too, for different reasons, so neither would catch this
-        bug coming back - they are kept because "a shared node must not
-        raise" is still a real behavior worth documenting for each shape.
+    def test_shared_node_does_not_raise(self, build: Callable[[Node], Node]) -> None:
+        result = normalize(Or(children=(build(T("x")), T("z"))))
+        assert isinstance(result, Or)
+        assert len(result.children) == 2
 
-        ``same-object-twice-direct`` (``And(x, x)``) has only one
-        *distinct* parent (both occurrences are the same ``And``), and the
-        bug needs two - a single-parent shape was never able to trigger
-        eviction-before-second-read in the first place, fixed or not.
-
-        ``shared-then-wrapped`` (``And(x, Not(child=x))``) is the
-        non-triggering half of an order-dependent pair, and that asymmetry
-        is itself the reason this bug survived earlier testing: on
-        `48febd4`, evicting ``x``'s ``memo`` entry after its *first*
-        reader (here, ``x`` itself, processed before ``Not``) left the
-        entry gone by the time the *second* reader needed it - except
-        here the second reader is ``Not(child=x))``, which reads ``x`` on
-        its own way to becoming ready, so by the time this ``And`` itself
-        combines, both children's reads already happened in an order that
-        never left a stale gap. Swap the child order
-        (``And(children=(Not(child=x), x))``, the ``wrapped-then-shared``
-        PIN case above) and the same sharing raises: whichever of ``x``'s
-        two readers is visited second finds the entry already evicted by
-        the first. The bug was always order-dependent on which of a
-        shared node's parents got visited first, not on the tree's shape
-        alone - which is exactly what let this shape hide it.
-        """
-        from whoosh_compat.ast import _structural_key
-
-        shared = T("x")
-        tree = build(shared)
-        _structural_key(tree)  # must not raise KeyError (or anything else)
-
-    def test_shared_object_content_matches_unshared_equivalent(self) -> None:
-        """PIN: raises ``KeyError`` on `48febd4` too (the shared ``x`` in
-        ``AndNot(positive=Not(child=x), negative=x)`` is read by two
-        distinct parents, ``Not`` and the ``AndNot`` itself). Also checks
-        something the raise/no-raise pins above don't: the key a shared
-        node produces must match what an unshared but content-identical
-        tree produces - sharing is an implementation detail of how the
-        caller built the tree, not a semantic signal.
-        """
-        from whoosh_compat.ast import _structural_key
-
+    def test_shared_tree_dedupes_against_its_unshared_equivalent(self) -> None:
+        # Sharing is an implementation detail of how the caller built the
+        # tree, not a semantic signal: a shared tree and an unshared but
+        # content-identical one are duplicates.
         shared = T("x")
         shared_tree = AndNot(positive=Not(child=shared), negative=shared)
         unshared_tree = AndNot(positive=Not(child=T("x")), negative=T("x"))
-        assert _structural_key(shared_tree) == _structural_key(unshared_tree)
+        assert normalize(Or(children=(shared_tree, unshared_tree))) == shared_tree
 
 
 class TestNormalizeToleratesSharedSubtreeInOneSibling:

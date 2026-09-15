@@ -1,12 +1,14 @@
 """Phrase emission (including the 1- and 0-token degenerate cases)."""
 
 import contextlib
+import re
 from collections.abc import Callable
 
 import pytest
 import tantivy
 
 from whoosh_compat import ast
+from whoosh_compat import parse as parse_query
 from whoosh_compat.emitters.tantivy_ import emit as emit_
 from whoosh_compat.errors import DiagnosticKind
 from whoosh_compat.errors import QueryError
@@ -355,3 +357,61 @@ def test_phrase_emission_never_raises_undocumented_exception(
     # documented exception types: fine.
     with contextlib.suppress(QueryError):
         emit_ast(node, tindex, ereg)
+
+
+# -- phrases whose words differ but join to the same text -------------------
+#
+# An analyzer whose tokens can contain a space (shingle-style) can turn two
+# different phrases into equal-text phrases with different word tuples. The
+# emitter builds the phrase query from the words, so they match different
+# documents, and duplicate removal must keep both.
+
+_PAIRED_WORDS = r"[a-z]+ [a-z]+|[a-z]+"
+
+
+def _space_token_fixture() -> tuple[tantivy.Index, FieldRegistry]:
+    """An index and registry whose tokens can contain a space.
+
+    The regex joins two words separated by one space into a single token
+    unless punctuation breaks the pair, so doc 1, "a b c. z", indexes as
+    ["a b", "c", "z"] and doc 2, "a, b c. z", as ["a", "b c", "z"]. The
+    registry's query-time analyzer applies the same regex.
+    """
+    sb = tantivy.SchemaBuilder()
+    sb.add_unsigned_field("id", stored=True, indexed=True, fast=True)
+    sb.add_text_field("content", stored=True, tokenizer_name="paired_words")
+    schema = sb.build()
+    index = tantivy.Index(schema)
+    index.register_tokenizer(
+        "paired_words",
+        tantivy.TextAnalyzerBuilder(tantivy.Tokenizer.regex(_PAIRED_WORDS)).build(),
+    )
+    w = index.writer()
+    for doc_id, text in ((1, "a b c. z"), (2, "a, b c. z")):
+        doc = tantivy.Document()
+        doc.add_unsigned("id", doc_id)
+        doc.add_text("content", text)
+        w.add_document(doc)
+    w.commit()
+    index.reload()
+    registry = FieldRegistry(
+        [FieldSpec("content", FieldKind.TEXT, analyzer=lambda t: re.findall(_PAIRED_WORDS, t))]
+    )
+    return index, registry
+
+
+def test_phrases_with_different_words_but_equal_text_both_match() -> None:
+    index, registry = _space_token_fixture()
+    # "a b c" analyzes to ("a b", "c") and "a, b c" to ("a", "b c"): both
+    # join to "a b c", and each phrase matches only its own document.
+    parsed = parse_query(
+        '(content:"a b c" content:z) OR (content:"a, b c" content:z)',
+        registry=registry,
+        default_fields=["content"],
+    )
+    assert parsed.diagnostics == ()
+    q = emit_(parsed.ast, index=index, registry=registry)
+    assert search_ids(index, q) == [1, 2]
+    analyzed = ast.analyze(parsed.ast, registry)
+    assert isinstance(analyzed, ast.Or)
+    assert len(analyzed.children) == 2

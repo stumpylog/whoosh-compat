@@ -212,13 +212,16 @@ and are deliberately excluded from equality/hashing the same way
 independent semantic content. One deliberate carve-out: the
 duplicate-sibling dedupe (shared by `normalize()` and `analyze()`'s group
 rebuild, which routes through the same `_dedupe`) keys on node equality
-*plus* `Phrase.words` and the `analyzed` flag, because both genuinely are
-result-bearing there: the emitter builds its positional `phrase_query`
-from `words` (a shingle-style analyzer whose tokens contain spaces can
+*plus* `Phrase.words` and the `analyzed` flag, at every depth, and compares
+field values by type and print (`repr`) as well as value, because all of
+these genuinely are result-bearing there: the emitter builds its positional
+`phrase_query` from `words` (a shingle-style analyzer whose tokens contain spaces can
 produce two equal-comparing phrases with different word tuples and
-different match sets; real whoosh's own `Phrase.__eq__` compares the word
-lists and keeps both), and an unanalyzed leaf, unlike its equal-comparing
-analyzed twin, would still be tokenized by a later `analyze()` pass.
+different match sets, from ordinary query text; real whoosh's own
+`Phrase.__eq__` compares the word lists and keeps both), an unanalyzed
+leaf, unlike its equal-comparing analyzed twin, would still be tokenized
+by a later `analyze()` pass, and `1`, `True` and `1.0` as `Term` text
+search for different terms even though they compare equal.
 
 **`fields.py`**: `FieldKind` (TEXT, KEYWORD, U64, DATE, DATETIME,
 BOOLEAN_EXISTS, JSON), `Multitoken` (how multi-token field values combine:
@@ -739,25 +742,24 @@ saw a `QueryError` for this shape before the fix and still does after it;
 nothing changed there. The only place this fix changes observable
 behavior is a caller invoking `ast.normalize()`/`ast.analyze()` directly
 on a hand-built tree and using the result for something other than
-`emit()`. `_dedupe` now computes its key with its own iterative,
-memoized traversal (matching the same node-equality semantics, including
-the `Phrase.words`/`analyzed` extension described on its docstring, and
-the NaN/negative-zero quirks `Boosted.boost` raises for a string-based
-key - see `_encode_field`'s docstring, including why that key
-deliberately does *not* attempt numeric-tower canonicalization: doing so
-once traded a reachable, silent data-loss bug - two distinct large
-integers on a U64/ASN field rounding to the same `float` and one query
-branch being silently dropped - for closing an unreachable one) instead
-of relying on `__hash__`. That same traversal also has to tolerate a
-node object referenced by more than one parent (a DAG, not just a tree):
-nothing `normalize()`/`parse()` ever produce shares a node this way, but
-nothing stops a caller from building one, and an early version of the
-memory fix below evicted a shared child's key as soon as its *first*
-parent read it, raising `KeyError` for its second parent - order-
-dependent on which parent happened to be visited first, not on the
-tree's actual shape. `_structural_key` now discovers the full reachable
-node set up front and tracks, per node, how many distinct parents still
-need to read it before its entry may be evicted.
+`emit()`. `_dedupe` now keys siblings without `__hash__`: `ast._Interner` assigns
+each distinct structure a small integer once per public `normalize()` or
+`analyze()` call (hash-consing). A node's key is a tuple of its type and
+its field values, with each child node replaced by its interned integer,
+so hashing a key never descends the tree, and each node is keyed once per
+call however many ancestors dedupe it. Keying runs on an explicit work
+stack and handles a node object referenced by more than one parent (a DAG,
+which `normalize()`/`parse()` never produce but a caller may build) by
+keying it once for all of them. The key follows node equality plus the
+`Phrase.words`/`analyzed` extension described above, with two further
+rules, both in the safe direction: values are compared by type and print
+(`repr`) as well as value, and a value that is not equal to itself (NaN of
+any numeric type) or cannot be hashed never matches anything. Numeric
+values are never canonicalized through `float()`: an earlier string-based
+key did that once and merged two distinct large integers on a U64/ASN
+field, silently dropping a query branch. The interner's docstring has the
+details, including why NaN cannot follow `==` across the supported
+interpreters.
 
 The cap bounds recursion depth, not CPU time: parse time is still
 quadratic in the length of a long unmatched word-character run (the
@@ -811,6 +813,17 @@ accepted: a length cap would have changed which queries work, and the
 accepted language of each is pinned unchanged by differential checks against
 the previous implementations (and, for the glob, against the
 `fnmatch.translate` oracle that defines it).
+
+One further super-linear cost sat in the AST rather than the parser:
+duplicate-sibling removal in `normalize()` was roughly cubic in nesting
+depth for groups that alternate AND and OR (same-type nesting flattens, so
+only alternation keeps a tree deep): every level rebuilt a string key for
+its whole remaining subtree, each embedding its children's keys. A
+99-level, 1466-character query took about 14s through `parse()` and
+`emit()`, well under a 4096-character host cap, and a hand-built depth of
+1000 took 17s to 35s in `normalize()` alone. Keying each structure once
+per call (see the `_dedupe` note above) makes both linear: about 0.2s and
+0.02s. `tests/test_dedupe.py` pins both shapes with wall-clock bounds.
 
 **Spans are preserved through `normalize()`, not just set at parse time.**
 Every `Node` carries an optional `startchar`/`endchar` (character offsets
