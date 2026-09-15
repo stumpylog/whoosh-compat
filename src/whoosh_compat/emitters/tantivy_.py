@@ -720,17 +720,22 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             )
         )
 
-    def _resolve(self, field: FieldRef | None) -> ResolvedField:
+    def _resolve(self, field: FieldRef | None, node: ast.Node) -> ResolvedField:
+        """Resolve ``field``, the field ``node`` queries, failing at ``node``'s
+        positions if it cannot be resolved.
+        """
         if field is None:
             self._fail(
                 DiagnosticKind.AST_UNFIELDED_TERM,
                 message="cannot emit an unfielded term",
+                node=node,
             )
         resolved = self.registry.resolve(field)
         if resolved is None:
             self._fail(
                 DiagnosticKind.AST_UNKNOWN_FIELD,
                 message=f"unknown field {str(field)!r}",
+                node=node,
                 raw_value=str(field),
             )
         return resolved
@@ -951,13 +956,13 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     def visit_every(self, node: ast.Every) -> tantivy.Query:
         if node.field is None:
             return tantivy.Query.all_query()
-        resolved = self._resolve(node.field)
+        resolved = self._resolve(node.field, node)
         if resolved.spec.kind is FieldKind.BOOLEAN_EXISTS:
             # A BOOLEAN_EXISTS field has no physical column of its own to
             # check "exists" against; "existence" only ever means its
             # exists_target's, same redirect as visit_term/visit_phrase's
             # BOOLEAN_EXISTS branches.
-            resolved = self._resolve(FieldRef(resolved.spec.exists_target))  # type: ignore[arg-type]
+            resolved = self._resolve(FieldRef(resolved.spec.exists_target), node)  # type: ignore[arg-type]
         return self._exists_query(resolved, node=node)
 
     def visit_errorleaf(self, node: ast.ErrorLeaf) -> tantivy.Query:
@@ -975,7 +980,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # for an invalid subpath reference instead of silently treating
             # it as a plain field.
 
-        resolved = self._resolve(node.field)
+        resolved = self._resolve(node.field, node)
         spec = resolved.spec
 
         if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
@@ -1011,7 +1016,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # fast JSON field (ExistsStrategy.FAST_JSON_FIELD); both shapes
             # emit correctly through _exists_query's strategy dispatch, so
             # nothing here may assume a plain non-JSON canonical name.
-            target = self._resolve(FieldRef(spec.exists_target))  # type: ignore[arg-type]
+            target = self._resolve(FieldRef(spec.exists_target), node)  # type: ignore[arg-type]
             exists = self._exists_query(target, node=node)
             if _is_truthy(node.text):
                 return exists
@@ -1048,7 +1053,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # for an invalid subpath reference instead of silently treating
             # it as a plain field.
 
-        resolved = self._resolve(node.field)
+        resolved = self._resolve(node.field, node)
         spec = resolved.spec
 
         if spec.kind in (FieldKind.TEXT, FieldKind.KEYWORD):
@@ -1111,7 +1116,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             # fast JSON field (ExistsStrategy.FAST_JSON_FIELD); both shapes
             # emit correctly through _exists_query's strategy dispatch, so
             # nothing here may assume a plain non-JSON canonical name.
-            target = self._resolve(FieldRef(spec.exists_target))  # type: ignore[arg-type]
+            target = self._resolve(FieldRef(spec.exists_target), node)  # type: ignore[arg-type]
             exists = self._exists_query(target, node=node)
             if node.text == "*" or _is_truthy(node.text):
                 return exists
@@ -1136,8 +1141,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         )
 
     def visit_prefix(self, node: ast.Prefix) -> tantivy.Query:
-        resolved = self._resolve(node.field)
-        self._reject_pattern_incompatible_kind(resolved)
+        resolved = self._resolve(node.field, node)
+        self._reject_pattern_incompatible_kind(resolved, node)
         spec = resolved.spec
         text = str(node.text)
         if spec.pattern_normalizer is None:
@@ -1151,8 +1156,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         return self._regex_query(resolved, fragment + ".*", node)
 
     def visit_wildcard(self, node: ast.Wildcard) -> tantivy.Query:
-        resolved = self._resolve(node.field)
-        self._reject_pattern_incompatible_kind(resolved)
+        resolved = self._resolve(node.field, node)
+        self._reject_pattern_incompatible_kind(resolved, node)
         spec = resolved.spec
         regex = glob_to_regex(str(node.pattern), spec.pattern_normalizer)
         if regex is None:
@@ -1161,7 +1166,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         return self._regex_query(resolved, regex, node)
 
     def visit_fuzzy(self, node: ast.Fuzzy) -> tantivy.Query:
-        resolved = self._resolve(node.field)
+        resolved = self._resolve(node.field, node)
         self._reject_fuzzy_incompatible_kind(resolved, node)
         self._validate_fuzzy_values(resolved, node)
         spec = resolved.spec
@@ -1329,7 +1334,9 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                 )
             raise
 
-    def _reject_pattern_incompatible_kind(self, resolved: ResolvedField) -> None:
+    def _reject_pattern_incompatible_kind(
+        self, resolved: ResolvedField, node: ast.Prefix | ast.Wildcard
+    ) -> None:
         """Backstop for a hand-built ``Prefix``/``Wildcard`` node whose
         field can't support a pattern query, bypassing the parse-time
         diagnostic in ``parser/default.py``'s ``_wildcard_kind_diagnostic``
@@ -1379,6 +1386,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                     f"wildcard/prefix patterns are not supported on JSON subpath "
                     f"{resolved.dotted_name!r}"
                 ),
+                node=node,
                 resolved=resolved,
                 divergence=30,
             )
@@ -1389,6 +1397,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                     f"wildcard/prefix patterns are not supported on boolean-exists "
                     f"field {spec.name!r}"
                 ),
+                node=node,
                 resolved=resolved,
                 divergence=29,
             )
@@ -1399,12 +1408,14 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                     f"field {spec.name!r} is a JSON field; pattern queries must "
                     f"address a subpath (e.g. {spec.name}.<subpath>)"
                 ),
+                node=node,
                 resolved=resolved,
             )
         if spec.kind is not FieldKind.TEXT and spec.kind is not FieldKind.KEYWORD:
             self._fail(
                 DiagnosticKind.AST_PATTERN_ON_KIND,
                 message=f"pattern emission for field kind {spec.kind.name} is not implemented",
+                node=node,
                 resolved=resolved,
             )
 
@@ -1429,6 +1440,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             self._fail(
                 DiagnosticKind.AST_KIND_NOT_IMPLEMENTED,
                 message=f"fuzzy emission for field kind {spec.kind.name} is not implemented",
+                node=node,
                 resolved=resolved,
             )
 
@@ -1490,7 +1502,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         synthetic boolean-exists field has no whoosh behavior to diverge
         from at all.
         """
-        resolved = self._resolve(node.field)
+        resolved = self._resolve(node.field, node)
         divergence: int | None
         if resolved.is_subpath:
             divergence = 30
@@ -1543,7 +1555,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             )
 
     def visit_numericrange(self, node: ast.NumericRange) -> tantivy.Query:
-        resolved = self._resolve(node.field)
+        resolved = self._resolve(node.field, node)
         spec = resolved.spec
         try:
             lo = None if node.lo is None else int(node.lo)
@@ -1561,7 +1573,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         return self._range_query(resolved, tantivy.FieldType.Unsigned, lo, hi, node)
 
     def visit_daterange(self, node: ast.DateRange) -> tantivy.Query:
-        resolved = self._resolve(node.field)
+        resolved = self._resolve(node.field, node)
         spec = resolved.spec
         try:
             lo = None if node.lo is None else _to_naive_utc(node.lo)
