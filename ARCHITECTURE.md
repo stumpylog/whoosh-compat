@@ -41,9 +41,11 @@ usable by any future backend that doesn't exist yet.
 per-field token analysis: it rewrites a multi-token `Term`/`Phrase` leaf into
 the `And`/`Or`/`Phrase` shape its field's `Multitoken` policy calls for,
 drops a leaf that analyzes to zero tokens (and any group that thereby
-empties), re-normalizes, and returns a plain, already-normalized
-`ast.Node`. `TantivyEmitter.emit()` calls it (`analyze(normalize(node),
-registry, default_mode=Multitoken.AND)`) before visiting, which is *this
+empties), normalizing each group as it rebuilds it, and returns a plain,
+already-normalized `ast.Node`. It normalizes its input first, so
+`TantivyEmitter.emit()` calls it directly (`analyze(node, registry,
+default_mode=Multitoken.AND, rewrite_leaf=...)`) before visiting: one
+normalize and one analysis walk per query. That is *this
 emitter's own choice*, not part of the generic `Emitter` protocol
 (`emitters/base.py`): a hypothetical future backend that defers token
 analysis to its own server could call `emit()`-equivalent logic without ever
@@ -58,8 +60,11 @@ ordering rather than being special-cased).
 
 A host that rewrites leaves before emitting, for instance wrapping a word
 as `Or(leaf, companion)` so a companion field is searched too, does it
-inside this stage through `analyze()`'s `rewrite_leaf` hook, and hands the
-result to `emit()`, whose own normalize-then-analyze pass is then a no-op.
+inside this stage through the `rewrite_leaf` hook, passed to `emit()`,
+which hands it to its own `analyze()` call. `analyze()` takes the same
+keyword for a host that wants the analyzed tree; handing that result to
+`emit()` builds the same query, at the cost of a second analysis walk
+that changes nothing.
 There is deliberately no public structural walker for that job; §4's
 "Leaf rewrites run inside `analyze()`'s own walk" says why.
 
@@ -188,7 +193,7 @@ module-level `analyze()` (§1) that resolves per-field token analysis into
 the tree's own structure. Unlike every other member of that dataclass
 list, `Fuzzy` is never produced by `parse()`: it is emit-only, always
 hand-built by a caller, either in a tree passed to `emit()` or placed
-around a parsed leaf through `analyze()`'s `rewrite_leaf` hook (see
+around a parsed leaf through the `rewrite_leaf` hook (see
 README's "Hand-building a `Fuzzy` node for a caller-side companion clause"
 and "Rewriting leaves before emit").
 `normalize()` is safe to run at any pipeline stage, before or after
@@ -198,10 +203,11 @@ an unfielded `Every` from an `And` as the identity element, is held back
 while any surviving sibling still holds a fielded, not-yet-analyzed
 `Term`/`Phrase` that could still empty out and leave that `Every` standing
 alone
-(DIVERGENCES.md entry 23's match-all face). `analyze()`'s own
-post-analysis pass applies the drop unconditionally, so the tree it
-returns is still canonical. That is what makes `analyze()` insensitive to
-whether its caller normalized first. This is the
+(DIVERGENCES.md entry 23's match-all face). `analyze()` applies the drop
+unconditionally as its walk rebuilds each group, once every leaf below it
+is resolved, so the tree it returns is still canonical. That is what
+makes `analyze()` insensitive to whether its caller normalized first.
+This is the
 library's stability contract: emitters (present and future) depend only on
 `ast.py` and `fields.py`, never on `parser/`. `Term.analyzed` and
 `Phrase.words`/`Phrase.analyzed` are part of that contract too: they carry
@@ -444,8 +450,8 @@ pass, not tracked via any per-visit emitter state; see `DIVERGENCES.md`
 entry 15 for how this differs subtly from Whoosh's own fixed-default-group
 behavior); a zero-token result (the analyzer dropped everything, e.g. an
 all-stopword value) drops the term from its enclosing group rather than
-producing an unsatisfiable clause, via `analyze()`'s own re-normalization,
-not a per-visit drop check.
+producing an unsatisfiable clause, via the normalization `analyze()`'s
+walk applies to each group it rebuilds, not a per-visit drop check.
 
 **Polarity is a pre-`analyze()` property.** `analyze()`'s zero-token drop is
 deliberately blind to *which* operand dropped (DIVERGENCES.md entry 23's
@@ -733,7 +739,7 @@ docstring already made. This is an invariant repair, not the closing of a
 live host-facing hole. `parse()`'s own depth caps keep every parsed tree
 well under the depth this needs, so it was never reachable that way, and
 `TantivyEmitter.emit()` (`emitters/tantivy_.py`) was never exposed to it
-either: its `try` around `ast.analyze(ast.normalize(node), ...)` already
+either: its `try` around its normalize-and-analyze stage already
 caught `RecursionError` by name and converted it to the same
 `QueryError(AST_INVALID_SHAPE)` its own still-recursive `visit_*` chain
 (`visit_not` calling `self.visit(node.child)`, and so on) converts a
@@ -910,10 +916,11 @@ the library can express for a field means adding a
 new `FieldSpec` attribute and teaching the parser/emitter to read it, no
 plugin-architecture changes required for field-level behavior.
 
-**Leaf rewrites.** `analyze(..., rewrite_leaf=...)` is the supported way
-for a host to replace `Term`/`Phrase` leaves before emitting, for example
-to add a companion clause on an internal field. See README's "Rewriting
-leaves before emit" for the host contract.
+**Leaf rewrites.** The `rewrite_leaf` hook, passed to `emit()` (or to
+`analyze()` for a host that wants the analyzed tree), is the supported
+way for a host to replace `Term`/`Phrase` leaves before emitting, for
+example to add a companion clause on an internal field. See README's
+"Rewriting leaves before emit" for the host contract.
 
 **The JSON `parse_query` carve-out.** `TantivyEmitter._json_paths_supported()`
 probes whether the installed `tantivy-py`'s `Query.term_query` can resolve a

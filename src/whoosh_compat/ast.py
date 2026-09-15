@@ -638,9 +638,9 @@ def _normalize_one(
     (every caller upstream of analysis, ``normalize()``'s own public entry
     point included) drops it only when
     :func:`_can_still_empty_during_analysis` says no sibling is still in
-    play. ``_post_analysis=True`` is for the passes :func:`analyze` runs on
-    a tree it has already resolved, where nothing is left to discover and
-    the drop is unconditional.
+    play. ``_post_analysis=True`` is for the combine steps :func:`analyze`
+    runs on a node whose children it has already resolved, where nothing is
+    left to discover and the drop is unconditional.
 
     ``interner`` keys the And/Or children for duplicate removal; it is the
     one interner of the public call this step belongs to (see
@@ -752,8 +752,9 @@ def _normalize_one(
 
 
 def _normalize_impl(node: Node, *, _post_analysis: bool, interner: _Interner) -> Node:
-    """Shared traversal behind :func:`normalize` and :func:`analyze`'s own
-    post-analysis pass: an explicit work stack, keyed by
+    """Shared traversal behind :func:`normalize` and the normalizing
+    :func:`analyze` does on its input and on each ``rewrite_leaf``
+    replacement: an explicit work stack, keyed by
     node identity, so a pathologically deep or wide tree costs heap, not
     Python call-stack frames (a naive recursive postorder walk here used to
     roughly halve the query nesting depth ``parse()`` could tolerate before
@@ -1019,7 +1020,17 @@ def _analyze_combine(
     do for those kinds.
     """
     if isinstance(node, Term):
-        return _analyze_term(node, registry, ctx)
+        analyzed = _analyze_term(node, registry, ctx)
+        if isinstance(analyzed, (And, Or)):
+            # The one group analysis builds rather than rebuilds: normalize
+            # it here like every other, so an analyzer that repeats a token
+            # leaves no duplicate (or a one-token group) wherever no parent
+            # of the same type absorbs it. analyze() relies on this to
+            # return a normalized tree without a further pass.
+            return _normalize_one(
+                analyzed, analyzed.children, interner=interner, _post_analysis=True
+            )
+        return analyzed
     if isinstance(node, Phrase):
         return _analyze_phrase(node, registry)
     if isinstance(node, (AndNot, AndMaybe, Require)):
@@ -1073,8 +1084,10 @@ def _analyze_walk(
     interner: _Interner,
 ) -> Node:
     """:func:`analyze`'s single bottom-up pass over an already-normalized
-    ``node``, returning its analyzed replacement ahead of the final
-    post-analysis normalize.
+    ``node``, returning its analyzed, normalized replacement: every node it
+    builds or rebuilds goes through :func:`_normalize_one` with
+    ``_post_analysis=True`` as it is combined (see :func:`_analyze_combine`),
+    so no further pass over the result is needed.
 
     ``rewrite_leaf`` is the host hook :func:`analyze` documents, applied to
     each ``Term``/``Phrase`` once that leaf's own analysis is known (see
@@ -1257,16 +1270,19 @@ def analyze(
     drops out of its enclosing group exactly as a zero-token leaf does
     (DIVERGENCES.md entry 23). The result is fully analyzed, so a later
     plain :func:`analyze` of it, including the one ``emit()`` runs, changes
-    nothing. Running the hook a second time over its own output would see
-    split tokens and companions rather than the original leaves, so a host
-    with several rewrites combines them into one hook.
+    nothing. ``emit()`` also takes the same hook as its own ``rewrite_leaf``
+    keyword and passes it here, which builds the same query in one pass
+    instead of two. Running the hook a second time over its own output
+    would see split tokens and companions rather than the original leaves,
+    so a host with several rewrites combines them into one hook.
 
     An exception raised by the hook propagates unchanged, and a return value
-    that is not a ``Node`` raises ``TypeError``. A host calls this function
-    itself, so a field analyzer that raises surfaces here as its own
-    exception, not as the ``QueryError`` ``emit()`` would have wrapped it
-    in. The hook does not change which leaves normalization treats as able
-    to empty: removing an already-analyzed or unfielded leaf beside an
+    that is not a ``Node`` raises ``TypeError``. Called directly, this
+    function lets a raising field analyzer surface as its own exception
+    too. Through ``emit()``, the hook's exceptions and a field analyzer's
+    are both subject to ``emit()``'s documented conversion to
+    ``QueryError`` instead. The hook does not change which leaves
+    normalization treats as able to empty: removing an already-analyzed or unfielded leaf beside an
     unfielded ``Every`` in an ``And`` leaves ``Nothing()``, because
     normalization has already dropped that ``Every`` as the AND identity,
     and the result is the same whether or not the caller normalized first.
@@ -1289,8 +1305,10 @@ def analyze(
             group is collapsed to a literal ``Nothing`` *before* the
             analysis pass, so the newly-dropped-vs-pre-existing
             distinction the entry-23/entry-27 rules turn on never sees a
-            group collapse of its own making) and ends by normalizing its
-            own result.
+            group collapse of its own making). Its result is normalized
+            too, without a second pass: the analysis walk normalizes each
+            node as it combines it, including the group a multi-token
+            value becomes.
         registry: Describes the known fields, their kinds, and their
             analyzers/``multitoken`` policy.
         default_mode: The ``Multitoken`` mode a ``Multitoken.DEFAULT``-
@@ -1319,14 +1337,12 @@ def analyze(
     interner = _Interner()
     node = _normalize_impl(node, _post_analysis=False, interner=interner)
 
-    walked = _analyze_walk(node, registry, default_mode, rewrite_leaf, None, interner=interner)
-
-    # _post_analysis=True: every leaf's fate is settled by now, so the
+    # The walk's own combine steps run the post-analysis rules (the
     # unfielded-Every AND-identity drop normalize() holds back before
-    # analysis (DIVERGENCES.md entry 23's match-all face) is finally
-    # unconditional here, giving the canonical shape whoosh's own
+    # analysis, DIVERGENCES.md entry 23's match-all face, is unconditional
+    # there), so its result is already the canonical shape whoosh's own
     # And.normalize() produces.
-    return _normalize_impl(walked, _post_analysis=True, interner=interner)
+    return _analyze_walk(node, registry, default_mode, rewrite_leaf, None, interner=interner)
 
 
 class Visitor(Generic[T]):

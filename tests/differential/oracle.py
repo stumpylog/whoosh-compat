@@ -672,9 +672,9 @@ def compat_raw_parse(
     unparenthesized one. whoosh's own (also-unnormalized) tree keeps the
     structure that turns into an empty ``And([])`` in that case: comparable,
     post-analysis, only if our side is *also* still unnormalized when the
-    0-token drop happens. :func:`~whoosh_compat.ast.analyze` still ends with
-    its own :func:`~whoosh_compat.ast.normalize` call, exactly mirroring the
-    oracle comparison.
+    0-token drop happens. :func:`~whoosh_compat.ast.analyze` still returns
+    a normalized tree (its walk normalizes each group as it rebuilds it),
+    exactly mirroring the oracle comparison.
     """
 
     parser = CompatMultifieldParser(list(default_fields), reg)

@@ -360,8 +360,8 @@ SCENARIOS_EQUAL = [
     # pipeline (wc.parse() -> emit() -> a live tantivy search), not just
     # an AST comparison: "the" is a StandardAnalyzer stopword, so this
     # must match every document on both sides. Both spellings run here
-    # because wc.parse() and TantivyEmitter.emit() each call
-    # ast.normalize() on the tree before analysis ever runs, so the rule
+    # because wc.parse() and analyze() (inside TantivyEmitter.emit()) each
+    # normalize the tree before any leaf is analyzed, so the rule
     # that keeps the unfielded Every alive has to hold in normalize()
     # itself for the real API, not only inside analyze().
     pytest.param("*:* title:the", [1, 2, 3, 4], id="entry23-match-all-face"),

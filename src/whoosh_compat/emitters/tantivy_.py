@@ -24,6 +24,7 @@ import contextlib
 import dataclasses
 import re
 import weakref
+from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import Sequence
@@ -579,19 +580,32 @@ def _boolean_query(
 
 
 class TantivyEmitter(ast.Visitor["tantivy.Query"]):
-    """Emits ``tantivy.Query`` objects from a whoosh-compat AST."""
+    """Emits ``tantivy.Query`` objects from a whoosh-compat AST.
 
-    def __init__(self, *, index: tantivy.Index, registry: FieldRegistry):
+    ``index``, ``registry`` and ``rewrite_leaf`` mean what they mean for
+    :func:`emit`, which builds one of these per call.
+    """
+
+    def __init__(
+        self,
+        *,
+        index: tantivy.Index,
+        registry: FieldRegistry,
+        rewrite_leaf: Callable[[ast.Term | ast.Phrase], ast.Node] | None = None,
+    ):
         self.index = index
         self.schema = index.schema
         self.registry = registry
+        self.rewrite_leaf = rewrite_leaf
 
     def emit(self, node: ast.Node) -> tantivy.Query:
-        """Normalize, analyze, and emit ``node``, guaranteeing the documented
-        exception contract.
+        """Analyze and emit ``node``, guaranteeing the documented exception
+        contract.
 
-        Running :func:`ast.analyze` here, after :func:`ast.normalize` and
-        before visiting, is this tantivy emitter's own choice, not part of
+        Running :func:`ast.analyze` here before visiting (it normalizes its
+        input first, so no separate :func:`ast.normalize` call is needed,
+        and it applies ``rewrite_leaf`` when one was given) is this tantivy
+        emitter's own choice, not part of
         the generic :class:`~whoosh_compat.emitters.base.Emitter` protocol:
         a hypothetical future backend that defers token analysis to its own
         server could legitimately skip this stage. Once analysis has run,
@@ -614,14 +628,14 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
           this doesn't yet special-case): a bare ``ValueError``, ``TypeError``
           or ``AttributeError`` from the underlying tantivy-py call.
         * A ``None`` (or otherwise non-node) value standing in for a child
-          node, either caught by ``ast.normalize``/``ast.analyze`` while
-          walking the tree (a bare ``AttributeError``) or, once past both,
-          by ``ast.Visitor.generic_visit`` finding no ``visit_*`` method for
-          the value's type (a bare ``NotImplementedError``).
+          node, either caught by ``ast.analyze`` (its leading normalize)
+          while walking the tree (a bare ``AttributeError``) or, once past
+          it, by ``ast.Visitor.generic_visit`` finding no ``visit_*`` method
+          for the value's type (a bare ``NotImplementedError``).
         * A chain deep enough to exhaust the interpreter's recursion limit
-          (a bare ``RecursionError``): this emitter's traversal, like
-          ``ast.normalize``/``ast.analyze``, walks one Python stack frame
-          per nesting level.
+          (a bare ``RecursionError``): this emitter's traversal walks one
+          Python stack frame per nesting level (``ast.analyze``'s own
+          traversal is iterative).
 
         Converting here, once, keeps every individual ``visit_*`` method
         free to just let its own tantivy-py calls raise naturally rather
@@ -630,9 +644,11 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
 
         The conversion is split by stage, and within the visiting stage by
         exception type, because only one of those cells is a backend
-        rejection. ``ast.normalize``/``ast.analyze`` never call tantivy, so
-        anything escaping them is a caller-built shape defect
-        (``AST_INVALID_SHAPE``). During visiting, an ``AttributeError``,
+        rejection. ``ast.analyze`` never calls tantivy, so anything of those
+        types escaping it is a caller-side defect (``AST_INVALID_SHAPE``):
+        a malformed hand-built tree, or host code it runs, a field
+        ``analyzer`` or the ``rewrite_leaf`` hook, raising or breaking its
+        return contract. During visiting, an ``AttributeError``,
         ``NotImplementedError`` or ``RecursionError`` likewise never came
         from tantivy (a missing ``visit_*`` method, a ``None`` child, a tree
         too deep to walk), while a bare ``ValueError``/``TypeError`` is
@@ -651,7 +667,12 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         which is what makes reporting it as a defect in this library sound.
         """
         try:
-            analyzed = ast.analyze(ast.normalize(node), self.registry, default_mode=Multitoken.AND)
+            analyzed = ast.analyze(
+                node,
+                self.registry,
+                default_mode=Multitoken.AND,
+                rewrite_leaf=self.rewrite_leaf,
+            )
         except (
             ValueError,
             TypeError,
@@ -1651,8 +1672,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     # -- boolean combinators --------------------------------------------
 
     def visit_and(self, node: ast.And) -> tantivy.Query:
-        # ast.analyze() (via ast.normalize(), which it calls internally
-        # before returning) has already dropped any zero-token child and
+        # ast.analyze() (whose walk normalizes each group as it rebuilds
+        # it) has already dropped any zero-token child and
         # collapsed a fully-emptied And to Nothing() before emission, so
         # every child reaching this visitor is a real, surviving node: no
         # per-child drop check or group-context tracking is needed here.
@@ -1715,6 +1736,7 @@ def emit(
     *,
     index: tantivy.Index,
     registry: FieldRegistry,
+    rewrite_leaf: Callable[[ast.Term | ast.Phrase], ast.Node] | None = None,
 ) -> tantivy.Query:
     """Emit a ``tantivy.Query`` for ``node`` against ``registry``.
 
@@ -1739,21 +1761,35 @@ def emit(
     says nothing about the second failure mode. Do not read "diagnostics is
     empty" as "emitting is guaranteed to succeed."
 
-    ``emit()`` always runs ``ast.normalize()`` and then ``ast.analyze()`` on
-    its input first; the result reflects that normal, analyzed form, not
-    necessarily the literal tree passed in. This makes ``emit(t)`` and
-    ``emit(analyze(normalize(t), registry))`` agree by construction: a
-    hand-built tree containing a literal empty And/Or group or a
-    ``Nothing()`` sibling reaches the same matched-document set either way,
-    since both call sites go through the identical normalize-then-analyze
-    pipeline before anything is visited (the parser itself never produces
-    such a tree, since it always normalizes before ``parse()`` returns, so
-    only a hand-built AST passed straight to ``emit()`` could observe a
-    difference if this weren't true). Running both stages here closes that
-    gap without changing behavior for the ``parse()`` -> ``emit()`` path,
-    since renormalizing or re-analyzing an already-normalized, already-
-    analyzed tree is a no-op (``ast.analyze()``'s docstring explains why
-    that holds by construction, not by convention).
+    ``emit()`` always runs ``ast.analyze()`` on its input first, which
+    normalizes before it analyzes; the result reflects that normal, analyzed
+    form, not necessarily the literal tree passed in. This makes
+    ``emit(t, index=i, registry=r, rewrite_leaf=h)`` and
+    ``emit(analyze(t, r, rewrite_leaf=h), index=i, registry=r)`` build the
+    same query by
+    construction, for any ``h`` including ``None``: a hand-built tree
+    containing a literal empty And/Or group or a ``Nothing()`` sibling
+    reaches the same matched-document set either way, since both call
+    sites go through the identical normalize-then-analyze pipeline before
+    anything is visited (the parser itself never produces such a tree,
+    since it always normalizes before ``parse()`` returns, so only a
+    hand-built AST passed straight to ``emit()`` could observe a difference
+    if this weren't true). Running that stage here closes the gap without
+    changing behavior for the ``parse()`` -> ``emit()`` path, since
+    re-analyzing an already-normalized, already-analyzed tree is a no-op
+    (``ast.analyze()``'s docstring explains why that holds by construction,
+    not by convention). Passing the hook here rather than calling
+    ``analyze()`` first does that work once instead of twice.
+
+    Args:
+        node: The tree to emit, normally a ``ParseResult.ast``.
+        index: The tantivy index the query will run against.
+        registry: The fields the tree may address, their kinds and their
+            analyzers. With ``rewrite_leaf``, it must also describe every
+            field a replacement introduces, such as a companion field.
+        rewrite_leaf: Optional hook replacing ``Term``/``Phrase`` leaves
+            during analysis, exactly as ``ast.analyze()``'s keyword of the
+            same name documents. ``None``, the default, is plain analysis.
 
     Raises:
         QueryError: ``node`` cannot be turned into a valid query. The
@@ -1778,5 +1814,17 @@ def emit(
             deep enough to exhaust the interpreter's recursion limit, and
             ``BACKEND_REJECTED`` for a bare ``ValueError``/``TypeError``
             from tantivy-py refusing a query this emitter built.
+
+            Host code that runs during analysis is covered by the first of
+            those backstops: a field ``analyzer`` or the ``rewrite_leaf``
+            hook raising ``ValueError``, ``TypeError``, ``AttributeError``,
+            ``NotImplementedError`` or ``RecursionError`` (subclasses
+            included), or breaking its return contract (a hook returning
+            something that is not a ``Node``), gives ``AST_INVALID_SHAPE``,
+            whose cause is ``INTERNAL``, with the original exception as the
+            ``QueryError``'s ``__context__``. Any other exception from that
+            code propagates unchanged. A replacement the hook returns is
+            checked like any hand-built tree, so a malformed one fails the
+            way the same shape passed straight to ``emit()`` would.
     """
-    return TantivyEmitter(index=index, registry=registry).emit(node)
+    return TantivyEmitter(index=index, registry=registry, rewrite_leaf=rewrite_leaf).emit(node)

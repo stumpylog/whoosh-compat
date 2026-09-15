@@ -266,8 +266,9 @@ plugin set (real Whoosh has one; it is deliberately not carried over, see
 only ever hand-built, the same way a caller may already hand-build a tree
 containing `ast.Nothing()`/`ast.Every()`. A tree containing one can go
 straight to `emit()`. For a companion clause around each word of a parsed
-query, place it with `analyze()`'s `rewrite_leaf` hook instead, returning
-`Or(leaf, ast.Fuzzy(...))`, which keeps the word's own analysis exactly
+query, place it with the `rewrite_leaf` hook (passed to `emit()`)
+instead, returning `Or(leaf, ast.Fuzzy(...))`, which keeps the word's own
+analysis exactly
 as it was (see "Rewriting leaves before emit" below). The hook sees
 `leaf.text` as the raw, unanalyzed query text, though: `Fuzzy(text=str(leaf.text))`
 on `alpha-beta` is one fragment through `pattern_normalizer`, not two
@@ -358,9 +359,10 @@ always `True` (tantivy's own default).
 
 A host that widens a parsed query, for example searching an internal
 companion field alongside each `Term` or `Phrase` word in it, does it
-through `analyze()`'s `rewrite_leaf` hook instead of walking the tree
-itself. Pattern leaves are not passed to the hook, so a wildcard or prefix
-word such as `invoi*` gets no companion:
+through the `rewrite_leaf` hook instead of walking the tree itself. Pass
+the hook to `emit()`, which runs it inside its own analysis pass. Pattern
+leaves are not passed to the hook, so a wildcard or prefix word such as
+`invoi*` gets no companion:
 
 ```python
 import whoosh_compat as wc
@@ -382,12 +384,17 @@ def widen(leaf: ast.Term | ast.Phrase) -> ast.Node:
 
 
 result = wc.parse(q, registry=registry, default_fields=["content"])
-tree = wc.analyze(result.ast, emit_registry, rewrite_leaf=widen)
-query = emit(tree, index=index, registry=emit_registry)
+query = emit(result.ast, index=index, registry=emit_registry, rewrite_leaf=widen)
 ```
 
+`ast.analyze()` takes the same keyword, and
+`emit(ast.analyze(result.ast, emit_registry, rewrite_leaf=widen), ...)`
+builds the same query, for a host that wants the analyzed tree itself. It
+costs a second analysis pass inside `emit()`, so pass the hook to `emit()`
+when the query is all you need.
+
 A walk of your own gets two things wrong that the hook gets right,
-because the hook runs inside `analyze()`'s own pass:
+because the hook runs inside analysis's own pass:
 
 - **Multi-token context.** Wrapping a leaf in a new `Or` changes its
   enclosing group, and a `Multitoken.DEFAULT` term that the analyzer
@@ -430,23 +437,32 @@ What the hook sees and what its answer means:
   the replacement, usually your `Or`, so any one of its tokens matches.
   Declare the companion field with an explicit `multitoken` (for example
   `Multitoken.AND`) when all of them must match.
-- Companion leaves are analyzed with the registry you pass to `analyze()`.
-  Parse with the registry users may address, and analyze and emit with one
-  that also carries the companion fields. `parse()` reads an unknown field
-  prefix as literal text, so an internal field stays unreachable from
-  query text.
-- The result is fully analyzed, and `emit()`'s own analysis of it changes
-  nothing. Combine several rewrites (say a companion field and a fuzzy
-  clause) into one hook that returns `Or(leaf, companion, fuzzy)`. Don't
-  run `analyze()` with a hook twice: the second pass would see the split
-  tokens and companions, not the words the user typed.
+- Companion leaves are analyzed with the registry you pass alongside the
+  hook. Parse with the registry users may address, and emit (or analyze)
+  with one that also carries the companion fields. `parse()` reads an
+  unknown field prefix as literal text, so an internal field stays
+  unreachable from query text.
+- Combine several rewrites (say a companion field and a fuzzy clause) into
+  one hook that returns `Or(leaf, companion, fuzzy)`. Don't apply a hook
+  twice, for example to `analyze()` and then again to `emit()`: the second
+  pass would see the split tokens and companions, not the words the user
+  typed. A tree `analyze()` already returned is fully analyzed, and
+  `emit()` without a hook changes nothing about it.
 
-Errors: an exception raised by the hook reaches you unchanged, and a return
-value that is not an `ast.Node` raises `TypeError`. Because you call
-`analyze()` yourself, a field analyzer that raises also surfaces there as
-its own exception, rather than as the `QueryError` `emit()` would have
-wrapped it in. Treat anything other than `QueryError` from these two calls
-as an internal error, the way `emit()`'s own `AST_INVALID_SHAPE` is one.
+Errors through `emit()`: the hook runs inside `emit()`'s input stage, so
+its errors are handled the way a field analyzer's are. A `ValueError`,
+`TypeError`, `AttributeError`, `NotImplementedError` or `RecursionError`
+(or a subclass) from the hook or an analyzer, and a hook return value that
+is not an `ast.Node`, become a `QueryError` with `AST_INVALID_SHAPE`, whose
+cause is `INTERNAL` (a 500, not the user's fault), with the original
+exception chained as its context. Any other exception reaches you
+unchanged. A replacement is checked like any hand-built tree, so a
+malformed one fails the way the same shape passed to `emit()` directly
+would. Errors through `analyze()`: an exception raised by the hook or by a
+field analyzer reaches you unchanged, and a hook return value that is not
+an `ast.Node` raises `TypeError`. Treat anything other than `QueryError`
+from either call as an internal error, the way `emit()`'s own
+`AST_INVALID_SHAPE` is one.
 
 ### Adopting the library: sweep stored queries first
 
@@ -540,8 +556,8 @@ Not carried over from Whoosh (not currently implemented, kept cheap to add
 via the forked plugin architecture): `asn:>100` (`GtLtPlugin`), `term~2`
 fuzzy matching (no parser syntax exists for it, but a caller can still get
 fuzzy matching by hand-building an `ast.Fuzzy` node, either in a tree
-passed to `emit()` or placed around a parsed word with `analyze()`'s
-`rewrite_leaf` hook, see "Hand-building a `Fuzzy` node for a caller-side
+passed to `emit()` or placed around a parsed word with the `rewrite_leaf`
+hook, see "Hand-building a `Fuzzy` node for a caller-side
 companion clause" above), `r"regex"` literal regex queries, `SequencePlugin`,
 `-foo`/`+foo` as negation/requirement shorthand (in the whoosh grammar this
 library targets, `-foo` was plain text whose analyzer typically dropped the

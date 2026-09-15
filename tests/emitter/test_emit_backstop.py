@@ -11,7 +11,7 @@ escaped ``emit()`` as bare exceptions instead of a ``QueryError``:
 * A ``None`` (or otherwise non-node) value where a child node is expected,
   raised by ``ast.Visitor.generic_visit`` as a bare ``NotImplementedError``,
   or, for a top-level ``And``/``Or`` child, as a bare ``AttributeError`` from
-  ``ast.normalize`` itself (which runs before the visitor ever sees the
+  the normalize ``ast.analyze`` runs first (before the visitor ever sees the
   node).
 * A chain deep enough to exhaust the interpreter's recursion limit, raised
   as a bare ``RecursionError``.

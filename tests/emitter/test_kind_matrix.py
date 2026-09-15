@@ -152,22 +152,28 @@ def _run(
     outcome: object,
     *,
     rewrite_leaf: Callable[[ast.Term | ast.Phrase], ast.Node] | None = None,
+    through_emit: bool = False,
     extra_ids: frozenset[int] = frozenset(),
 ) -> None:
     """Check ``qs`` against ``outcome``.
 
-    With ``rewrite_leaf``, the parsed tree is emitted after
-    ``ast.analyze(..., rewrite_leaf=rewrite_leaf)``, and a Search outcome
+    With ``rewrite_leaf``, the parsed tree is emitted with the hook passed
+    to ``emit()`` when ``through_emit`` is set, and otherwise after
+    ``ast.analyze(..., rewrite_leaf=rewrite_leaf)``; a Search outcome
     expects ``extra_ids`` on top of its own ids.
     """
     r = _parse(qs, registry=ereg, default_fields=["content"])
-    tree = r.ast if rewrite_leaf is None else ast.analyze(r.ast, ereg, rewrite_leaf=rewrite_leaf)
+    if rewrite_leaf is None or through_emit:
+        tree = r.ast
+    else:
+        tree = ast.analyze(r.ast, ereg, rewrite_leaf=rewrite_leaf)
+    emit_hook = rewrite_leaf if through_emit else None
 
     if isinstance(outcome, Diag):
         assert r.diagnostics, f"expected a parse-time diagnostic for {qs!r}, got none"
         assert _contains(r.ast, ast.ErrorLeaf), f"expected an ErrorLeaf in the tree for {qs!r}"
         with pytest.raises(QueryError):
-            emit_(tree, index=tindex[0], registry=ereg)
+            emit_(tree, index=tindex[0], registry=ereg, rewrite_leaf=emit_hook)
         return
 
     if isinstance(outcome, Raises):
@@ -176,7 +182,7 @@ def _run(
             f"got {r.diagnostics!r}"
         )
         with pytest.raises(QueryError) as exc:
-            emit_(tree, index=tindex[0], registry=ereg)
+            emit_(tree, index=tindex[0], registry=ereg, rewrite_leaf=emit_hook)
         d = exc.value.diagnostic
         assert d.kind is outcome.kind, f"{qs!r}: expected {outcome.kind}, got {d.kind}"
         assert d.cause is outcome.cause, f"{qs!r}: expected {outcome.cause}, got {d.cause}"
@@ -191,7 +197,9 @@ def _run(
     if isinstance(outcome, Search):
         assert not r.diagnostics, f"expected a clean parse for {qs!r}, got {r.diagnostics!r}"
         expected = sorted(set(outcome.ids) | extra_ids)
-        ids = search_ids(tindex[0], emit_(tree, index=tindex[0], registry=ereg))
+        ids = search_ids(
+            tindex[0], emit_(tree, index=tindex[0], registry=ereg, rewrite_leaf=emit_hook)
+        )
         assert ids == expected, f"{qs!r} matched {ids}, expected {expected}"
         return
 
@@ -920,13 +928,21 @@ class _CompanionHook:
         return ast.Or(children=(leaf, _COMPANION))
 
 
+_CALL_SHAPES = [
+    pytest.param(True, id="hook-passed-to-emit"),
+    pytest.param(False, id="analyze-then-emit"),
+]
+
+
+@pytest.mark.parametrize("through_emit", _CALL_SHAPES)
 @pytest.mark.parametrize(("qs", "outcome"), CELLS)
 def test_kind_matrix_cell_under_a_companion_hook(
-    qs: str, outcome: object, ereg: FieldRegistry, tindex: TIndex
+    qs: str, outcome: object, through_emit: bool, ereg: FieldRegistry, tindex: TIndex
 ) -> None:
     """Every cell keeps its outcome when a host widens each ``Term``/``Phrase``
-    leaf with ``Or(leaf, title:wärrantyplan)`` through ``analyze()``'s
-    ``rewrite_leaf`` hook: a Search cell whose tree has such a leaf gains
+    leaf with ``Or(leaf, title:wärrantyplan)`` through the ``rewrite_leaf``
+    hook, whether the hook is passed to ``emit()`` or to ``analyze()``: a
+    Search cell whose tree has such a leaf gains
     exactly the companion's document, a Search cell with none (patterns,
     ranges, ``field:*``) is unchanged, and a Raises or Diag cell still fails
     the same way. No cell negates its leaf, so every hooked Search cell
@@ -942,9 +958,30 @@ def test_kind_matrix_cell_under_a_companion_hook(
         tindex,
         outcome,
         rewrite_leaf=hook,
+        through_emit=through_emit,
         extra_ids=_COMPANION_IDS if hooked else frozenset(),
     )
     assert bool(hook.calls) == hooked, f"{qs!r}: hook calls {hook.calls!r}"
+
+
+@pytest.mark.parametrize("through_emit", _CALL_SHAPES)
+@pytest.mark.parametrize(("qs", "outcome"), CELLS)
+def test_kind_matrix_cell_under_a_keeping_hook(
+    qs: str, outcome: object, through_emit: bool, ereg: FieldRegistry, tindex: TIndex
+) -> None:
+    """Every cell keeps exactly its own outcome under a hook that is called
+    with each ``Term``/``Phrase`` leaf and returns it unchanged, through
+    either call shape.
+    """
+    calls: list[ast.Term | ast.Phrase] = []
+
+    def keep(leaf: ast.Term | ast.Phrase) -> ast.Node:
+        calls.append(leaf)
+        return leaf
+
+    tree = _parse(qs, registry=ereg, default_fields=["content"]).ast
+    _run(qs, ereg, tindex, outcome, rewrite_leaf=keep, through_emit=through_emit)
+    assert bool(calls) == _contains(tree, (ast.Term, ast.Phrase)), f"{qs!r}: hook calls {calls!r}"
 
 
 @pytest.mark.parametrize(
@@ -992,15 +1029,25 @@ def test_kind_matrix_cell_under_a_companion_hook(
         ),
     ],
 )
+@pytest.mark.parametrize("through_emit", _CALL_SHAPES)
 def test_hand_built_only_cells_under_a_companion_hook(
-    leaf: ast.Term | ast.Phrase, kind: DiagnosticKind, ereg: FieldRegistry, tindex: TIndex
+    leaf: ast.Term | ast.Phrase,
+    kind: DiagnosticKind,
+    through_emit: bool,
+    ereg: FieldRegistry,
+    tindex: TIndex,
 ) -> None:
     """The cells ``parse()`` cannot produce keep their documented raise when
-    the hook wraps them with a companion.
+    the hook wraps them with a companion, through either call shape.
     """
     hook = _CompanionHook()
-    tree = ast.analyze(leaf, ereg, rewrite_leaf=hook)
-    assert hook.calls == [leaf]
+
+    def run() -> tantivy.Query:
+        if through_emit:
+            return emit_(leaf, index=tindex[0], registry=ereg, rewrite_leaf=hook)
+        return emit_(ast.analyze(leaf, ereg, rewrite_leaf=hook), index=tindex[0], registry=ereg)
+
     with pytest.raises(QueryError) as exc:
-        emit_(tree, index=tindex[0], registry=ereg)
+        run()
+    assert hook.calls == [leaf]
     assert exc.value.diagnostic.kind is kind

@@ -10,6 +10,7 @@ BOOLEAN_EXISTS) term/phrase that analysis must never touch.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from itertools import pairwise
 
 import pytest
@@ -18,6 +19,7 @@ import whoosh_compat as wc
 from whoosh_compat.ast import And
 from whoosh_compat.ast import AndMaybe
 from whoosh_compat.ast import AndNot
+from whoosh_compat.ast import Boosted
 from whoosh_compat.ast import Every
 from whoosh_compat.ast import Node
 from whoosh_compat.ast import Not
@@ -26,6 +28,8 @@ from whoosh_compat.ast import Or
 from whoosh_compat.ast import Phrase
 from whoosh_compat.ast import Require
 from whoosh_compat.ast import Term
+from whoosh_compat.ast import _Interner
+from whoosh_compat.ast import _normalize_impl
 from whoosh_compat.ast import analyze
 from whoosh_compat.ast import normalize
 from whoosh_compat.fields import FieldKind
@@ -657,3 +661,98 @@ def test_normalize_applied_by_analyze_is_a_no_op_on_an_already_analyzed_tree() -
     node = Term(field=CONTENT, text="hello world")
     once = analyze(node, REG)
     assert normalize(once) == once
+
+
+# -- analyze() returns a normalized tree without a separate pass over the
+# -- whole result: the one group analysis itself builds, a multi-token
+# -- value's And/Or, is normalized where it is built. It only needs it when
+# -- the analyzer repeats a token (the repeat is removed, and a group left
+# -- with one token becomes that Term), in every position where no parent of
+# -- the same type absorbs the group.
+
+
+def _doubled(text: str) -> list[str]:
+    """Every word twice, so each multi-token group has repeats to remove."""
+    return [token for word in text.split() for token in (word, word)]
+
+
+DUP_REG = FieldRegistry(
+    [
+        FieldSpec("dup_and", FieldKind.TEXT, analyzer=_doubled, multitoken=Multitoken.AND),
+        FieldSpec("dup_or", FieldKind.TEXT, analyzer=_doubled, multitoken=Multitoken.OR),
+        FieldSpec("dup_default", FieldKind.TEXT, analyzer=_doubled),
+        FieldSpec("plain", FieldKind.TEXT, analyzer=word_split),
+    ]
+)
+
+_OTHER = Term(field=FieldRef("plain"), text="x", startchar=10, endchar=11)
+
+_POSITIONS: list[tuple[str, Callable[[Term], Node]]] = [
+    ("root", lambda leaf: leaf),
+    ("in-and", lambda leaf: And(children=(leaf, _OTHER))),
+    ("in-or", lambda leaf: Or(children=(leaf, _OTHER))),
+    ("not", lambda leaf: Not(child=leaf)),
+    ("andnot-positive", lambda leaf: AndNot(positive=leaf, negative=_OTHER)),
+    ("andnot-negative", lambda leaf: AndNot(positive=_OTHER, negative=leaf)),
+    ("andmaybe-required", lambda leaf: AndMaybe(required=leaf, optional=_OTHER)),
+    ("andmaybe-optional", lambda leaf: AndMaybe(required=_OTHER, optional=leaf)),
+    ("require-scored", lambda leaf: Require(scored=leaf, filter_only=_OTHER)),
+    ("require-filter", lambda leaf: Require(scored=_OTHER, filter_only=leaf)),
+    ("boosted", lambda leaf: Boosted(child=leaf, boost=2.0)),
+]
+
+
+def _rows() -> list[object]:
+    rows: list[object] = []
+    for field in ("dup_and", "dup_or", "dup_default"):
+        for text, text_id in (("a b", "repeats"), ("a", "one-repeated-token")):
+            for position, wrap in _POSITIONS:
+                leaf = Term(field=FieldRef(field), text=text, startchar=0, endchar=len(text))
+                rows.append(pytest.param(wrap(leaf), id=f"{field}-{text_id}-{position}"))
+    return rows
+
+
+def _post_analysis_normalize(node: Node) -> Node:
+    return _normalize_impl(node, _post_analysis=True, interner=_Interner())
+
+
+@pytest.mark.parametrize(
+    "default_mode",
+    [
+        pytest.param(Multitoken.AND, id="default-and"),
+        pytest.param(Multitoken.OR, id="default-or"),
+    ],
+)
+@pytest.mark.parametrize("tree", _rows())
+def test_analyze_returns_a_normalized_tree(tree: Node, default_mode: Multitoken) -> None:
+    # Compared by repr, so spans count too.
+    out = analyze(tree, DUP_REG, default_mode=default_mode)
+    assert repr(_post_analysis_normalize(out)) == repr(out)
+    assert repr(normalize(out)) == repr(out)
+
+
+_DUP_FIELDS = [
+    pytest.param("dup_and", id="dup-and"),
+    pytest.param("dup_or", id="dup-or"),
+    pytest.param("dup_default", id="dup-default"),
+]
+
+
+@pytest.mark.parametrize("field", _DUP_FIELDS)
+def test_a_value_of_one_repeated_token_becomes_that_term(field: str) -> None:
+    leaf = Term(field=FieldRef(field), text="a", startchar=0, endchar=1)
+    out = analyze(Not(child=leaf), DUP_REG)
+    assert repr(out) == repr(
+        Not(child=Term(field=FieldRef(field), text="a", analyzed=True, startchar=0, endchar=1))
+    )
+
+
+@pytest.mark.parametrize("field", _DUP_FIELDS)
+@pytest.mark.parametrize("text", [pytest.param("a b", id="repeats"), pytest.param("a", id="one")])
+def test_a_hook_replacement_rooted_at_a_split_term_is_normalized(field: str, text: str) -> None:
+    def replace(leaf: Term | Phrase) -> Node:
+        return Term(field=FieldRef(field), text=text, startchar=0, endchar=len(text))
+
+    out = analyze(_OTHER, DUP_REG, rewrite_leaf=replace)
+    assert repr(_post_analysis_normalize(out)) == repr(out)
+    assert repr(normalize(out)) == repr(out)

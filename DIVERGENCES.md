@@ -1188,10 +1188,11 @@ parse-then-emit pipeline).
     not fixed).** `whoosh_compat.ast.analyze()` drops a zero-token TEXT/
     KEYWORD `Term`/`Phrase` (e.g. an all-stopword value) to `ast.Nothing()`
     as part of its own analysis pass, leaving `Not(Nothing())`;
-    `analyze()` finishes by calling `normalize()`, whose pre-existing
-    `Not(Nothing) -> Every()` rule then converts that into "matches
-    everything", the *natural* consequence of running token-drop analysis
-    ahead of a normalize pass that already had this rule, not a special
+    `analyze()` then rebuilds that `Not` through `normalize()`'s own
+    per-node rules, whose pre-existing `Not(Nothing) -> Every()` rule
+    converts it into "matches everything", the *natural* consequence of
+    running token-drop analysis ahead of normalize rules that already had
+    this one, not a special
     case `analyze()` implements for `NOT` specifically (see `analyze()`'s
     own docstring, which names this exact case explicitly so a future
     implementer doesn't "fix" it by changing drop semantics). Before
@@ -1222,9 +1223,9 @@ parse-then-emit pipeline).
     is syntactically ordinary (not an `ast.Nothing` node in the tree
     `parse()` produced) but whose configured `analyzer` happens to consume
     its text entirely once `analyze()` runs over it, a fact the earlier
-    `normalize()` call in the pipeline (`analyze(normalize(node), ...)`)
-    has no visibility into, since normalization runs before analysis, on
-    still-raw text. `visit_term`'s docstring used to describe this as an
+    `normalize()` call in the pipeline (`analyze()`'s own leading
+    normalize) has no visibility into, since normalization runs before
+    analysis, on still-raw text. `visit_term`'s docstring used to describe this as an
     an emit-time phenomenon before analysis was promoted to its own
     pipeline stage; it now points here, and to `analyze()`'s own docstring,
     instead.
@@ -1326,9 +1327,10 @@ parse-then-emit pipeline).
     analysis pass's existing survivor rule can protect it if that sibling
     empties out, or correctly re-apply the AND-identity simplification if
     it doesn't. The unconditional drop still happens, just later:
-    `analyze()`'s own post-analysis pass runs `normalize` in a private
-    `_post_analysis` mode where nothing is left to discover, producing the
-    same canonical shape whoosh's `And.normalize()` does.
+    `analyze()`'s walk rebuilds each group with `normalize`'s per-node
+    rule in a private `_post_analysis` mode, once nothing below that group
+    is left to discover, producing the same canonical shape whoosh's
+    `And.normalize()` does.
 
     The AND-identity drop's soundness is a property of *when* it runs, so
     it belongs to `normalize()`'s rule rather than to a caller's choice of
@@ -1349,9 +1351,10 @@ parse-then-emit pipeline).
 
     Both `whoosh_compat.parse()` (whose result is documented as
     normalized-but-not-yet-analyzed, analysis happening later, at emit
-    time) and `TantivyEmitter.emit()` normalize before `analyze()` ever
-    runs, which is why the rule has to hold at that point for the real
-    `parse()` -> `emit()` API and not just inside `analyze()` (proven with
+    time) and `analyze()` itself (the one `TantivyEmitter.emit()` calls)
+    normalize before any leaf is analyzed, which is why the rule has to
+    hold at that point for the real `parse()` -> `emit()` API and not just
+    inside the analysis walk (proven with
     a real search, not just an AST comparison: see the test reference
     below).
 
