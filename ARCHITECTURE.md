@@ -761,22 +761,38 @@ field, silently dropping a query branch. The interner's docstring has the
 details, including why NaN cannot follow `==` across the supported
 interpreters.
 
-The cap bounds recursion depth, not CPU time: parse time is still
-quadratic in the length of a long unmatched word-character run (the
-fieldname tagger's regex scans to end-of-input at each successive tag
-position), measured at ~15s for a 40KB pathological query and ~34s for
-60KB - order-of-magnitude, from one developer machine, like the figures
-below; the durable claim is the ~4x-per-doubling curve. This fork's
-tagger regex is upstream's plus `.` inside the field name (`[\w.]+:`
-against `\w+:`, so dotted JSON subpaths tag), which adds no `:` to the run
-being scanned and leaves the scan's character alone; the parity claim
-rests on measuring the oracle rather than on the regexes being identical.
-Real whoosh shows that same curve (measured ~1.1s at 10KB and ~4.0s at
-20KB, against whoosh-compat's ~1.0s and ~3.9s). That cost is inherited
-deliberately (a rewritten tagger regex would risk parity for a purely
-adversarial input shape); the README's
+The cap bounds recursion depth, not CPU time. Parse time used to be
+quadratic in the length of a long word-character run containing no `:`
+(CJK text, a long token, a dotted string): the fieldname tagger's regex
+scanned to the end of the run at each successive tag position, measured at
+~15s for 40KB and ~34s for 60KB, and real whoosh shows the same curve on
+the same input (this fork's `[\w.]+:` against upstream's `\w+:` adds no `:`
+to the run and leaves the scan's character alone). The regex is unchanged;
+`FieldsPlugin.FieldnameTagger.match` now remembers a run once a match fails
+inside it. With the default expression a match starting inside a run can
+only end at the `:` that closes the run, and every start position in the
+run sees that same terminator (the `[*]:` alternative cannot start inside
+it), so one failure implies failure at every later position of the run.
+Each answer is exactly what the plain regex match gives
+(`tests/test_plugins_unit.py` checks every position against it, in any
+order and across texts), so parse output and parity are unchanged; only
+the curve is gone (a 60KB run parses in about half a second). A custom
+`FieldsPlugin(expr=...)` keeps plain matching, since the argument holds
+only for the default expression.
+
+Two inherited quadratics remain on this path, both in taggers whose regex
+scans forward from an opener that never closes. The range tagger scans
+from each unclosed `[` or `{` to the next `]` or `}`, or to end-of-input
+(its regex is upstream's plus word boundaries around `to`); the
+single-quote tagger, with upstream's regex unchanged, scans from each
+unmatched `'` in the same way. Parse time is quadratic in the number of
+such openers: ~1s at 8KB of repeated `[a ` or `'a `, ~4s at 16KB, and the
+pinned oracle measured the same curves on the same inputs. No exact skip
+for either has been worked out, so both stay inherited, and the README's
 host-contract section tells hosts to cap query length at their own
-boundary instead.
+boundary instead. Figures
+here are order-of-magnitude, from one developer machine, like those below;
+the durable claim is the ~4x-per-doubling curve.
 
 *Other* super-linear costs on the same user-reachable path were not
 inherited from whoosh and are fixed rather than tolerated, since none had a

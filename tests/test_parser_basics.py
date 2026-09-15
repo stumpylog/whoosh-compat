@@ -1,4 +1,6 @@
 # tests/test_parser_basics.py
+import time
+
 import pytest
 
 import whoosh_compat as wc
@@ -269,6 +271,41 @@ def test_paren_nesting_beyond_cap_reports_diagnostic_instead_of_raising(
     assert result.diagnostics != ()
     assert any(d.kind is DiagnosticKind.TOO_DEEP for d in result.diagnostics)
     assert any(isinstance(n, ast.ErrorLeaf) for n in _flatten(result.ast))
+
+
+# -- A long run of word characters with no ":" used to cost quadratic parse
+# -- time: the fieldname tagger's regex rescanned the rest of the run from
+# -- every position the tag loop reached.
+
+
+@pytest.mark.wall_clock
+@pytest.mark.parametrize(
+    "run",
+    [
+        pytest.param("".join(chr(0x4E00 + i % 20000) for i in range(32768)), id="cjk-run"),
+        pytest.param("abcdefghij" * 3277, id="latin-run"),
+        pytest.param("a.b" * 10923, id="dotted-run"),
+    ],
+)
+def test_long_word_run_parses_in_linear_time(reg: FieldRegistry, run: str) -> None:
+    """Sized so the guard cannot be flaky rather than so it is quick.
+    Measured on the author's machine: about 24 s per shape before the fix
+    and 0.3 s after, against the 3 s budget, so one size is enough to tell
+    the two apart. Absolute seconds are hardware-specific; the durable
+    claim is the shape, quadratic in the run length before and linear
+    after, which this guards without measuring it.
+    """
+    start = time.perf_counter()
+    result = wc.parse(run, registry=reg, default_fields=["content", "title"])
+    elapsed = time.perf_counter() - start
+    # Checked, not just timed: the run is still one term per default field.
+    assert result.diagnostics == ()
+    assert isinstance(result.ast, ast.Or)
+    assert [(c.field, c.text) for c in result.ast.children if isinstance(c, ast.Term)] == [
+        (FieldRef("content"), run),
+        (FieldRef("title"), run),
+    ]
+    assert elapsed < 3.0
 
 
 def _flatten(node: ast.Node) -> list[ast.Node]:

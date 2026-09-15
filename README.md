@@ -237,23 +237,25 @@ quote or escape before re-parsing, and note that a whole-token filter
 quoted-phrase term outright, because the text is untokenized.
 
 **Cap query length at the host boundary.** Parse time is quadratic in the
-length of a long run of word characters containing no `:` (the fieldname
-tagger's regex, `[\w.]+:`, scans toward end-of-input and fails at each
-successive position). Measured on one developer machine, so treat these
-as order-of-magnitude and the ~4x-per-doubling growth as the durable
-claim: 10KB ~1 second, 20KB ~4 seconds, 40KB ~15 seconds, 60KB ~34
-seconds. This library's tagger regex differs from upstream whoosh's in
-exactly one way, permitting `.` inside a field name so that dotted JSON
-subpaths tag (`[\w.]+:` here against whoosh's `\w+:`); that adds no `:` to
-the run being scanned and so does not change the scan's character. The
-parity claim rests on measurement rather than on sameness: real whoosh
-shows the same curve on the same input (measured 10KB ~1.1 seconds, 20KB
-~4.0 seconds against the pinned oracle). The cost is inherited
-deliberately rather than fixed with a rewritten tagger regex whose subtle
-behavior differences would risk parity. The parser's own
-nesting-depth cap bounds recursion, not CPU time, so a host accepting
-untrusted query strings should enforce its own length limit (a few KB
-comfortably covers any human-written query) before calling `parse()`.
+number of unclosed range brackets or unmatched single quotes: the range
+tagger's regex scans forward from each `[` or `{` to the next `]` or `}`,
+and the single-quote tagger's from each `'` to a closing one, or to
+end-of-input, failing at each successive opener. Measured on one developer
+machine, so treat these as order-of-magnitude and the ~4x-per-doubling
+growth as the durable claim: `[a ` or `'a ` repeated to 4KB ~0.3 to 0.4
+seconds, 8KB ~1 second, 16KB ~4 seconds. Both costs are inherited from
+whoosh: the single-quote regex is upstream's unchanged, the range regex
+only adds word boundaries around `to` (which leave the scan's character
+alone), and real whoosh shows the same curves on the same inputs (measured
+8KB ~1 second, 16KB ~3 to 4 seconds against the pinned oracle).
+A long run of word characters containing no `:` (CJK text, a long token,
+a dotted string) used to cost the same way through the fieldname tagger;
+that tagger now skips the rest of a run once a match fails inside it,
+which produces exactly the same parse in linear time (a 60KB run parses in
+about half a second). The parser's own nesting-depth cap bounds recursion,
+not CPU time, so a host accepting untrusted query strings should enforce
+its own length limit (a few KB comfortably covers any human-written query)
+before calling `parse()`.
 
 ### Hand-building a `Fuzzy` node for a caller-side companion clause
 

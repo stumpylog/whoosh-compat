@@ -11,6 +11,9 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from hypothesis import given
+from hypothesis import settings
+from hypothesis import strategies as st
 
 from whoosh_compat import ast
 from whoosh_compat.errors import Diagnostic
@@ -21,6 +24,7 @@ from whoosh_compat.fields import FieldSpec
 from whoosh_compat.parser import plugins
 from whoosh_compat.parser import priorities
 from whoosh_compat.parser import syntax
+from whoosh_compat.parser.taggers import RegexTagger
 
 
 class StubParser:
@@ -205,6 +209,61 @@ def test_fields_plugin_tagger_matches_dotted_name() -> None:
     node = tagger.match(None, "notes.user:foo", 0)
     assert isinstance(node, syntax.FieldnameNode)
     assert node.fieldname == "notes.user"
+
+
+def _fieldname_tag(node: Any) -> tuple[Any, ...] | None:
+    if node is None:
+        return None
+    return (node.fieldname, node.original, node.startchar, node.endchar)
+
+
+# Word characters (Latin, digit, underscore, CJK, accented), the dot a
+# fieldname may contain, the colon that ends one, the "*" alternative, and a
+# few separators, so runs of every length meet every terminator.
+_FIELDNAME_TEXT = st.text(
+    alphabet=st.sampled_from(["a", "Z", "7", "_", "一", "é", ".", ":", "*", " ", "-", "("]),
+    max_size=16,
+)
+
+
+@given(texts=st.lists(_FIELDNAME_TEXT, min_size=1, max_size=3), data=st.data())
+@settings(max_examples=300)
+def test_fieldname_tagger_agrees_with_a_plain_regex_match(
+    texts: list[str], data: st.DataObject
+) -> None:
+    # The tagger skips the rest of a word run once a match fails inside it.
+    # Every answer must equal what the plain regex match gives at the same
+    # position: first in the tag loop's own order (each text scanned left to
+    # right), then at arbitrary positions, in any order, across texts.
+    plugin = plugins.FieldsPlugin()
+    tagger = plugin.FieldnameTagger(plugin.expr)
+    reference = plugin.FieldnameTagger(plugin.expr)
+    calls = [(i, pos) for i, text in enumerate(texts) for pos in range(len(text) + 1)]
+    calls += data.draw(
+        st.lists(
+            st.integers(0, len(texts) - 1).flatmap(
+                lambda i: st.tuples(st.just(i), st.integers(0, len(texts[i])))
+            ),
+            max_size=40,
+        )
+    )
+    for i, pos in calls:
+        text = texts[i]
+        got = tagger.match(None, text, pos)
+        want = RegexTagger.match(reference, None, text, pos)
+        assert _fieldname_tag(got) == _fieldname_tag(want), (text, pos)
+
+
+def test_fieldname_tagger_with_a_custom_expr_matches_every_position() -> None:
+    # Skipping the rest of a run is only exact for the default expression. A
+    # custom one can fail at one position of a run and match at a later one,
+    # so it keeps plain matching.
+    plugin = plugins.FieldsPlugin(expr=r"(?P<text>b\w*)")
+    tagger = plugin.FieldnameTagger(plugin.expr)
+    assert tagger.match(None, "ab", 0) is None
+    node = tagger.match(None, "ab", 1)
+    assert isinstance(node, syntax.FieldnameNode)
+    assert node.fieldname == "b"
 
 
 def test_range_tagger_matches() -> None:

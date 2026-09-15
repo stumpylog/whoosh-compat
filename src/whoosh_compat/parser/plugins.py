@@ -505,11 +505,40 @@ class FieldsPlugin(Plugin):
     ``filters()``, so there's no shared regex-compiling behavior to reuse.
     """
 
+    DEFAULT_EXPR = r"(?P<text>[\w.]+|[*]):"
+
     class FieldnameTagger(RegexTagger):
+        # Inside one run of [\w.] characters the default expression can only
+        # match by reaching the ":" that ends the run, and every start
+        # position in the run sees that same terminator ("[*]:" cannot start
+        # inside it). So one failure inside a run means failure at every
+        # later position of it: remembering that run turns the tag loop's
+        # rescans, quadratic in the run's length, into a single scan. Exact
+        # only for the default expression; any other keeps plain matching.
+        # It also relies on create() never declining a match, so that a None
+        # from match() always means the expression failed.
+        _run = rcompile(r"[\w.]*")
+        _skip: tuple[str, int, int] | None = None
+
+        def __init__(self, expr: str) -> None:
+            super().__init__(expr)
+            self._can_skip = expr == FieldsPlugin.DEFAULT_EXPR
+
+        def match(self, parser: Any, text: str, pos: int) -> Any:
+            skip = self._skip
+            if skip is not None and skip[0] is text and skip[1] <= pos < skip[2]:
+                return None
+            node = RegexTagger.match(self, parser, text, pos)
+            if node is None and self._can_skip:
+                run = self._run.match(text, pos)
+                if run is not None and run.end() > pos:
+                    self._skip = (text, pos, run.end())
+            return node
+
         def create(self, parser: Any, match: Match[str]) -> syntax.FieldnameNode:
             return syntax.FieldnameNode(match.group("text"), match.group(0))
 
-    def __init__(self, expr: str = r"(?P<text>[\w.]+|[*]):",
+    def __init__(self, expr: str = DEFAULT_EXPR,
                  remove_unknown: bool = True) -> None:
         """
         :param expr: the regular expression to use for tagging fields.
