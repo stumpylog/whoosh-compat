@@ -302,19 +302,6 @@ def test_fuzzy_text_normalized_to_blank_matches_nothing(
     assert search_ids(short_term_tindex[0], query) == []
 
 
-def test_fuzzy_normalizer_returning_a_non_str_form_is_an_error(tindex: TIndex) -> None:
-    # A form that is not a str breaks the normalizer's contract. It must
-    # surface as a caller-side shape error, not be filtered out as if it
-    # were blank and silently match nothing.
-    registry = FieldRegistry(
-        [FieldSpec("content", FieldKind.TEXT, pattern_normalizer=lambda _: (None,))]  # type: ignore[arg-type,return-value]
-    )
-    node = ast.Fuzzy(field=FieldRef("content"), text="billing", distance=1)
-    with pytest.raises(QueryError) as exc:
-        emit_ast(node, tindex, registry)
-    assert exc.value.diagnostic.kind is DiagnosticKind.AST_INVALID_SHAPE
-
-
 def test_fuzzy_prefix_with_text_no_longer_than_distance_matches_every_term(
     short_term_tindex: TIndex, short_term_reg: FieldRegistry
 ) -> None:

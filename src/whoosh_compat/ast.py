@@ -5,6 +5,7 @@ from __future__ import annotations
 import itertools
 import math
 from collections.abc import Callable
+from collections.abc import Iterable
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -951,8 +952,32 @@ def _leaf_tokens(
     if field.json_path is None and spec.kind not in (FieldKind.TEXT, FieldKind.KEYWORD):
         return None
     value = str(text)
-    tokens = ([value] if value else []) if spec.analyzer is None else list(spec.analyzer(value))
+    tokens = (
+        ([value] if value else [])
+        if spec.analyzer is None
+        else _analyzer_tokens(spec.analyzer, spec.name, value)
+    )
     return tokens, spec
+
+
+def _analyzer_tokens(analyzer: Callable[[str], list[str]], name: str, value: str) -> list[str]:
+    """``analyzer(value)`` as a list, checked to be tokens of str.
+
+    The analyzer is host code, and what it returns is never checked
+    anywhere else: a non-str token reaches the emitter as a ``Term`` whose
+    text is not text, and a bare ``str`` would be split into characters.
+    Either one searches for terms nobody asked for and silently matches
+    nothing, so a broken result raises here, naming the field.
+    """
+    result: object = analyzer(value)
+    expected = f"analyzer for field {name!r} must return a list of str tokens"
+    if isinstance(result, str) or not isinstance(result, Iterable):
+        raise TypeError(f"{expected}, got {type(result).__name__}")
+    tokens = list(result)
+    for token in tokens:
+        if not isinstance(token, str):
+            raise TypeError(f"{expected}, got a token of type {type(token).__name__}")
+    return tokens
 
 
 def _analyze_term(node: Term, registry: FieldRegistry, ctx: Multitoken) -> Node:
@@ -1257,6 +1282,8 @@ def analyze(
     outside the TEXT/KEYWORD/JSON-subpath kinds (U64, DATE, DATETIME,
     BOOLEAN_EXISTS, a bare JSON field) are never analyzed or dropped,
     matching the closed kind-dispatch matrix ARCHITECTURE.md documents.
+    A field analyzer that returns anything but tokens of ``str`` (a bare
+    ``str`` included) raises ``TypeError`` naming the field.
 
     ``default_mode`` resolves ``Multitoken.DEFAULT`` for a term with no
     enclosing And/Or group to inherit from (a single top-level multi-token

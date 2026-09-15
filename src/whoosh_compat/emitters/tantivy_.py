@@ -24,6 +24,7 @@ import contextlib
 import dataclasses
 import re
 import weakref
+from collections.abc import Iterable
 from collections.abc import Iterator
 from collections.abc import Sequence
 from datetime import UTC
@@ -1143,12 +1144,12 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     def visit_prefix(self, node: ast.Prefix) -> tantivy.Query:
         resolved = self._resolve(node.field, node)
         self._reject_pattern_incompatible_kind(resolved, node)
-        spec = resolved.spec
         text = str(node.text)
-        if spec.pattern_normalizer is None:
+        normalize = self._checked_pattern_normalizer(resolved, node)
+        if normalize is None:
             fragment: str | None = re.escape(text)
         else:
-            fragment = _alternation(_alternatives(spec.pattern_normalizer, text))
+            fragment = _alternation(_alternatives(normalize, text))
         if fragment is None:
             # The normalizer offered no form this run could take, the same
             # "provably matches nothing" answer glob_to_regex spells as None.
@@ -1158,8 +1159,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
     def visit_wildcard(self, node: ast.Wildcard) -> tantivy.Query:
         resolved = self._resolve(node.field, node)
         self._reject_pattern_incompatible_kind(resolved, node)
-        spec = resolved.spec
-        regex = glob_to_regex(str(node.pattern), spec.pattern_normalizer)
+        regex = glob_to_regex(str(node.pattern), self._checked_pattern_normalizer(resolved, node))
         if regex is None:
             # The glob provably matches nothing (empty bracket class).
             return tantivy.Query.empty_query()
@@ -1169,12 +1169,8 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
         resolved = self._resolve(node.field, node)
         self._reject_fuzzy_incompatible_kind(resolved, node)
         self._validate_fuzzy_values(resolved, node)
-        spec = resolved.spec
-        forms = (
-            _alternatives(spec.pattern_normalizer, node.text)
-            if spec.pattern_normalizer is not None
-            else (node.text,)
-        )
+        normalize = self._checked_pattern_normalizer(resolved, node)
+        forms = _alternatives(normalize, node.text) if normalize is not None else (node.text,)
         # A blank (empty or whitespace-only) form never reaches tantivy: it
         # would match every one-character term at distance 1, and every term
         # in the field with prefix=True. Blank text is not an error either,
@@ -1192,7 +1188,7 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             queries = [
                 tantivy.Query.fuzzy_term_query(
                     self.schema,
-                    spec.name,
+                    resolved.spec.name,
                     form,
                     distance=node.distance,
                     prefix=node.prefix,
@@ -1333,6 +1329,50 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
                     resolved=resolved,
                 )
             raise
+
+    def _checked_pattern_normalizer(
+        self, resolved: ResolvedField, node: ast.Prefix | ast.Wildcard | ast.Fuzzy
+    ) -> PatternNormalizer | None:
+        """``resolved.spec.pattern_normalizer`` wrapped to check every answer,
+        or ``None`` when the field has none.
+
+        The normalizer is host code, and its answers were never checked: a
+        non-str form failed wherever Python happened to trip over it, as
+        ``BACKEND_REJECTED`` on one leaf and ``AST_INVALID_SHAPE`` on
+        another, and a class member's bad answer was not even seen. Checking
+        each call's answer here, including the per-character calls
+        ``_normalize_class_body`` makes, fails every leaf the same way, at
+        ``node``, naming the field. The answer comes back as a tuple, so an
+        iterator of str is consumed once and then reads like any sequence.
+        """
+        normalize = resolved.spec.pattern_normalizer
+        if normalize is None:
+            return None
+
+        def checked(fragment: str) -> str | tuple[str, ...]:
+            result: object = normalize(fragment)
+            if isinstance(result, str):
+                return result
+            if isinstance(result, Iterable):
+                forms = tuple(result)
+                if all(isinstance(form, str) for form in forms):
+                    return forms
+                detail = "a form of type " + next(
+                    type(form).__name__ for form in forms if not isinstance(form, str)
+                )
+            else:
+                detail = type(result).__name__
+            self._fail(
+                DiagnosticKind.AST_INVALID_SHAPE,
+                message=(
+                    f"pattern_normalizer for field {resolved.spec.name!r} must return a str "
+                    f"or a sequence of str, got {detail}"
+                ),
+                node=node,
+                resolved=resolved,
+            )
+
+        return checked
 
     def _reject_pattern_incompatible_kind(
         self, resolved: ResolvedField, node: ast.Prefix | ast.Wildcard

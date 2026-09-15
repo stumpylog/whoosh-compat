@@ -611,6 +611,15 @@ against the body's length). And a normalizer is never asked to be
 only widen the match, never move it, which is why alternatives replaced the
 single-string form rather than joining it.
 
+Both callables are checked against those return types at emit time. An
+`analyzer` must return tokens of `str` (a list, or any iterable of them; a
+bare `str` is rejected rather than split into characters), and a
+`pattern_normalizer` must return a `str` or a sequence of `str`. Anything
+else fails the query with `AST_INVALID_SHAPE` (cause `INTERNAL`), with a
+message naming the field and the callable, since the fault is in host code
+rather than the query. `ast.analyze()` called directly raises the analyzer's
+check as a `TypeError`.
+
 ### Timezone handling
 
 `DateRange` bounds inside the AST are always timezone-aware UTC `datetime`s.

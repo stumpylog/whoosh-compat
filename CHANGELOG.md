@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Fixed
 
+- A field `analyzer` or `pattern_normalizer` that breaks its return contract now fails the query with `AST_INVALID_SHAPE` and a message naming the field and the callable. An analyzer returning non-`str` tokens used to search for the wrong terms and silently match nothing, and one returning a bare `str` had it split into characters. A pattern normalizer returning a non-`str` form got `AST_INVALID_SHAPE` or `BACKEND_REJECTED` depending on the leaf, and some bad answers for a bracket class member were skipped with no error at all. `ast.analyze()` called directly raises the analyzer check as a `TypeError`.
 - An emit-time diagnostic raised for a leaf now carries that leaf's `startchar`/`endchar` in every case. `AST_UNFIELDED_TERM` and `AST_UNKNOWN_FIELD` on any leaf, `AST_PATTERN_ON_KIND` and `AST_JSON_NEEDS_SUBPATH` on a `Prefix` or `Wildcard`, and `AST_KIND_NOT_IMPLEMENTED` on a `Fuzzy` used to leave both `None`, unlike the other emit-time failures on the same leaves.
 
 ## [0.2.0]
