@@ -2260,6 +2260,18 @@ def test_to_span_split_still_recognized_on_long_values() -> None:
 # -- ITECTURE.md "Systematic backtracking audit" section for the full survey.
 
 
+# A doubling-ratio budget, not a fixed number of seconds: growth from n to
+# 2n stays near 2x for linear work (measured 1.6-2.4x on every shape below)
+# and would jump to roughly 4x for quadratic work, so a bound of 3.0x has
+# headroom above ordinary linear noise while still catching quadratic long
+# before it would need to. A fixed-seconds bound was tried first for these
+# three and rejected: 93bafda's 3.0s passed locally (2.3s) and failed on a
+# slower CI runner (4.3s) for the same real linear cost, the false-positive
+# a ratio check does not have because it never compares against a
+# hardware-specific constant.
+_RATIO_BOUND = 3.0
+
+
 @pytest.mark.wall_clock
 def test_plusminus_relative_offset_is_linear_in_digit_run_length() -> None:
     """``PlusMinus.expr`` chains seven independently-optional
@@ -2276,14 +2288,20 @@ def test_plusminus_relative_offset_is_linear_in_digit_run_length() -> None:
     real ambiguity between adjacent groups.
     """
     plusdate = English().plusdate
-    text = "+" + "1" * 100_000 + "x"
-    start = time.perf_counter()
-    result = plusdate.date_from(text, BASE)
-    elapsed = time.perf_counter() - start
-    # Checked, not just timed: an all-digit run with no unit word matches
-    # nothing (every rel_* group needs its unit), so this is a clean miss.
-    assert result is None
-    assert elapsed < 2.0
+
+    def parse_digit_run(n: int) -> float:
+        text = "+" + "1" * n + "x"
+        start = time.perf_counter()
+        result = plusdate.date_from(text, BASE)
+        elapsed = time.perf_counter() - start
+        # Checked, not just timed: an all-digit run with no unit word
+        # matches nothing (every rel_* group needs its unit), a clean miss.
+        assert result is None
+        return elapsed
+
+    small = parse_digit_run(200_000)
+    large = parse_digit_run(400_000)
+    assert large < _RATIO_BOUND * small
 
 
 @pytest.mark.wall_clock
@@ -2301,15 +2319,20 @@ def test_many_unquoted_date_fielded_words_is_linear_in_word_count(reg: FieldRegi
     plus letters), chosen to make each of the up-to-15 attempts do real
     work before failing rather than reject at the first character.
     """
-    word = "1234x"
-    query = " ".join(f"added:{word}{i}" for i in range(4000))
-    start = time.perf_counter()
-    result = wc.parse(query, registry=reg, default_fields=["content"], tz=BERLIN, basedate=BASE)
-    elapsed = time.perf_counter() - start
-    # Checked, not just timed: none of these words look enough like a date
-    # to parse as one, so every one falls back to an ordinary term.
-    assert not any(isinstance(n, ast.DateRange) for n in _nodes(result.ast))
-    assert elapsed < 5.0
+
+    def parse_date_fielded_words(n: int) -> float:
+        query = " ".join(f"added:1234x{i}" for i in range(n))
+        start = time.perf_counter()
+        result = wc.parse(query, registry=reg, default_fields=["content"], tz=BERLIN, basedate=BASE)
+        elapsed = time.perf_counter() - start
+        # Checked, not just timed: none of these words look enough like a
+        # date to parse as one, so every one falls back to an ordinary term.
+        assert not any(isinstance(node, ast.DateRange) for node in _nodes(result.ast))
+        return elapsed
+
+    small = parse_date_fielded_words(2000)
+    large = parse_date_fielded_words(4000)
+    assert large < _RATIO_BOUND * small
 
 
 @pytest.mark.wall_clock
@@ -2322,26 +2345,28 @@ def test_many_unpaired_double_quotes_parses_in_linear_time(reg: FieldRegistry) -
     scan is bounded by the gap to the next quote, and those gaps are
     disjoint across the string.
     """
-    query = '"a' * 20_000
-    start = time.perf_counter()
-    result = wc.parse(query, registry=reg, default_fields=["content"])
-    elapsed = time.perf_counter() - start
-    # Checked, not just timed: the repeat unit pairs quotes every 4
-    # characters into a one-letter phrase followed by a dangling bare "a",
-    # over and over, so every phrase and every bare term is the same
-    # repeated node; normalize()'s dedupe collapses all of each down to one.
-    assert result.diagnostics == ()
-    assert isinstance(result.ast, ast.And)
-    phrases = {c.text for c in result.ast.children if isinstance(c, ast.Phrase)}
-    terms = {c.text for c in result.ast.children if isinstance(c, ast.Term)}
-    assert phrases == {"a"}
-    assert terms == {"a"}
-    # 3.0s was too tight on a loaded CI runner (measured 4.3s there against
-    # 2.3s locally) for what is real linear work, not a regression: 10,000
-    # distinct phrase/term node objects get built and interned before
-    # dedupe collapses them. A quadratic regression would cost orders of
-    # magnitude more than the margin below, not a factor of two.
-    assert elapsed < 10.0
+
+    def parse_unpaired_quotes(n: int) -> float:
+        query = '"a' * n
+        start = time.perf_counter()
+        result = wc.parse(query, registry=reg, default_fields=["content"])
+        elapsed = time.perf_counter() - start
+        # Checked, not just timed: the repeat unit pairs quotes every 4
+        # characters into a one-letter phrase followed by a dangling bare
+        # "a", over and over, so every phrase and every bare term is the
+        # same repeated node; normalize()'s dedupe collapses each down to
+        # one.
+        assert result.diagnostics == ()
+        assert isinstance(result.ast, ast.And)
+        phrases = {c.text for c in result.ast.children if isinstance(c, ast.Phrase)}
+        terms = {c.text for c in result.ast.children if isinstance(c, ast.Term)}
+        assert phrases == {"a"}
+        assert terms == {"a"}
+        return elapsed
+
+    small = parse_unpaired_quotes(10_000)
+    large = parse_unpaired_quotes(20_000)
+    assert large < _RATIO_BOUND * small
 
 
 # -- Quoted vs bracketed relative-span exactness agree (bug fix, no --------
