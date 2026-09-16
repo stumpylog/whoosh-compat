@@ -250,6 +250,11 @@ and 64KB in a few seconds. The parser's own nesting-depth cap bounds
 recursion, not CPU time, and linear is not free, so a host accepting
 untrusted query strings should still enforce its own length limit (a few
 KB comfortably covers any human-written query) before calling `parse()`.
+paperless-ngx now caps query size ahead of `parse()` for exactly this
+reason and is the precedent worth following: bound length at the host
+boundary regardless of what this library's own parse-time curve measures
+to, as defense in depth against whatever the next grammar extension turns
+out to cost.
 
 ### Hand-building a `Fuzzy` node for a caller-side companion clause
 

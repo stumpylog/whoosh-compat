@@ -857,6 +857,73 @@ accepted language of each is pinned unchanged by differential checks against
 the previous implementations (and, for the glob, against the
 `fnmatch.translate` oracle that defines it).
 
+**Systematic backtracking audit (issue #67).** The fixes above were each
+found by measuring a specific shape, not by enumerating every pattern in
+`parser/`. Issue #67 asked for that enumeration, so every `rcompile`/
+`re.compile` call in `parser/` was classified for worst-case backtracking
+risk, plus the `Sequence`/`Combo`/`Bag` date-grammar combinators (which apply
+sub-rules and separators across elements, so cost could in principle compound
+across the combinator layer even where every individual pattern is
+well-behaved) and the unquoted-date-value filter's repeated grammar
+invocation (`DIVERGENCES.md` entry 61 calls the date grammar up to
+`_UNQUOTED_LOOKAHEAD` times per date-fielded word). Conclusion: no further
+hotspot exists beyond the four already fixed above (the fieldname tagger, the
+range and single-quote taggers, `glob_to_regex`, and the RFC3339 `Z` gate and
+its `to`-splitter sibling, `_find_to_split`, which already avoids regex
+entirely in favor of a manual scan for the same reason).
+
+What the audit checked and why each cleared:
+
+- `dateparse.py`'s dozen-odd leaf patterns (`Sequence`, `Regex`, `Month`,
+  `PlusMinus`, `NowCompact`, `Daynames`, `Time12`, `_RFC3339_UTC_RE`): none
+  nests an unbounded quantifier inside another over the same character
+  class, and adjacent groups consume disjoint classes (digits versus literal
+  words, for example), so no pattern has the adjacent-ambiguous-quantifier
+  shape that makes backtracking explode. `PlusMinus.expr` looks the most
+  suspicious, seven sequential `(digits words?)?` groups, but each is
+  independently optional rather than repeated, so there is no outer
+  repetition to explore multiple splits of the same span under; confirmed
+  near-linear against an adversarial all-digit run with no closing unit word
+  (`tests/test_parser_dates.py::test_plusminus_relative_offset_is_linear_in_digit_run_length`).
+- `Sequence` and `Combo` are a single monotonic left-to-right pass over their
+  elements that fails fast on the first mismatch; neither retries a failed
+  match at a different split point. `Bag` tries every remaining element at
+  the *same* position each round, so it costs O(k^2) element-applications for
+  a Bag of size k, but k is the grammar's own small hand-authored element
+  count (2 in the one `Bag` this grammar builds), not something driven by
+  query length.
+- The unquoted-date-value filter's up-to-15 calls per date-fielded word are
+  each over a *shrinking* window bounded by `_UNQUOTED_LOOKAHEAD`, so every
+  date-fielded word contributes a bounded constant amount of work regardless
+  of query length; total cost is linear in the number of such words, not
+  quadratic in query length
+  (`tests/test_parser_dates.py::test_many_unquoted_date_fielded_words_is_linear_in_word_count`).
+- `plugins.py`'s remaining patterns (`_WORD_CHAR`, `_RANGE_CLOSER`,
+  `_RANGE_TO`, `_SPACE_RUN`, `WildcardPlugin`, `BoostPlugin`, `EveryPlugin`,
+  `FieldsPlugin`'s `_run`, `default.py`'s `_SINGLE_CHAR_BRACKET_RANGE`) are
+  either fixed-length literal/character-class matches with no quantifier
+  ambiguity, or single whole-text `.finditer` passes cached once per query
+  rather than re-run per tag position. `PhrasePlugin`'s `"(?P<text>.*?)"`
+  looks like the SingleQuotePlugin shape that was fixed, a lazy quantifier
+  reaching for a rare delimiter, but has no lookahead after the closing
+  quote that can fail and force `.*?` past a quote it already found, so any
+  two quotes always pair and each quote position's scan is bounded by the
+  gap to the next one; it needs no skip-cache, which its own comment now
+  says, and stays linear on an adversarial run of alternating quote/letter
+  pairs
+  (`tests/test_parser_dates.py::test_many_unpaired_double_quotes_parses_in_linear_time`).
+- The tag loop itself (`QueryParser.tag()` in `default.py`) tries each
+  tagger via an *anchored* `match(text, pos)`, never `search`, at each
+  position it reaches; the only way a pattern's own internal backtracking
+  can reintroduce a query-length-driven quadratic is for that anchored
+  attempt to itself scan forward on failure, which is exactly what the four
+  already-fixed patterns did and nothing else in the current pattern set
+  does.
+
+None of this changed accepted-language or emitted output anywhere; the three
+new tests above are guard tests pinning the *shape stays linear*, not
+regression tests for a fix, since nothing here needed one.
+
 One further super-linear cost sat in the AST rather than the parser:
 duplicate-sibling removal in `normalize()` was roughly cubic in nesting
 depth for groups that alternate AND and OR (same-type nesting flattens, so

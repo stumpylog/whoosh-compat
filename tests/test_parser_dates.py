@@ -2253,6 +2253,92 @@ def test_to_span_split_still_recognized_on_long_values() -> None:
     assert elapsed < 2.0
 
 
+# -- Systematic backtracking audit (issue #67 part 2): guard tests for the ---
+# -- shapes that looked riskiest by inspection but were found linear by -----
+# -- construction, not by an explicit fix like the ones above. These pin ----
+# -- that they *stay* linear if the grammar is ever extended. See the ARCH- --
+# -- ITECTURE.md "Systematic backtracking audit" section for the full survey.
+
+
+@pytest.mark.wall_clock
+def test_plusminus_relative_offset_is_linear_in_digit_run_length() -> None:
+    """``PlusMinus.expr`` chains seven independently-optional
+    ``(digits words?)?`` groups, which looks like the classic
+    adjacent-optional-quantifier ReDoS shape. It isn't one, because none of
+    the seven groups repeats (each is wrapped in ``(...)?``, not ``(...)+``),
+    so there is no outer repetition to explore multiple splits of the same
+    span under: a long digit run can only ever be consumed once, by the
+    first group's own ``[0-9]+``, and the only backtracking is that single
+    group unwinding against a non-matching trailer.
+
+    No fix accompanies this test; it exists to catch a future grammar edit
+    (an added relative-unit group, a widened separator) that reintroduces
+    real ambiguity between adjacent groups.
+    """
+    plusdate = English().plusdate
+    text = "+" + "1" * 100_000 + "x"
+    start = time.perf_counter()
+    result = plusdate.date_from(text, BASE)
+    elapsed = time.perf_counter() - start
+    # Checked, not just timed: an all-digit run with no unit word matches
+    # nothing (every rel_* group needs its unit), so this is a clean miss.
+    assert result is None
+    assert elapsed < 2.0
+
+
+@pytest.mark.wall_clock
+def test_many_unquoted_date_fielded_words_is_linear_in_word_count(reg: FieldRegistry) -> None:
+    """DIVERGENCES.md entry 61's unquoted-date-value filter
+    (``do_unquoted_date_values``) calls the full date grammar up to
+    ``_UNQUOTED_LOOKAHEAD`` (15) times per date-fielded word, over a
+    shrinking window of up to 15 following words. That is a bounded
+    constant per word, not a scan that grows with the rest of the query, so
+    a query with many separate date-fielded words should cost linearly in
+    the number of such words.
+
+    Each word here is deliberately non-date-like garbage of the same
+    lengths the grammar's leaf patterns backtrack over (a long digit run
+    plus letters), chosen to make each of the up-to-15 attempts do real
+    work before failing rather than reject at the first character.
+    """
+    word = "1234x"
+    query = " ".join(f"added:{word}{i}" for i in range(4000))
+    start = time.perf_counter()
+    result = wc.parse(query, registry=reg, default_fields=["content"], tz=BERLIN, basedate=BASE)
+    elapsed = time.perf_counter() - start
+    # Checked, not just timed: none of these words look enough like a date
+    # to parse as one, so every one falls back to an ordinary term.
+    assert not any(isinstance(n, ast.DateRange) for n in _nodes(result.ast))
+    assert elapsed < 5.0
+
+
+@pytest.mark.wall_clock
+def test_many_unpaired_double_quotes_parses_in_linear_time(reg: FieldRegistry) -> None:
+    """``PhrasePlugin``'s ``"(?P<text>.*?)"...`` looks like the same
+    lazy-quantifier-to-a-rare-delimiter shape that made ``SingleQuotePlugin``
+    and the range tagger quadratic/cubic (see ARCHITECTURE.md), but has no
+    lookahead after the closing quote that can fail and force ``.*?`` past a
+    quote it already found, so it needs no skip-cache: each quote position's
+    scan is bounded by the gap to the next quote, and those gaps are
+    disjoint across the string.
+    """
+    query = '"a' * 20_000
+    start = time.perf_counter()
+    result = wc.parse(query, registry=reg, default_fields=["content"])
+    elapsed = time.perf_counter() - start
+    # Checked, not just timed: the repeat unit pairs quotes every 4
+    # characters into a one-letter phrase followed by a dangling bare "a",
+    # over and over, so every phrase and every bare term is the same
+    # repeated node; normalize()'s dedupe collapses all of each down to one.
+    assert result.diagnostics == ()
+    assert isinstance(result.ast, ast.And)
+    phrases = {c.text for c in result.ast.children if isinstance(c, ast.Phrase)}
+    terms = {c.text for c in result.ast.children if isinstance(c, ast.Term)}
+    assert phrases == {"a"}
+    assert terms == {"a"}
+    assert elapsed < 3.0
+
+
 # -- Quoted vs bracketed relative-span exactness agree (bug fix, no --------
 # -- DIVERGENCES.md entry: whoosh-compat now agrees with whoosh, see --------
 # -- tests/differential/corpus_realworld.txt's "CONFIRMED PARITY" line) ----

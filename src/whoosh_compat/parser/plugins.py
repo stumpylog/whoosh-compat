@@ -743,6 +743,12 @@ class PhrasePlugin(Plugin):
             return PhrasePlugin.PhraseNode(text, textstartchar, slop)
 
     def __init__(self, expr: str = '"(?P<text>.*?)"(~(?P<slop>[1-9][0-9]*))?') -> None:
+        # Looks like SingleQuotePlugin's pre-fix shape (a lazy ".*?" reaching
+        # for a rare delimiter), but needs no skip-cache: there is no
+        # lookahead after the closing '"' that can fail and force ".*?" past
+        # a quote it already found, so any two quotes always pair, and each
+        # quote position's scan is bounded by the gap to the next one
+        # (ARCHITECTURE.md's "Systematic backtracking audit" section).
         self.expr = expr
 
     def taggers(self, parser: Any) -> list[TaggerEntry]:
