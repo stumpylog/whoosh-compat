@@ -67,7 +67,7 @@ parse, emit, search, `tests/emitter/test_acceptance_e2e.py`) test suites.
        t.upper()))` is `"[ab]"`.
      - Several alternatives *not* including it, or one multi-character
        form: **disjoint**, not narrower. `glob_to_regex("[a]", lambda _t:
-       ("x", "y"))` is `"[a]"`, which matches `a` — a character neither
+       ("x", "y"))` is `"[a]"`, which matches `a`, a character neither
        offered form matches. Same for `lambda _t: ("xy",)`.
      - No alternatives at all: **wider**. "No term can match this fragment"
        is honored outside a class (`glob_to_regex("ab", lambda _t: ())` is
@@ -3009,7 +3009,7 @@ parse-then-emit pipeline).
     convention to match, and diverged from. The day-bump exists for a
     genuine, different purpose: disambiguating a *bare, ambiguous* time of
     day with no date attached (`added:[9pm TO 5am]`, an overnight-shift
-    reading that is a real, useful convention — confirmed separately
+    reading that is a real, useful convention, confirmed separately
     against real whoosh, which resolves it to a sensible ~9-hour span). But
     `timespan.disambiguated()` (`parser/times.py`) applies the same
     same-day/time-reversed check uniformly to that case AND to the `now`/
@@ -3017,7 +3017,7 @@ parse-then-emit pipeline).
     the bare `now` regex) return a plain `datetime` directly rather than an
     `adatetime`, and which happen to land on the same calendar day. For
     that family, "the user wrote the bounds backwards" is overwhelmingly
-    the more likely reading than "wrap to tomorrow" — nobody has a working
+    the more likely reading than "wrap to tomorrow": nobody has a working
     query that depends on a written-backwards 2-hour window silently
     becoming a 22-hour one, and there is no diagnostic to warn them it
     happened. That is exactly the "silent wrong answer with no diagnostic"

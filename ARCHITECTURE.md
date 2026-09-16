@@ -664,7 +664,7 @@ proportional to depth. Left unbounded, `parse()` would eventually
 invariant this section opens with breaking. Two stages construct hierarchy,
 and each bounds *its own* contribution at `_MAX_GROUP_NESTING_DEPTH` (200),
 as early as it can see the depth coming. Neither bounds total depth: both
-caps are per group, and they can still compound along a nesting path — see
+caps are per group, and they can still compound along a nesting path; see
 "what the caps do not cover" below.
 
 `GroupPlugin.do_groups` (`parser/plugins.py`) turns flat `(`/`)` markers into

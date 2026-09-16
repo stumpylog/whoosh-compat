@@ -1144,8 +1144,8 @@ class DateParserPlugin(Plugin):
         ``(?:\\s+|\\s*,\\s*)to(?:\\s+|\\s*,\\s*)``: matched with ``.split()``
         against a huge separator-only string containing no "to" at all, that
         pattern's leading run is re-attempted at every character offset, and
-        each attempt itself re-scans the remaining run before failing -- an
-        O(n²) blowup (measured: 11.6s for a 50,000-space
+        each attempt itself re-scans the remaining run before failing, a
+        quadratic blowup (measured: 11.6s for a 50,000-space
         input), the same class of user-controlled-input DoS the module
         docstring's ``_RFC3339_UTC_RE`` comment already documents fixing
         once. Finding the fixed two-character literal "to" is a single O(n)
