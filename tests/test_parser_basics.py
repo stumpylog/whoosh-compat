@@ -308,6 +308,61 @@ def test_long_word_run_parses_in_linear_time(reg: FieldRegistry, run: str) -> No
     assert elapsed < 3.0
 
 
+# -- An opener whose closer never comes (a range bracket, a single quote)
+# -- used to cost super-linear parse time: each opener's regex scanned
+# -- forward for a closer, and the range one re-tried every later "to".
+
+
+@pytest.mark.wall_clock
+@pytest.mark.parametrize(
+    ("unit", "tail", "size"),
+    [
+        pytest.param("[a to ", "", 16384, id="range-with-to-no-closer"),
+        pytest.param("[a ", "", 16384, id="range-bracket"),
+        pytest.param("{a ", "", 16384, id="range-brace"),
+        pytest.param("['a ", "", 16384, id="range-bracket-and-quote"),
+        pytest.param("'a ", "", 16384, id="single-quote"),
+        # A closer and a "to" both exist, but in the order that cannot
+        # make a range: every bracket is closed by the same "]", and the
+        # only "to" comes after it. Twice the size of the rows above,
+        # because this is the one shape whose old cost (quadratic, from
+        # scanning to that closer) would otherwise fit the budget here.
+        pytest.param("[a ", "] to x", 32768, id="range-with-to-after-the-closer"),
+    ],
+)
+def test_an_opener_without_a_closer_parses_in_linear_time(
+    reg: FieldRegistry, unit: str, tail: str, size: int
+) -> None:
+    """Sized so the guard cannot be flaky rather than so it is quick.
+    Measured on the author's machine at 16 KB: 4 to 6 s per shape before
+    the fix, and about half an hour for the "to" shape, whose cost grew
+    with the cube of the length (every later "to" was tried as a bound,
+    each scanning to end of input; 4 KB of it cost 30 s). After the fix
+    each shape is about a second here, against a budget of 6 s per 16 KB,
+    so the pre-fix cost stays several times the budget even on a runner a
+    few times slower. 8 KB would not do: the quadratic shapes already fit
+    the budget there. Absolute seconds are hardware-specific; the durable claim is
+    the shape, super-linear before and linear after, which this guards
+    without measuring it.
+    """
+    query = unit * (size // len(unit)) + tail
+    short = wc.parse(unit * 2 + tail, registry=reg, default_fields=["content", "title"])
+    start = time.perf_counter()
+    result = wc.parse(query, registry=reg, default_fields=["content", "title"])
+    elapsed = time.perf_counter() - start
+    # Checked, not just timed: an unclosed opener is ordinary text, and
+    # repeating it adds no new words, so the long query searches for the
+    # same words as two repeats of it.
+    assert result.diagnostics == ()
+    assert not any(isinstance(n, ast.ErrorLeaf) for n in _flatten(result.ast))
+    assert _term_texts(result.ast) == _term_texts(short.ast) != set()
+    assert elapsed < 6.0 * size / 16384
+
+
+def _term_texts(node: ast.Node) -> set[object]:
+    return {n.text for n in _flatten(node) if isinstance(n, ast.Term)}
+
+
 def _flatten(node: ast.Node) -> list[ast.Node]:
     """Collects a node and every descendant reachable through the AST's
     various child-holding attributes, for assertions that just need to know

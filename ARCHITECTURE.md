@@ -786,19 +786,40 @@ the curve is gone (a 60KB run parses in about half a second). A custom
 `FieldsPlugin(expr=...)` keeps plain matching, since the argument holds
 only for the default expression.
 
-Two inherited quadratics remain on this path, both in taggers whose regex
-scans forward from an opener that never closes. The range tagger scans
-from each unclosed `[` or `{` to the next `]` or `}`, or to end-of-input
-(its regex is upstream's plus word boundaries around `to`); the
-single-quote tagger, with upstream's regex unchanged, scans from each
-unmatched `'` in the same way. Parse time is quadratic in the number of
-such openers: ~1s at 8KB of repeated `[a ` or `'a `, ~4s at 16KB, and the
-pinned oracle measured the same curves on the same inputs. No exact skip
-for either has been worked out, so both stay inherited, and the README's
-host-contract section tells hosts to cap query length at their own
-boundary instead. Figures
-here are order-of-magnitude, from one developer machine, like those below;
-the durable claim is the ~4x-per-doubling curve.
+Two more taggers cost the same way and are fixed the same way: both scan
+forward from an opener whose closer never comes. The range tagger (its
+regex upstream's plus word boundaries around `to`) scanned from each
+unclosed `[` or `{`, the single-quote tagger (upstream's regex unchanged)
+from each unmatched `'`. Both were quadratic in the number of such
+openers, ~1s at 8KB and ~4s at 16KB. The range one was *cubic* where a
+`to` followed the opener, since the expression re-tried every later `to`
+as a bound and each attempt scanned to end-of-input: `[a to ` repeated to
+4KB cost about 30s, inside the query-length cap a host would plausibly
+set, and 16KB about half an hour. The pinned oracle measured the same on
+every one of those inputs, so both costs were inherited, not introduced.
+
+Neither regex changed. Each tagger now decides, before running its
+expression, whether the expression could match at that position. A closing
+quote must reach its opening one without crossing a newline (`.` stops
+there), so one failed search rules out every later opening quote up to
+that newline, which is the span the single-quote tagger remembers. For the
+range tagger, the closing bracket is mandatory and, before the `to`, only
+a quoted start may cross one (a quoted end may too, but it follows a `to`
+the first case has already placed), so a match needs a `to` before the
+first closer after the bracket (that closer then closes the range), or a
+quoted start followed by whitespace, a `to`, and some later closer; both
+are answered from the closer and `to` positions, computed once per query.
+A match the check allows still goes through the real expression, so spans
+and groups are the expression's own. `tests/test_plugins_unit.py` checks
+every position of generated texts against a plain match for both, the way
+it does for the fieldname tagger; `PhrasePlugin`'s similar-looking
+`"(?P<text>.*?)"` needs no such check, since any two `"` match and at most
+one scan can fail. Each of those shapes now parses in about a second at
+16KB (from 4s, 6s and half an hour), and the README's host-contract
+section asks hosts to cap query length as ordinary input hygiene rather
+than to dodge a curve. Figures here are order-of-magnitude, from one
+developer machine, like those below; the durable claim is the growth,
+super-linear before and linear after.
 
 *Other* super-linear costs on the same user-reachable path were not
 inherited from whoosh and are fixed rather than tolerated, since none had a

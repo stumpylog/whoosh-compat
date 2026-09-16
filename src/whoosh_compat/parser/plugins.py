@@ -47,6 +47,7 @@ Two extensions beyond stock whoosh live here:
 from __future__ import annotations
 
 import copy
+from bisect import bisect_left
 from re import Match
 from typing import Any
 
@@ -60,6 +61,14 @@ from whoosh_compat.parser.taggers import FnTagger
 from whoosh_compat.parser.taggers import RegexTagger
 from whoosh_compat.parser.taggers import Tagger
 from whoosh_compat.parser.text import rcompile
+
+# Helpers for the two "the expression cannot match here" checks below
+# (SingleQuotePlugin, RangePlugin.RangeTagger). Compiled through rcompile
+# so they read \w, \b and \s exactly as the tagger expressions do.
+_WORD_CHAR = rcompile(r"\w")
+_RANGE_CLOSER = rcompile(r"[\]}]")
+_RANGE_TO = rcompile(r"\b[Tt][Oo]\b")
+_SPACE_RUN = rcompile(r"\s+")
 
 TaggerEntry = tuple[Tagger, int]
 FilterFn = Any
@@ -227,6 +236,34 @@ class SingleQuotePlugin(TaggingPlugin):
 
     expr = rcompile(r"(^|(?<=\W))'(?P<text>.*?)'(?=\s|\]|[)}]|$)")
     nodetype = QuotedWordNode
+
+    # "." stops at a newline, so a closing quote has to reach its opening
+    # one without crossing one: when the search from one opening quote
+    # fails, every later opening quote up to that newline sees a subset of
+    # the same candidates and fails too. Remembering that span costs one
+    # scan instead of one per later quote, which is what made an unmatched
+    # quote quadratic. The argument holds only for the expression above,
+    # and only while create() accepts every match it makes, so a subclass
+    # or a custom expression keeps plain matching.
+    _skip: tuple[str, int, int] | None = None
+
+    def __init__(self, expr: str | None = None) -> None:
+        TaggingPlugin.__init__(self, expr)
+        self._can_skip = type(self) is SingleQuotePlugin and self.expr is SingleQuotePlugin.expr
+
+    def match(self, parser: Any, text: str, pos: int) -> Any:
+        skip = self._skip
+        if skip is not None and skip[0] is text and skip[1] <= pos < skip[2]:
+            return None
+        node = RegexTagger.match(self, parser, text, pos)
+        if (node is None and self._can_skip and pos < len(text) and text[pos] == "'"
+                and (pos == 0 or _WORD_CHAR.match(text, pos - 1) is None)):
+            # The opening context held, so the failure was the missing
+            # closing quote. A failure on the preceding character instead
+            # would rule out nothing later.
+            newline = text.find("\n", pos)
+            self._skip = (text, pos, len(text) if newline == -1 else newline)
+        return node
 
 
 class WildcardPlugin(TaggingPlugin):
@@ -742,10 +779,62 @@ class RangePlugin(Plugin):
     """, verbose=True)
 
     class RangeTagger(RegexTagger):
+        # The closing bracket is mandatory, and before the "to" only a
+        # quoted start may span a closer (a quoted *end* may too, but it
+        # follows a "to" that the first case below has already placed). So
+        # a match from an open bracket needs a "to" before the first closer
+        # after it, which then closes the range, or a quoted start followed
+        # by whitespace, a "to" and some later closer. Answering that from
+        # precomputed positions keeps an unclosed bracket from rescanning:
+        # the expression re-tried every later "to" as a bound, each scan
+        # running to end of input, costing the cube of the query length.
+        # The argument holds only for the expression below, and only while
+        # create() accepts every match it makes, so a subclass or a custom
+        # expression keeps plain matching.
+        _positions: tuple[str, list[int], list[int], set[int]] | None = None
+
         def __init__(self, expr: Any, excl_start: str, excl_end: str) -> None:
             self.expr = expr
             self.excl_start = excl_start
             self.excl_end = excl_end
+            self._can_skip = type(self) is RangePlugin.RangeTagger and expr is RangePlugin.expr
+
+        def _text_positions(self, text: str) -> tuple[str, list[int], list[int], set[int]]:
+            """The closers and the "to" words of ``text``, computed once.
+
+            Keeps ``text`` itself, so the identity check below cannot see a
+            different string reusing a freed one's id.
+            """
+            found = self._positions
+            if found is None or found[0] is not text:
+                tos = [m.start() for m in _RANGE_TO.finditer(text)]
+                found = (text, [m.start() for m in _RANGE_CLOSER.finditer(text)], tos, set(tos))
+                self._positions = found
+            return found
+
+        def _can_match(self, text: str, pos: int) -> bool:
+            if pos >= len(text) or text[pos] not in "[{":
+                return False
+            _, closers, tos, to_starts = self._text_positions(text)
+            first_closer = bisect_left(closers, pos + 1)
+            if first_closer == len(closers):
+                return False  # nothing can close the range
+            to = bisect_left(tos, pos + 1)
+            if to < len(tos) and tos[to] < closers[first_closer]:
+                return True
+            if pos + 1 < len(text) and text[pos + 1] == "'":
+                quote = text.find("'", pos + 2)
+                spaces = None if quote == -1 else _SPACE_RUN.match(text, quote + 1)
+                if spaces is not None:
+                    after = spaces.end()
+                    if after in to_starts and bisect_left(closers, after + 2) < len(closers):
+                        return True
+            return False
+
+        def match(self, parser: Any, text: str, pos: int) -> Any:
+            if self._can_skip and not self._can_match(text, pos):
+                return None
+            return RegexTagger.match(self, parser, text, pos)
 
         def create(self, parser: Any, match: Match[str]) -> syntax.RangeNode:
             start = match.group("start")

@@ -25,6 +25,7 @@ from whoosh_compat.parser import plugins
 from whoosh_compat.parser import priorities
 from whoosh_compat.parser import syntax
 from whoosh_compat.parser.taggers import RegexTagger
+from whoosh_compat.parser.text import rcompile
 
 
 class StubParser:
@@ -605,3 +606,166 @@ def test_field_alias_plugin_rewrites_fieldname() -> None:
     group = syntax.AndGroup([node])
     result = plugin.do_aliases(None, group)
     assert result[0].fieldname == "document_type"
+
+
+# An opener whose closer never comes makes these two taggers scan forward
+# and fail. Both skip work once they know the answer, so both are checked
+# against the plain regex match, position by position.
+
+
+def _node_state(node: Any) -> tuple[Any, ...] | None:
+    if node is None:
+        return None
+    return (
+        type(node).__name__,
+        node.startchar,
+        node.endchar,
+        getattr(node, "text", None),
+        getattr(node, "start", None),
+        getattr(node, "end", None),
+        getattr(node, "startexcl", None),
+        getattr(node, "endexcl", None),
+    )
+
+
+# Openers, closers, both line breaks ("." stops at "\n" but not at "\r", so
+# only "\n" may bound the single-quote tagger's reach), and the "to" the
+# range expression needs, with near misses.
+_OPENER_TEXT = st.lists(
+    st.sampled_from(
+        [
+            "'",
+            '"',
+            "[",
+            "]",
+            "{",
+            "}",
+            "(",
+            ")",
+            " ",
+            "\n",
+            "\r",
+            "\t",
+            ":",
+            "a",
+            "to",
+            "TO",
+            "tox",
+            "into",
+        ]
+    ),
+    max_size=12,
+).map("".join)
+
+
+def _range_tagger(plugin: plugins.RangePlugin) -> plugins.RangePlugin.RangeTagger:
+    return plugin.RangeTagger(plugin.expr, plugin.excl_start, plugin.excl_end)
+
+
+def _agrees_with_plain_match(make_tagger: Any, texts: list[str], data: st.DataObject) -> None:
+    """The tagger's answers must equal a plain ``RegexTagger.match`` on a
+    second, skip-free tagger: first in the tag loop's own order, then at
+    arbitrary positions, in any order, across texts.
+    """
+    tagger = make_tagger()
+    reference = make_tagger()
+    calls = [(i, pos) for i, text in enumerate(texts) for pos in range(len(text) + 1)]
+    calls += data.draw(
+        st.lists(
+            st.integers(0, len(texts) - 1).flatmap(
+                lambda i: st.tuples(st.just(i), st.integers(0, len(texts[i])))
+            ),
+            max_size=40,
+        )
+    )
+    for i, pos in calls:
+        text = texts[i]
+        got = tagger.match(None, text, pos)
+        want = RegexTagger.match(reference, None, text, pos)
+        assert _node_state(got) == _node_state(want), (text, pos)
+
+
+@given(texts=st.lists(_OPENER_TEXT, min_size=1, max_size=3), data=st.data())
+@settings(max_examples=300)
+def test_single_quote_tagger_agrees_with_a_plain_regex_match(
+    texts: list[str], data: st.DataObject
+) -> None:
+    _agrees_with_plain_match(plugins.SingleQuotePlugin, texts, data)
+
+
+@given(texts=st.lists(_OPENER_TEXT, min_size=1, max_size=3), data=st.data())
+@settings(max_examples=300)
+def test_range_tagger_agrees_with_a_plain_regex_match(
+    texts: list[str], data: st.DataObject
+) -> None:
+    plugin = plugins.RangePlugin()
+    _agrees_with_plain_match(lambda: _range_tagger(plugin), texts, data)
+
+
+def test_single_quote_tagger_looks_past_a_newline_for_a_later_quote() -> None:
+    # A failed search from the quote at 0 stops at the newline, so it says
+    # nothing about the quoted word on the next line.
+    tagger = plugins.SingleQuotePlugin()
+    text = "'a 'b\n'c' x"
+    assert tagger.match(None, text, 0) is None
+    node = tagger.match(None, text, 6)
+    assert isinstance(node, syntax.WordNode)
+    assert node.text == "c"
+
+
+def test_single_quote_tagger_keeps_matching_after_a_quote_that_follows_a_word() -> None:
+    # The failure at 1 is the opening context ("a" is a word character),
+    # not a missing closer, so it rules out nothing later.
+    tagger = plugins.SingleQuotePlugin()
+    text = "a'b 'c' x"
+    assert tagger.match(None, text, 1) is None
+    node = tagger.match(None, text, 4)
+    assert isinstance(node, syntax.WordNode)
+    assert node.text == "c"
+
+
+def test_range_tagger_matches_a_quoted_bound_containing_a_closer() -> None:
+    # The quoted start is the one alternative that may span a "]", so a
+    # missing "to" before the first closer does not rule out a match.
+    tagger = _range_tagger(plugins.RangePlugin())
+    node = tagger.match(None, "['a]b' to c]", 0)
+    assert isinstance(node, syntax.RangeNode)
+    assert (node.start, node.end) == ("a]b", "c")
+
+
+def test_single_quote_tagger_with_a_custom_expr_matches_every_position() -> None:
+    # Skipping ahead is only exact for the shipped expression.
+    tagger = plugins.SingleQuotePlugin(expr=r"'(?P<text>[^']*)'")
+    assert tagger.match(None, "'a b", 0) is None
+    node = tagger.match(None, "'a b'c'", 4)
+    assert isinstance(node, syntax.WordNode)
+    assert node.text == "c"
+
+
+def test_range_tagger_with_a_custom_expr_matches_every_position() -> None:
+    # The same expression with "til" as its separator. RangePlugin does not
+    # compile a string expression, so this passes a compiled one.
+    custom = rcompile(
+        plugins.RangePlugin.expr.pattern.replace("[Tt][Oo]", "[Tt][Ii][Ll]"),
+        verbose=True,
+    )
+    tagger = _range_tagger(plugins.RangePlugin(expr=custom))
+    # No "to" anywhere, so the shipped expression could never match here.
+    node = tagger.match(None, "[a til b]", 0)
+    assert isinstance(node, syntax.RangeNode)
+    assert (node.start, node.end) == ("a", "b")
+
+
+def test_a_single_quote_subclass_that_declines_a_match_still_sees_every_position() -> None:
+    # The skip relies on create() accepting every match the regex makes.
+    # A subclass that declines one keeps plain matching instead.
+    class Picky(plugins.SingleQuotePlugin):
+        def create(self, parser: Any, match: Any) -> Any:
+            return None if match.group("text") == "skip" else super().create(parser, match)
+
+    tagger = Picky()
+    text = "'skip' 'ok' x"
+    assert tagger.match(None, text, 0) is None
+    node = tagger.match(None, text, 7)
+    assert isinstance(node, syntax.WordNode)
+    assert node.text == "ok"

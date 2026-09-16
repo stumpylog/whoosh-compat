@@ -236,26 +236,20 @@ quote or escape before re-parsing, and note that a whole-token filter
 (`\w+`) over these entries drops every hyphenated, dotted or
 quoted-phrase term outright, because the text is untokenized.
 
-**Cap query length at the host boundary.** Parse time is quadratic in the
-number of unclosed range brackets or unmatched single quotes: the range
-tagger's regex scans forward from each `[` or `{` to the next `]` or `}`,
-and the single-quote tagger's from each `'` to a closing one, or to
-end-of-input, failing at each successive opener. Measured on one developer
-machine, so treat these as order-of-magnitude and the ~4x-per-doubling
-growth as the durable claim: `[a ` or `'a ` repeated to 4KB ~0.3 to 0.4
-seconds, 8KB ~1 second, 16KB ~4 seconds. Both costs are inherited from
-whoosh: the single-quote regex is upstream's unchanged, the range regex
-only adds word boundaries around `to` (which leave the scan's character
-alone), and real whoosh shows the same curves on the same inputs (measured
-8KB ~1 second, 16KB ~3 to 4 seconds against the pinned oracle).
-A long run of word characters containing no `:` (CJK text, a long token,
-a dotted string) used to cost the same way through the fieldname tagger;
-that tagger now skips the rest of a run once a match fails inside it,
-which produces exactly the same parse in linear time (a 60KB run parses in
-about half a second). The parser's own nesting-depth cap bounds recursion,
-not CPU time, so a host accepting untrusted query strings should enforce
-its own length limit (a few KB comfortably covers any human-written query)
-before calling `parse()`.
+**Cap query length at the host boundary.** Parse time is linear in query
+length on every shape measured, the adversarial ones included: a long run
+of word characters with no `:` (CJK text, a long token, a dotted string),
+unclosed range brackets, and unmatched single quotes. Each used to be
+super-linear, because a tagger's regex rescanned the rest of the input
+from every position it was tried at, and the worst, an unclosed `[` with a
+`to` after it, grew with the cube of the length (a 4KB query cost about 30
+seconds). Those taggers now work out where their expression cannot match
+and skip the scan, giving exactly the same parse: measured on one
+developer machine, 16KB of any of those shapes parses in about a second
+and 64KB in a few seconds. The parser's own nesting-depth cap bounds
+recursion, not CPU time, and linear is not free, so a host accepting
+untrusted query strings should still enforce its own length limit (a few
+KB comfortably covers any human-written query) before calling `parse()`.
 
 ### Hand-building a `Fuzzy` node for a caller-side companion clause
 
