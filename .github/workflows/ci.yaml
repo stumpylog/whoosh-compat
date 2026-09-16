@@ -14,6 +14,10 @@ jobs:
   test:
     name: test (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
+    # A super-linear regression under any wall_clock guard surfaces as a run
+    # that never reaches the guard's assertion, not as a failure; this turns
+    # that hang into a failed job well inside GitHub's default cap.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -71,6 +75,7 @@ jobs:
   tantivy-pin:
     name: tantivy ~=0.26.0 (paperless-ngx pin)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

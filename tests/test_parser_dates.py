@@ -1,4 +1,5 @@
 import time
+from collections.abc import Callable
 from collections.abc import Iterator
 from datetime import UTC
 from datetime import datetime
@@ -2253,120 +2254,186 @@ def test_to_span_split_still_recognized_on_long_values() -> None:
     assert elapsed < 2.0
 
 
-# -- Systematic backtracking audit (issue #67 part 2): guard tests for the ---
-# -- shapes that looked riskiest by inspection but were found linear by -----
-# -- construction, not by an explicit fix like the ones above. These pin ----
-# -- that they *stay* linear if the grammar is ever extended. See the ARCH- --
-# -- ITECTURE.md "Systematic backtracking audit" section for the full survey.
+# -- Backtracking audit guards: the shapes that looked riskiest by ----------
+# -- inspection but are linear by construction, not by an explicit fix like
+# -- the ones above. These pin that they *stay* linear if the grammar is ---
+# -- ever extended. See ARCHITECTURE.md's "Systematic backtracking audit". --
 
 
-# A doubling-ratio budget, not a fixed number of seconds: growth from n to
-# 2n stays near 2x for linear work (measured 1.6-2.4x on every shape below)
-# and would jump to roughly 4x for quadratic work, so a bound of 3.0x has
-# headroom above ordinary linear noise while still catching quadratic long
-# before it would need to. A fixed-seconds bound was tried first for these
-# three and rejected: 93bafda's 3.0s passed locally (2.3s) and failed on a
-# slower CI runner (4.3s) for the same real linear cost, the false-positive
-# a ratio check does not have because it never compares against a
-# hardware-specific constant.
+# Which timing guard to write. A fixed-seconds budget when the claim is an
+# absolute ceiling, or when the linear cost is so small (a few
+# milliseconds, as for the RFC3339 guards above and the DoS guards in
+# tests/emitter/test_emit_patterns.py) that a ratio of two samples would
+# measure allocation and timer noise rather than algorithmic order. A
+# doubling ratio when the claim is the growth curve and the samples are
+# large against that noise once the fastest of several is kept: hundreds
+# of milliseconds, which all three guards below sample in (a version of the
+# PlusMinus guard sampling at 30 ms and 60 ms failed once in three runs
+# with another process on the machine, so tens of milliseconds is not
+# enough). Growth from n to 2n stays near 2x for linear work (measured
+# 1.5-2.5x on every shape below, quiet and under CPU contention) and
+# reaches roughly 4x for quadratic work, so a 3.0x bound clears linear
+# noise while still catching quadratic. The three guards below are ratio
+# guards because their real linear cost is large enough that a seconds
+# budget would have to be tuned to the slowest CI runner, and a ratio never
+# compares against a hardware-specific constant. Each size is timed several
+# times and the fastest sample kept, since a stall (a GC pause, a noisy
+# neighbour) only ever adds time, so the minimum is the measurement least
+# contaminated by it; without that, a stall landing in the larger sample
+# alone would fail correct code.
 _RATIO_BOUND = 3.0
+_RATIO_SAMPLES = 3
+
+
+def _doubling_ratio(measure: Callable[[int], None], n: int) -> float:
+    """Fastest-of-``_RATIO_SAMPLES`` wall time of ``measure(2 * n)`` over
+    that of ``measure(n)``, with the two sizes interleaved so a slow patch of
+    machine time is not attributed to one of them alone."""
+
+    best = {n: float("inf"), 2 * n: float("inf")}
+    for _ in range(_RATIO_SAMPLES):
+        for size in (n, 2 * n):
+            start = time.perf_counter()
+            measure(size)
+            best[size] = min(best[size], time.perf_counter() - start)
+    return best[2 * n] / best[n]
+
+
+def _assert_linear(measure: Callable[[int], None], n: int) -> None:
+    ratio = _doubling_ratio(measure, n)
+    assert ratio < _RATIO_BOUND, (
+        f"doubling n={n} cost {ratio:.2f}x, bound {_RATIO_BOUND}x (linear is ~2x, quadratic ~4x)"
+    )
 
 
 @pytest.mark.wall_clock
 def test_plusminus_relative_offset_is_linear_in_digit_run_length() -> None:
-    """``PlusMinus.expr`` chains seven independently-optional
-    ``(digits words?)?`` groups, which looks like the classic
-    adjacent-optional-quantifier ReDoS shape. It isn't one, because none of
-    the seven groups repeats (each is wrapped in ``(...)?``, not ``(...)+``),
-    so there is no outer repetition to explore multiple splits of the same
-    span under: a long digit run can only ever be consumed once, by the
-    first group's own ``[0-9]+``, and the only backtracking is that single
-    group unwinding against a non-matching trailer.
+    """``PlusMinus.expr`` chains seven optional ``(digits unit)?`` groups
+    over the same digit class, which looks like the classic
+    adjacent-optional-quantifier ReDoS shape. Not repeating the groups is
+    *not* what saves it: seven adjacent optional groups do explore every
+    split of a digit run between them if the unit word inside each is
+    optional (that variant is polynomial, a third of a second at 20 digits).
+    What saves it is that the unit word is mandatory, so a digit run can only
+    end where a unit follows: each group's ``[0-9]+`` unwinds once against a
+    trailer that is not a unit and then matches empty, seven linear passes in
+    total, and the trailing ``(?=(\\W|$))`` lookahead rejects the probe
+    without reopening any of them.
 
     No fix accompanies this test; it exists to catch a future grammar edit
-    (an added relative-unit group, a widened separator) that reintroduces
-    real ambiguity between adjacent groups.
+    (a unit made optional, say to accept ``+3`` as days, or a widened
+    separator) that lets a digit run end in more than one place.
+
+    Sized so the samples are large against timing noise (see the note on
+    ``_RATIO_BOUND``) while a quadratic regression still reaches the
+    assertion in minutes rather than hours, inside the CI job timeout; a
+    worse blow-up (the optional-unit variant is polynomial of a higher
+    degree) never reaches it at any size and is caught by that timeout
+    instead. ARCHITECTURE.md's audit section has the measured per-step cost
+    this was derived from.
     """
     plusdate = English().plusdate
 
-    def parse_digit_run(n: int) -> float:
-        text = "+" + "1" * n + "x"
-        start = time.perf_counter()
-        result = plusdate.date_from(text, BASE)
-        elapsed = time.perf_counter() - start
-        # Checked, not just timed: an all-digit run with no unit word
-        # matches nothing (every rel_* group needs its unit), a clean miss.
-        assert result is None
-        return elapsed
+    def parse_digit_run(n: int) -> None:
+        # Checked, not just timed: "+" alone would match (every group empty)
+        # and yield the base date, so it is the lookahead at the digit that
+        # makes this a clean miss.
+        assert plusdate.date_from("+" + "1" * n + "x", BASE) is None
 
-    small = parse_digit_run(200_000)
-    large = parse_digit_run(400_000)
-    assert large < _RATIO_BOUND * small
+    _assert_linear(parse_digit_run, 200_000)
+
+
+# A full window: the filter joins the head with up to this many unfielded
+# words after it and tries every prefix of two or more words, so a head
+# followed by exactly this many costs exactly this many grammar calls.
+_UNQUOTED_WINDOW_WORDS = DateParserPlugin._UNQUOTED_LOOKAHEAD
 
 
 @pytest.mark.wall_clock
-def test_many_unquoted_date_fielded_words_is_linear_in_word_count(reg: FieldRegistry) -> None:
+def test_many_unquoted_date_fielded_words_is_linear_in_word_count(
+    reg: FieldRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """DIVERGENCES.md entry 61's unquoted-date-value filter
-    (``do_unquoted_date_values``) calls the full date grammar up to
-    ``_UNQUOTED_LOOKAHEAD`` (15) times per date-fielded word, over a
-    shrinking window of up to 15 following words. That is a bounded
-    constant per word, not a scan that grows with the rest of the query, so
-    a query with many separate date-fielded words should cost linearly in
-    the number of such words.
+    (``do_unquoted_date_values``) joins each date-fielded word with up to
+    ``_UNQUOTED_LOOKAHEAD`` (15) *unfielded* words after it and calls the
+    full date grammar on every prefix of that run, longest first. The window
+    is bounded in words, not characters, so one head's cost grows with the
+    length of the words that follow it; the total stays linear in the query
+    because the window stops at the next fielded word, so an unfielded word
+    sits in at most one head's window and the windows are disjoint slices of
+    the query.
 
-    Each word here is deliberately non-date-like garbage of the same
-    lengths the grammar's leaf patterns backtrack over (a long digit run
-    plus letters), chosen to make each of the up-to-15 attempts do real
-    work before failing rather than reject at the first character.
+    The shape here is what exercises that loop: a real date head followed by
+    a full window of unfielded words that are not dates, repeated. A query of
+    date-fielded words alone would give every head an empty window and never
+    call the grammar from this filter at all, which is why the grammar-call
+    count is asserted as well as the time.
     """
+    calls = 0
+    raw_full_parse = DateParserPlugin._raw_full_parse
 
-    def parse_date_fielded_words(n: int) -> float:
-        query = " ".join(f"added:1234x{i}" for i in range(n))
-        start = time.perf_counter()
-        result = wc.parse(query, registry=reg, default_fields=["content"], tz=BERLIN, basedate=BASE)
-        elapsed = time.perf_counter() - start
-        # Checked, not just timed: none of these words look enough like a
-        # date to parse as one, so every one falls back to an ordinary term.
-        assert not any(isinstance(node, ast.DateRange) for node in _nodes(result.ast))
-        return elapsed
+    def counting(self: DateParserPlugin, text: str) -> object:
+        nonlocal calls
+        calls += 1
+        return raw_full_parse(self, text)
 
-    small = parse_date_fielded_words(2000)
-    large = parse_date_fielded_words(4000)
-    assert large < _RATIO_BOUND * small
+    monkeypatch.setattr(DateParserPlugin, "_raw_full_parse", counting)
+    head = "added:2026-01-15 " + " ".join(f"1234x{j}" for j in range(_UNQUOTED_WINDOW_WORDS))
+
+    def parse_date_heads(n: int) -> None:
+        nonlocal calls
+        calls = 0
+        result = dparse(" ".join([head] * n), reg)
+        # Checked, not just timed: the heads parse as the date they are and
+        # the window words stay ordinary terms (normalize()'s dedupe collapses
+        # each repeated node to one), and the filter tried every prefix of
+        # every window, so the loop under test ran, and ran a bounded number
+        # of times per head.
+        assert result.diagnostics == ()
+        assert sum(isinstance(node, ast.DateRange) for node in _nodes(result.ast)) == 1
+        terms = {node.text for node in _nodes(result.ast) if isinstance(node, ast.Term)}
+        assert terms == {f"1234x{j}" for j in range(_UNQUOTED_WINDOW_WORDS)}
+        assert calls == n * _UNQUOTED_WINDOW_WORDS
+
+    _assert_linear(parse_date_heads, 50)
 
 
 @pytest.mark.wall_clock
-def test_many_unpaired_double_quotes_parses_in_linear_time(reg: FieldRegistry) -> None:
+@pytest.mark.parametrize(
+    ("unit", "phrases", "terms"),
+    [
+        pytest.param('"a', {"a"}, {"a"}, id="every-quote-pairs"),
+        pytest.param('"a\n', set(), {'"a'}, id="every-scan-fails-at-a-newline"),
+    ],
+)
+def test_double_quote_runs_parse_in_linear_time(
+    reg: FieldRegistry, unit: str, phrases: set[str], terms: set[str]
+) -> None:
     """``PhrasePlugin``'s ``"(?P<text>.*?)"...`` looks like the same
     lazy-quantifier-to-a-rare-delimiter shape that made ``SingleQuotePlugin``
-    and the range tagger quadratic/cubic (see ARCHITECTURE.md), but has no
-    lookahead after the closing quote that can fail and force ``.*?`` past a
-    quote it already found, so it needs no skip-cache: each quote position's
-    scan is bounded by the gap to the next quote, and those gaps are
-    disjoint across the string.
+    and the range tagger quadratic/cubic (see ARCHITECTURE.md), but needs no
+    skip-cache. A scan from an opening quote stops at the next quote or, since
+    ``.`` excludes it, the next newline, whichever is first, and nothing after
+    the closing quote can fail and push the scan further (the slop suffix is
+    optional). So the spans scanned from successive quotes are disjoint and
+    sum to the text length, whether or not the quotes pair.
+
+    Both halves of that are pinned: a run where every quote pairs (``"a"``
+    phrase, bare ``a``, repeat), and a run where every scan fails at a
+    newline, leaving each ``"a`` a bare term, which is the shape that would
+    blow up if a failed scan could be repeated from the next quote.
     """
 
-    def parse_unpaired_quotes(n: int) -> float:
-        query = '"a' * n
-        start = time.perf_counter()
-        result = wc.parse(query, registry=reg, default_fields=["content"])
-        elapsed = time.perf_counter() - start
-        # Checked, not just timed: the repeat unit pairs quotes every 4
-        # characters into a one-letter phrase followed by a dangling bare
-        # "a", over and over, so every phrase and every bare term is the
-        # same repeated node; normalize()'s dedupe collapses each down to
-        # one.
+    def parse_quote_run(n: int) -> None:
+        result = wc.parse(unit * n, registry=reg, default_fields=["content"])
+        # Checked, not just timed: the repeat unit produces the same phrase
+        # and/or term over and over, which normalize()'s dedupe collapses
+        # down to one node each.
         assert result.diagnostics == ()
-        assert isinstance(result.ast, ast.And)
-        phrases = {c.text for c in result.ast.children if isinstance(c, ast.Phrase)}
-        terms = {c.text for c in result.ast.children if isinstance(c, ast.Term)}
-        assert phrases == {"a"}
-        assert terms == {"a"}
-        return elapsed
+        assert {node.text for node in _nodes(result.ast) if isinstance(node, ast.Phrase)} == phrases
+        assert {node.text for node in _nodes(result.ast) if isinstance(node, ast.Term)} == terms
 
-    small = parse_unpaired_quotes(10_000)
-    large = parse_unpaired_quotes(20_000)
-    assert large < _RATIO_BOUND * small
+    _assert_linear(parse_quote_run, 3000)
 
 
 # -- Quoted vs bracketed relative-span exactness agree (bug fix, no --------

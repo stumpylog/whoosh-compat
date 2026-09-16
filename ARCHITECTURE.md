@@ -812,9 +812,18 @@ are answered from the closer and `to` positions, computed once per query.
 A match the check allows still goes through the real expression, so spans
 and groups are the expression's own. `tests/test_plugins_unit.py` checks
 every position of generated texts against a plain match for both, the way
-it does for the fieldname tagger; `PhrasePlugin`'s similar-looking
-`"(?P<text>.*?)"` needs no such check, since any two `"` match and at most
-one scan can fail. Each of those shapes now parses in about a second at
+it does for the fieldname tagger. `PhrasePlugin`'s similar-looking
+`"(?P<text>.*?)"` needs no such check. A scan from an opening `"` stops at
+the next `"` or, since `.` excludes it, the next newline, whichever comes
+first, and nothing after the closing quote can fail and push the scan
+further (the slop suffix is optional), so the spans scanned from successive
+quotes are disjoint and sum to the text length. Quotes do not always pair
+(one on each side of a newline stays unpaired, and a `"` inside a token
+another tagger opened earlier, a range or a single-quoted value, is never
+offered to this tagger at all), and every unpaired one costs a failed
+scan, but each such scan ends at the newline that failed it and no later
+quote repeats it.
+Each of those shapes now parses in about a second at
 16KB (from 4s, 6s and half an hour), and the README's host-contract
 section asks hosts to cap query length as ordinary input hygiene rather
 than to dodge a curve. Figures here are order-of-magnitude, from one
@@ -857,72 +866,95 @@ accepted language of each is pinned unchanged by differential checks against
 the previous implementations (and, for the glob, against the
 `fnmatch.translate` oracle that defines it).
 
-**Systematic backtracking audit (issue #67).** The fixes above were each
-found by measuring a specific shape, not by enumerating every pattern in
-`parser/`. Issue #67 asked for that enumeration, so every `rcompile`/
-`re.compile` call in `parser/` was classified for worst-case backtracking
-risk, plus the `Sequence`/`Combo`/`Bag` date-grammar combinators (which apply
-sub-rules and separators across elements, so cost could in principle compound
-across the combinator layer even where every individual pattern is
-well-behaved) and the unquoted-date-value filter's repeated grammar
-invocation (`DIVERGENCES.md` entry 61 calls the date grammar up to
+**Systematic backtracking audit.** The fixes above were each found by
+measuring a specific shape, not by enumerating every pattern in `parser/`.
+That enumeration was done separately: every `rcompile`/`re.compile` call in
+`parser/` was classified for worst-case backtracking risk, plus the
+date-grammar combinators (`Sequence`, `Combo`, `Bag`, `Choice`, `ToEnd`,
+which apply sub-rules and separators across elements, so cost could in
+principle compound across the combinator layer even where every individual
+pattern is well-behaved) and the unquoted-date-value filter's repeated
+grammar invocation (`DIVERGENCES.md` entry 61 calls the date grammar up to
 `_UNQUOTED_LOOKAHEAD` times per date-fielded word). Conclusion: no further
-hotspot exists beyond the four already fixed above (the fieldname tagger, the
-range and single-quote taggers, `glob_to_regex`, and the RFC3339 `Z` gate and
-its `to`-splitter sibling, `_find_to_split`, which already avoids regex
-entirely in favor of a manual scan for the same reason).
+hotspot exists beyond the five fixed above (the fieldname, range and
+single-quote taggers, `glob_to_regex`, and the RFC3339 `Z` gate) and the
+`Z` gate's `to`-splitter sibling, `_find_to_split`, which avoids regex
+entirely in favor of a manual scan for the same reason and whose own
+docstring records that fix.
 
 What the audit checked and why each cleared:
 
-- `dateparse.py`'s dozen-odd leaf patterns (`Sequence`, `Regex`, `Month`,
-  `PlusMinus`, `NowCompact`, `Daynames`, `Time12`, `_RFC3339_UTC_RE`): none
-  nests an unbounded quantifier inside another over the same character
-  class, and adjacent groups consume disjoint classes (digits versus literal
-  words, for example), so no pattern has the adjacent-ambiguous-quantifier
-  shape that makes backtracking explode. `PlusMinus.expr` looks the most
-  suspicious, seven sequential `(digits words?)?` groups, but each is
-  independently optional rather than repeated, so there is no outer
-  repetition to explore multiple splits of the same span under; confirmed
-  near-linear against an adversarial all-digit run with no closing unit word
+- `dateparse.py`'s leaf patterns (the `Regex` subclasses `Month`,
+  `PlusMinus`, `NowCompact`, `Daynames` and `Time12`, the grammar's inline
+  `Regex` rules, and `_RFC3339_UTC_RE`): none nests an unbounded quantifier
+  inside another over the same character class, and adjacent groups consume
+  disjoint classes (digits versus literal words, for example), so no pattern
+  has the adjacent-ambiguous-quantifier shape that makes backtracking
+  explode. `PlusMinus.expr` looks the most suspicious: seven sequential
+  optional `(digits unit)?` groups over the same digit class. Not repeating
+  the groups is *not* what saves it; seven adjacent optional groups do
+  explore every split of a digit run between them if the unit word inside
+  each is optional (that variant measures polynomial, a third of a second at
+  20 digits). What saves it is that the unit word is mandatory, so a digit
+  run can only end where a unit follows: each group's `[0-9]+` unwinds once
+  against a trailer that is not a unit and then matches empty, seven linear
+  passes in total, and the trailing `(?=(\W|$))` lookahead then rejects an
+  all-digit probe without reopening any group. Measured at about 1e-7 s per
+  step over roughly seven steps per digit, so linear at 400K digits costs a
+  quarter of a second, and a plain quadratic in the digit count would reach
+  the guard's assertion in minutes, inside the CI job timeout that catches
+  anything worse
   (`tests/test_parser_dates.py::test_plusminus_relative_offset_is_linear_in_digit_run_length`).
 - `Sequence` and `Combo` are a single monotonic left-to-right pass over their
   elements that fails fast on the first mismatch; neither retries a failed
-  match at a different split point. `Bag` tries every remaining element at
-  the *same* position each round, so it costs O(k^2) element-applications for
-  a Bag of size k, but k is the grammar's own small hand-authored element
-  count (2 in the one `Bag` this grammar builds), not something driven by
-  query length.
-- The unquoted-date-value filter's up-to-15 calls per date-fielded word are
-  each over a *shrinking* window bounded by `_UNQUOTED_LOOKAHEAD`, so every
-  date-fielded word contributes a bounded constant amount of work regardless
-  of query length; total cost is linear in the number of such words, not
-  quadratic in query length
+  match at a different split point. `Choice` tries each element at the same
+  position and takes the first that matches, and `ToEnd` wraps one element
+  and only checks where its match ended, so both cost their element count
+  per invocation. `Bag` tries every remaining element at the *same* position
+  each round, so it costs O(k^2) element-applications for a Bag of size k,
+  but k is the grammar's own small hand-authored element count (2 in the one
+  `Bag` this grammar builds), not something driven by query length.
+- The unquoted-date-value filter's window is bounded in *words*
+  (`_UNQUOTED_LOOKAHEAD`), not characters, so one date-fielded head's cost
+  grows with the total length of the unfielded words that follow it: up to
+  fifteen join-and-parse attempts over a shrinking prefix of that window.
+  The total is still linear in query length because the window stops at the
+  next fielded word, so an unfielded word sits in at most one head's window
+  and the windows are disjoint slices of the query; the whole filter does at
+  most fifteen passes over each slice. A query of date-fielded words alone
+  never enters the loop at all (every window is empty), so the guard test
+  uses heads each followed by a full window and asserts the grammar-call
+  count as well as the time
   (`tests/test_parser_dates.py::test_many_unquoted_date_fielded_words_is_linear_in_word_count`).
 - `plugins.py`'s remaining patterns (`_WORD_CHAR`, `_RANGE_CLOSER`,
   `_RANGE_TO`, `_SPACE_RUN`, `WildcardPlugin`, `BoostPlugin`, `EveryPlugin`,
-  `FieldsPlugin`'s `_run`, `default.py`'s `_SINGLE_CHAR_BRACKET_RANGE`) are
-  either fixed-length literal/character-class matches with no quantifier
-  ambiguity, or single whole-text `.finditer` passes cached once per query
-  rather than re-run per tag position. `PhrasePlugin`'s `"(?P<text>.*?)"`
-  looks like the SingleQuotePlugin shape that was fixed, a lazy quantifier
-  reaching for a rare delimiter, but has no lookahead after the closing
-  quote that can fail and force `.*?` past a quote it already found, so any
-  two quotes always pair and each quote position's scan is bounded by the
-  gap to the next one; it needs no skip-cache, which its own comment now
-  says, and stays linear on an adversarial run of alternating quote/letter
-  pairs
-  (`tests/test_parser_dates.py::test_many_unpaired_double_quotes_parses_in_linear_time`).
+  `FieldsPlugin`'s `_run`, the operator and group expressions that
+  `OperatorsPlugin` and `GroupPlugin` compile through `RegexTagger`, and
+  `default.py`'s `_SINGLE_CHAR_BRACKET_RANGE`) are either fixed-length
+  literal/character-class matches with no quantifier ambiguity, or single
+  whole-text `.finditer` passes cached once per query rather than re-run per
+  tag position. `PhrasePlugin`'s `"(?P<text>.*?)"`
+  is the lazy-quantifier-to-a-rare-delimiter shape that was fixed in
+  `SingleQuotePlugin`, and needs no skip-cache for the reason given with
+  that fix above: successive scans cover disjoint spans whether or not the
+  quotes pair. Pinned linear on both a run where every quote pairs and one
+  where every scan fails at a newline
+  (`tests/test_parser_dates.py::test_double_quote_runs_parse_in_linear_time`).
 - The tag loop itself (`QueryParser.tag()` in `default.py`) tries each
   tagger via an *anchored* `match(text, pos)`, never `search`, at each
   position it reaches; the only way a pattern's own internal backtracking
   can reintroduce a query-length-driven quadratic is for that anchored
-  attempt to itself scan forward on failure, which is exactly what the four
-  already-fixed patterns did and nothing else in the current pattern set
-  does.
+  attempt to itself scan forward on failure, which is exactly what the three
+  fixed *tagger* patterns did (the other fixes, `glob_to_regex` and the `Z`
+  gate, run once per value outside the tag loop) and nothing else in the
+  current pattern set does.
 
-None of this changed accepted-language or emitted output anywhere; the three
-new tests above are guard tests pinning the *shape stays linear*, not
-regression tests for a fix, since nothing here needed one.
+None of this changed accepted-language or emitted output anywhere; the tests
+named here are guards pinning that each shape *stays* linear, not regression
+tests for a fix, since nothing here needed one. They assert a doubling ratio
+rather than a seconds budget, and the CI jobs carry a timeout so that a
+regression large enough to never reach the assertion still fails the job;
+the test module records when each of the two guard shapes is the right one.
 
 One further super-linear cost sat in the AST rather than the parser:
 duplicate-sibling removal in `normalize()` was roughly cubic in nesting
