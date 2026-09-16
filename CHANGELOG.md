@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Intentional behavioral differences from real Whoosh are not changelog material; they are permanently documented, each with its rationale, in [DIVERGENCES.md](./DIVERGENCES.md).
 
+## [Unreleased]
+
+### Changed
+
+- The date grammar is now built once per process instead of once per `parse()` call. Building it compiles roughly 70 regular expressions, and `parse()` constructs a fresh parser (and so a fresh date plugin) on every call, so that cost was paid for every query, including queries containing no date at all. It measured at about 30% of `parse()`'s wall time, and removing it makes `parse()` about 25% faster over a mixed corpus and cuts peak memory per query by about 15%. Parse output is unchanged. `parse()` is still safe to call concurrently from several threads: a built grammar is read-only, because every combinator element holds only compiled patterns and sub-elements, and per-call state lives on the plugin (`basedate`, `tz`) and on the objects each match builds afresh. A host that wants its own grammar still passes `dateparser=` to `DateParserPlugin`; the shared one is `whoosh_compat.parser.dateparse.default_dateparser()`, and its `cache_clear()` forces a rebuild for anything that replaces the `English` grammar at runtime.
+
 ## [0.3.0] - 2026-09-16
 
 ### Added

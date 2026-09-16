@@ -157,7 +157,22 @@ forked from in turn. Within the forked pipeline:
   Among this fork's own grammar edits: a day number never precedes a colon
   (`DIVERGENCES.md` entry 62), and the numeric grammar's separator rules and
   its numeric year-month element (entry 63). What's downstream of a
-  successful date parse is new (see §4). Two filters *upstream* of it are
+  successful date parse is new (see §4).
+
+  The built grammar is the library's one piece of process-wide shared state
+  that a query ever touches as a parser (the other, `ast.py`'s
+  `_COMPARE_FIELDS`, memoizes dataclass field names per class and holds
+  nothing query-derived): `DateParserPlugin` takes it from `default_dateparser()`
+  (`functools.lru_cache`) rather than building an `English` per plugin, since
+  building one compiles roughly 70 regexes and `parse()` makes a fresh plugin
+  every call. It is shared rather than per-thread because it is read-only
+  once built: no `parse`/`date_from` assigns to `self`, and per-call state
+  lives on the plugin (`basedate`, `tz`) and on the `Props`/`adatetime`
+  objects each match builds afresh. Everything else in the pipeline is still
+  constructed per call. A caller wanting its own grammar passes
+  `dateparser=`.
+
+  Two filters *upstream* of it are
   new too, and they run in this order, just after fieldname assignment and
   both confined to an explicitly named date field:
   - `DateParserPlugin.do_date_phrases` (priority 101) joins an unquoted

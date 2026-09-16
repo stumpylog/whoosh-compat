@@ -91,10 +91,17 @@ def parse(
     """Parse ``query`` against ``registry`` and return a :class:`ParseResult`.
 
     Builds a fresh :class:`~whoosh_compat.parser.default.MultifieldParser`
-    for every call (so the function is safe to call concurrently from
-    multiple threads), attaches a date-parsing plugin when the registry has
+    for every call, attaches a date-parsing plugin when the registry has
     DATE/DATETIME fields and one is available, and normalizes the resulting
     AST via :func:`whoosh_compat.ast.normalize` before returning it.
+
+    Safe to call concurrently from multiple threads. Everything carrying
+    per-call state is built per call. Two things do persist between calls,
+    and neither holds anything derived from a query: the date grammar
+    (:func:`~whoosh_compat.parser.dateparse.default_dateparser`), read-only
+    once built, and a per-class memo of dataclass field names in
+    :mod:`whoosh_compat.ast`, which is written lazily but only ever with a
+    value determined by the class itself.
 
     :param query: the query string to parse.
     :param registry: describes the known fields and their kinds/aliases.

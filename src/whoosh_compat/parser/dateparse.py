@@ -91,6 +91,7 @@ a successful parse:
 
 from __future__ import annotations
 
+import functools
 import re
 from collections.abc import Callable
 from dataclasses import replace
@@ -992,6 +993,44 @@ def _time_on_period(raw: object) -> str | None:
     return None
 
 
+@functools.lru_cache(maxsize=1)
+def default_dateparser() -> English:
+    """The process-wide :class:`English` grammar.
+
+    Building one costs about 105us: ``DateParser.__init__`` plus
+    ``English.setup()`` compile roughly 70 regexes through ``rcompile``, and
+    ``re.UNICODE | flags`` is an ``IntFlag`` ``__or__`` per call on top of
+    each ``re`` cache lookup. Done once per ``parse()`` that was about 30% of
+    its wall time, including for queries containing no date at all, since
+    ``parse()`` builds a fresh parser (and so a fresh plugin) every call.
+
+    Sharing one is safe because a built grammar is read-only. Every
+    combinator element it holds (``Sequence``, ``Choice``, ``Bag``,
+    ``Regex``, ``Combo``, ``Month``, ``PlusMinus``, ``NowCompact``,
+    ``Time12``, ``Daynames``) holds only compiled patterns and
+    sub-elements, and no ``parse``/``date_from`` assigns to ``self``:
+    per-call state lives on the plugin (``basedate``, ``tz``) and on the
+    ``Props``/``adatetime`` objects each match builds afresh, and
+    ``Month.modify_props`` mutates the caller's ``Props``, not the element.
+    ``ToEnd`` is the one element not in that list, and it is built fresh
+    per ``date_from`` call rather than held by the grammar. Nothing bakes a
+    "now" into the grammar either: every keyword handler (``today``,
+    ``yesterday``, ``previous month``/``week``/``quarter``, ``now``) takes
+    the base datetime as a parameter. ``re.Pattern`` objects are themselves
+    safe to match from several threads.
+
+    ``lru_cache`` does not hold a lock across the call, so two threads racing
+    the first use can each build a grammar and one is then discarded. That is
+    harmless precisely because the result is read-only and the two are
+    equivalent.
+
+    Callers wanting their own grammar (a different locale, or a deliberately
+    unshared one) still pass ``dateparser=`` to :class:`DateParserPlugin`.
+    """
+
+    return English()
+
+
 class DateParserPlugin(Plugin):
     """Adds parsing of DATE/DATETIME fields against the :class:`English`
     grammar above, converting matched Text/Range syntax nodes into
@@ -1016,8 +1055,10 @@ class DateParserPlugin(Plugin):
         :param tz: the timezone the grammar's calendar math (today,
             previous month, ...) operates in, and that DATETIME field bounds
             are converted through on the way back to UTC.
-        :param dateparser: a :class:`DateParser` instance; defaults to a
-            fresh :class:`English`.
+        :param dateparser: a :class:`DateParser` instance; defaults to the
+            process-wide :class:`English` grammar (see
+            :func:`default_dateparser`). Pass one explicitly to opt out of
+            that sharing.
 
         :raises ValueError: if ``basedate`` is naive (has no ``tzinfo``).
             The library takes an explicit ``tz`` everywhere else, so a
@@ -1036,7 +1077,7 @@ class DateParserPlugin(Plugin):
 
         self.basedate = basedate
         self.tz = tz
-        self.dateparser = dateparser or English()
+        self.dateparser = dateparser or default_dateparser()
 
     def filters(self, parser: Any) -> list[tuple[Any, int]]:
         # Run after FieldsPlugin (100) has assigned field names.
