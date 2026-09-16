@@ -1224,7 +1224,10 @@ class TantivyEmitter(ast.Visitor["tantivy.Query"]):
             ]
         if len(queries) == 1:
             return queries[0]
-        return _boolean_query([(tantivy.Occur.Should, q) for q in queries])
+        # Alternative spellings of one typed word are not independent
+        # evidence: disjunction_max scores a document by its best matching
+        # form, where a Should boolean would sum the forms it matches.
+        return tantivy.Query.disjunction_max_query(queries)
 
     def _regex_query(self, resolved: ResolvedField, regex: str, node: ast.Node) -> tantivy.Query:
         """Build a regex query from a user-derived pattern.

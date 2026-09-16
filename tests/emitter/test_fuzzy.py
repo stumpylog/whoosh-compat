@@ -372,10 +372,10 @@ def test_fuzzy_prefix_true_matches_documents_starting_with_the_term(
     assert search_ids(fuzzy_tindex[0], query) == [1, 2, 4]  # tokyo, tokio, tok
 
 
-# -- pattern_normalizer with several forms OR-combines them: a document
-# matching only one of the offered forms is still
-# found. Uses a synthetic normalizer (not real stemming) so the test does
-# not depend on stemmer behavior, only on the OR-combination mechanism. --
+# -- pattern_normalizer with several forms: a document matching only one of
+# the offered forms is still found. Uses a synthetic normalizer (not real
+# stemming) so the test does not depend on stemmer behavior, only on the
+# combination mechanism. --
 
 
 @pytest.fixture(scope="module")
@@ -399,6 +399,52 @@ def test_fuzzy_normalizer_forms_select_the_matching_spellings(
     node = ast.Fuzzy(field=FieldRef("content"), text="grey", distance=0)
     query = emit_ast(node, two_form_tindex, registry)
     assert search_ids(two_form_tindex[0], query) == expected_ids
+
+
+# -- Scoring: matching several normalizer forms is worth no more than
+# matching one. The normalizer offers a folded and a truncated form;
+# "invoice" reaches both, "invo" only the truncated one. --
+
+
+def _scores(index: tantivy.Index, query: tantivy.Query) -> dict[int, float]:
+    searcher = index.searcher()
+    return {
+        searcher.doc(addr).to_dict()["id"][0]: round(score, 3)
+        for score, addr in searcher.search(query, limit=10).hits
+    }
+
+
+@pytest.fixture(scope="module")
+def form_overlap_tindex() -> TIndex:
+    return _content_index({1: "invoice", 2: "invo"})
+
+
+def _truncating_normalizer(text: str) -> tuple[str, str]:
+    folded = text.lower()
+    return (folded, folded[:-1])
+
+
+def test_fuzzy_multiple_matching_forms_do_not_double_the_score(
+    form_overlap_tindex: TIndex,
+) -> None:
+    registry = FieldRegistry(
+        [FieldSpec("content", FieldKind.TEXT, pattern_normalizer=_truncating_normalizer)]
+    )
+    node = ast.Fuzzy(field=FieldRef("content"), text="invoce", distance=1, prefix=True)
+    query = emit_ast(node, form_overlap_tindex, registry)
+    single_form_query = tantivy.Query.fuzzy_term_query(
+        form_overlap_tindex[1],
+        "content",
+        "invoc",
+        distance=1,
+        prefix=True,
+        transposition_cost_one=True,
+    )
+    # Every score equals the single-form query's, including id 1's, which a
+    # Should boolean would double by matching both forms.
+    assert _scores(form_overlap_tindex[0], query) == _scores(
+        form_overlap_tindex[0], single_form_query
+    )
 
 
 # -- Structural composition: Boosted/Not/AndNot with a

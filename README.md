@@ -293,7 +293,8 @@ already use, see "The analyzer / pattern_normalizer seam" below), never
 the full `analyzer`: analysis never rewrites a `Fuzzy` leaf, even when one
 passes through `ast.analyze()` inside a `rewrite_leaf` replacement, so if
 a field's normalizer offers several candidate forms, every form is tried
-and OR-combined. A field with no `pattern_normalizer` configured
+and a matching document is scored by its best-matching form, not once per
+matching form. A field with no `pattern_normalizer` configured
 uses `text` exactly as given. A host whose field lowercases at index time
 should configure a `pattern_normalizer`, or a case difference alone
 consumes the edit-distance budget with nothing left for the typo it was
